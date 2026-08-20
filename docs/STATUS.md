@@ -6,7 +6,7 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 0 — Documentation & Discovery (Phase 0C-2 Completed)`
+- **当前阶段**：`Phase 0 — Documentation & Discovery (Phase 0C-3A & 0C-3B Completed)`
 - **代码状态**：尚未进入正式业务开发，技术栈未最终确定。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64)
@@ -16,7 +16,10 @@
 - **Controller 验证状态 (Controller Validation Status)**：
   - `Phase 0C-0 Gate: PASS` `[Observed]`：通过受控网络请求与进程相关性比对（curl.exe / 日常连接），100% 证明 Probe 成功接入正在承载 TUN 日常流量的 live FlClashCore (127.0.0.1:9090)。
   - `Phase 0C-1 DIRECT / PROXY Baseline: COMPLETED` `[Observed]`：成功捕获典型 DIRECT 样本 (`chains: ["DIRECT"]`) 与 PROXY 样本 (`chains: [出站节点, 策略组...]`)。
-  - `Phase 0C-2 UDP / NTP / QUIC: COMPLETED` `[Observed]`：验证了 Windows TUN 下 UDP 进程归因完整性（100.0%）、受控 NTP 48B/48B 流量精确性与 UDP Pseudo-connection 留存现象（6秒以上）；记录 QUIC 在当前环境为 *Not Observed*。
+  - `Phase 0C-2 UDP / NTP / QUIC: COMPLETED` `[Observed]`：验证了 Windows TUN 下 UDP 进程归因完整性、受控 NTP 48B/48B 流量精确性与 UDP Pseudo-connection 留存现象（6秒以上）。
+  - `Phase 0C-3A & 3B Connection Counter Semantics: COMPLETED` `[Observed]`：
+    - 实测证明稳态长连接在连续 18 帧快照中严格保持 `id`/`start` 稳定与单调非递减计数（累积 807KB 差值之和严格一致，关闭后直接从活跃快照移除，无额外 closed 事件）；
+    - 实测证明冷启动接入时首帧即包含启动前产生的全部历史累计流量（743KB），确立了 Phase 1 采集器状态机必须严格区分 Session Bootstrap 与 Steady-State New Connection。
 - **当前项目级 Skill**：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
 
 ---
@@ -38,13 +41,12 @@
 
 ## Open Questions
 
-### Mihomo 数据源与后续验证项 (Phase 0C-3 ~ 0C-6)
+### Mihomo 数据源与后续验证项 (Phase 0C-3C ~ 0C-6)
 
-- `/connections` 对超短连接（<100ms）在轮询间隙结束时的丢帧概率与补救方案？
-- 长连接跨帧累积流量的单调性与阶段性持久化机制？
-- 多层链式代理 (Relay / Multi-hop) 与节点切换时的 `chains` 动态语义？
-- Mihomo 重载 / 重启、Controller 断开后 connection id 和全局计数的变化？
-- `/traffic` 实时速率与 `/connections` 连接增量的一致性对账机制？
+- `/connections` 对超短连接（<100ms）在轮询间隙结束时的丢帧概率与补救方案 (C3-C)？
+- 多层链式代理 (Relay / Multi-hop) 与节点切换时的 `chains` 动态语义 (C4)？
+- Mihomo 重载 / 重启、Controller 断开后 connection id 和全局计数的变化 (C5)？
+- `/traffic` 实时速率与 `/connections` 连接增量的一致性对账机制 (C6)？
 
 ### 实现选型
 
@@ -60,7 +62,7 @@
 
 ## Current Risks
 
-1. **短连接采样盲区**：实测发现生命周期短于 WebSocket 推送间隔的连接可能无法在快照帧中捕获，需在 C3 评估对总量与审计的影响。
+1. **短连接采样盲区**：实测发现生命周期短于 WebSocket 推送间隔的连接可能无法在快照帧中捕获，需在 C3-C 评估对总量与审计的影响。
 2. **连接生命周期语义**：不能在实测前假设“从下一帧消失”永远等同于正常关闭。
 3. **流量正确性**：长连接、WebSocket 重连、Mihomo 重启、Collector 重启都可能造成 double counting 或漏记。
 4. **敏感样本**：原始网络历史可能包含隐私信息，必须默认留在 `tmp/` 等 Git 忽略目录并在提交前脱敏。
@@ -69,10 +71,9 @@
 
 ## Next Step
 
-准备启动 Phase 0C-3 / Phase 0C-4 场景测试：
-- 大流量长连接采样与计数器单调性验证；
-- 短连接捕获率与采样间隔影响评估；
-- 节点切换与多层代理实验。
+准备启动 Phase 0C-3C / Phase 0C-4 场景测试：
+- 短连接捕获率与采样间隔影响评估 (C3-C)；
+- 节点切换与多层代理实验 (C4)。
 
 ---
 
@@ -92,11 +93,13 @@
   - 产出首份实测调研报告 `docs/research/mihomo-data-source.md`；
   - 完成样本覆盖率统计，初步验证了 DIRECT / PROXY 的真实字段表现与 `chains` 结构。
 - **Phase 0C-2 (UDP / NTP / QUIC Protocol Validation)**：
-  - 增强 `summarize-session.mjs` 支持 `metadata.remoteDestination` 统计与过滤参数（`--network`, `--port`, `--process`）；
+  - 增强 `summarize-session.mjs` 支持 `metadata.remoteDestination` 统计与过滤参数；
   - 新增受控 NTP 测试工具 `tools/discovery/scenarios/ntp-trigger.mjs`；
-  - 完成空闲后台 UDP (108 连接, 100% 进程归因) 与受控 NTP (48B/48B 精确流量, 6s+ flow 留存) 实测；
-  - 明确记录 QUIC 在当前 Windows 环境为 *Not Observed*；
-  - 更新 `docs/research/mihomo-data-source.md` 中的协议对照表与核心问题解答。
+  - 完成空闲后台 UDP 与受控 NTP (48B/48B) 实测，明确记录 QUIC 为 *Not Observed*。
+- **Phase 0C-3A & 3B (Counter Semantics & Cold-Start Baseline)**：
+  - 新增连接时间线分析工具 `tools/discovery/trace-connection.mjs`；
+  - 实测验证稳态长连接单调递增计数器与算术一致性 (807KB)，确认连接关闭后直接移出无 closed 事件；
+  - 实测验证冷启动介入时首帧包含 743KB 历史流量，确立了 Phase 1 区分 Session Bootstrap 与 Steady-State New Connection 的基线规约。
 
 
 

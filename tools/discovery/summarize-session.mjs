@@ -108,7 +108,8 @@ async function main() {
   const connLines = fs.readFileSync(connPath, 'utf8').trim().split('\n').filter(Boolean);
   
   const connectionsMap = new Map(); // id -> tracker
-  let totalRawObservations = 0;
+  let allRawObservations = 0;
+  let matchedRawObservations = 0;
 
   connLines.forEach((line) => {
     let parsed;
@@ -121,7 +122,7 @@ async function main() {
     const conns = parsed.frame?.connections || [];
 
     conns.forEach((c) => {
-      totalRawObservations++;
+      allRawObservations++;
       const id = c.id;
       const meta = c.metadata || {};
 
@@ -129,6 +130,8 @@ async function main() {
       if (filters.network && meta.network?.toLowerCase() !== filters.network) return;
       if (filters.port && String(meta.destinationPort) !== String(filters.port)) return;
       if (filters.process && !meta.process?.toLowerCase()?.includes(filters.process)) return;
+
+      matchedRawObservations++;
 
       if (!connectionsMap.has(id)) {
         connectionsMap.set(id, {
@@ -157,7 +160,11 @@ async function main() {
   const uniqueCount = connectionsMap.size;
   console.log(`\n--- Connection Statistics ---`);
   console.log(`Unique Connection IDs Observed : ${uniqueCount}`);
-  console.log(`Total Connection Snapshots     : ${totalRawObservations}`);
+  if (filters.network || filters.port || filters.process) {
+    console.log(`Matched Connection Snapshots   : ${matchedRawObservations} (out of ${allRawObservations} total)`);
+  } else {
+    console.log(`Total Connection Snapshots     : ${allRawObservations}`);
+  }
 
   if (uniqueCount === 0) {
     console.log('\n(No matching connection records observed in this session)');
