@@ -226,7 +226,7 @@
     - `Frame #9 (15:55:34.083Z)`: Up `672 B` (+0), Down `476,150 B` (+293,920)
     - `Frame #10 (15:55:35.083Z)`: Up `672 B` (+0), Down `712,686 B` (+236,536)
     - `Frame #14 (15:55:39.083Z)`: Up `672 B` (+0), Down `807,291 B` (+94,605)
-    - `Frame #23 (15:55:48.082Z)`: Up `696 B` (+24), Down `807,291 B` (+0) (关闭握手尾帧)
+    - `Frame #23 (15:55:48.082Z)`: Up `696 B` (+24), Down `807,291 B` (+0) (最后可见快照观测到额外 +24B upload，具体协议语义未知)
 - **统计与一致性验证** `[Observed]`:
   - **快照出现帧数**: 连续 18 帧（无中途消失重现）；
   - **First Counter**: `467 B / 0 B`；
@@ -236,9 +236,9 @@
   - **算术一致性**: **EXACT MATCH (PASS)**；
   - **计数器递减检测**: **0 起 (严格单调非递减)**。
 - **Connection Closure Tail 观察** `[Observed]`:
-  - 下载完成后，连接在 Frame #23 发送关闭协商（`696 B`）；
+  - 下载完成后，连接在 Frame #23 观测到额外 +24B upload；
   - 在 Frame #24 及后续帧中，该 ID 直接从活跃连接快照表中消失；
-  - **事实证明**: `/connections` 是当前活跃连接的快照，内核在连接结束时直接将其移出列表，**不存在显式的 closed 状态事件帧**。
+  - **事实证明**: `/connections` 是当前活跃连接的快照，内核在连接结束时直接将其移出列表，**不存在显式的 closed 状态事件帧**。`last_observed` 并不等同于已证明的最终全量字节（存在 `possible_unobserved_tail`）。
 
 ---
 
@@ -258,7 +258,7 @@
     - Last Download: `1,007,555 B`
     - 实际监控期增量: `1,007,555 - 743,565 = 263,990 B` (~257 KB)。
 - **关键发现与架构意义** `[Observed]` / `[Inferred]`:
-  - 当采集器中途接入或启动时，第一帧中已存在的连接所携带的 `download` 字段**直接包含了采集器启动前的全部历史累计流量**；
+  - 当采集器中途接入或启动时，第一帧中已存在的连接所携带的 `download` 字段**包含了采集器启动前已经产生的历史数据**；因此首帧观察计数器必须作为 baseline 记录，不得作为已监控期间的增量流量；
   - 若像 MetaCubeXD 那样对所有首次看到的 ID 直接采用 `delta = current_value`，则冷启动第一秒将瞬间产生高达 743KB 的虚假当期增量流量；
   - 这确立了采集器状态机必须严格区分 **Session Bootstrap** 与 **Steady-State New Connection**。
 
@@ -283,9 +283,10 @@
 2. **稳态新连接 (Steady-State New Connection)**:
    - 在连续监控中新出现的 ID，以 `last_upload = 0`, `last_download = 0` 初始化；
    - 首帧增量 `delta = current_value` 计入当前监控周期。
-3. **连接消失 (Disappearance Tail)**:
-   - 当上一帧存在的 ID 在当前帧消失时，将其标记为 `closed` 并移入历史归档；
-   - 最终结算流量以其最后一次被快照捕获的 `lastUpload / lastDownload` 为准。
+3. **连接移出快照 (Disappeared from Snapshot)**:
+   - 当上一帧存在的 ID 在当前帧消失时，将其标记为 `disappeared_from_snapshot`；
+   - 保存 `last_observed_upload / last_observed_download`；
+   - 明确 `last_observed != proven final`，标记 `possible_unobserved_tail`。
 
 ---
 

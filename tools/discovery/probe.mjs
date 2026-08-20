@@ -23,6 +23,7 @@ function parseArgs() {
     secret: process.env.MIHOMO_SECRET || process.env.PROBE_SECRET || '',
     output: '',
     duration: 0, // 0 表示持续运行直到 Ctrl+C
+    connectionsInterval: null, // 毫秒数，例如 500 或 250
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -35,6 +36,8 @@ function parseArgs() {
       options.output = args[++i];
     } else if (arg === '--duration' || arg === '-d') {
       options.duration = parseInt(args[++i], 10) || 0;
+    } else if (arg === '--connections-interval' || arg === '-i') {
+      options.connectionsInterval = parseInt(args[++i], 10) || null;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -52,11 +55,12 @@ Usage:
   node tools/discovery/probe.mjs [options]
 
 Options:
-  -c, --controller <URL>   Mihomo External Controller 地址 (默认: http://127.0.0.1:9090)
-  -s, --secret <SECRET>    Controller Secret (注意: 优先推荐使用 MIHOMO_SECRET 环境变量以防泄漏)
-  -o, --output <DIR>       输出目录 (默认: tmp/discovery/<timestamp>)
-  -d, --duration <SEC>     采集持续时间 (秒)，0 表示持续运行直到 Ctrl+C (默认: 0)
-  -h, --help               显示帮助信息
+  -c, --controller <URL>            Mihomo External Controller 地址 (默认: http://127.0.0.1:9090)
+  -s, --secret <SECRET>             Controller Secret (注意: 优先推荐使用 MIHOMO_SECRET 环境变量以防泄漏)
+  -o, --output <DIR>                输出目录 (默认: tmp/discovery/<timestamp>)
+  -d, --duration <SEC>              采集持续时间 (秒)，0 表示持续运行直到 Ctrl+C (默认: 0)
+  -i, --connections-interval <MS>   /connections 请求采样间隔 (毫秒)，例如 500 或 250 (仅用于研究评测)
+  -h, --help                        显示帮助信息
 
 Security Note:
   使用 CLI 命令行参数 -s 可能会将 Secret 暴露于系统进程表及 Shell 历史记录中。
@@ -65,13 +69,18 @@ Security Note:
 }
 
 // 规范化 URL 与 WebSocket 地址
-function buildWsUrl(controllerUrl, endpoint, secret) {
+function buildWsUrl(controllerUrl, endpoint, secret, extraParams = {}) {
   const parsed = new URL(controllerUrl);
   const wsProto = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
   const cleanPath = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
   const wsUrl = new URL(`${wsProto}//${parsed.host}${cleanPath}`);
   if (secret) {
     wsUrl.searchParams.set('token', secret);
+  }
+  for (const [k, v] of Object.entries(extraParams)) {
+    if (v !== null && v !== undefined) {
+      wsUrl.searchParams.set(k, String(v));
+    }
   }
   return wsUrl.toString();
 }
@@ -337,6 +346,7 @@ async function main() {
         durationSeconds: Math.round((endTime.getTime() - startTime.getTime()) / 1000),
         controllerUrl: sanitizeUrl(options.controller),
         hasSecret: !!options.secret,
+        requestedConnectionsIntervalMs: options.connectionsInterval,
         status: reason,
         errorMessage,
         evidenceQuality: {
@@ -447,7 +457,9 @@ async function main() {
   }
 
   // 2. 建立 WebSocket 采集连接
-  const wsConnectionsUrl = buildWsUrl(options.controller, '/connections', options.secret);
+  const wsConnectionsUrl = buildWsUrl(options.controller, '/connections', options.secret, {
+    interval: options.connectionsInterval,
+  });
   const wsTrafficUrl = buildWsUrl(options.controller, '/traffic', options.secret);
 
   logEvent('ws_connecting', `Connecting to /connections and /traffic WebSockets`);
