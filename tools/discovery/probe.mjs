@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PROBE_VERSION = '0.3.0-discovery';
+const PROBE_VERSION = '0.3.1-discovery';
 
 // 命令行参数解析
 function parseArgs() {
@@ -182,7 +182,12 @@ async function main() {
     console.error(`[STREAM_ERR] events.ndjson write error: ${err.message}`);
   });
 
+  let isShuttingDown = false;
+
   function logEvent(type, message, details = null) {
+    if (isShuttingDown && (type === 'ws_close' || type === 'ws_error')) {
+      return; // 忽略 shutdown 触发的正常 WS 关闭与残留事件，避免 write-after-end
+    }
     sessionEvidence.eventsCount++;
     const evt = {
       timestamp: new Date().toISOString(),
@@ -191,7 +196,9 @@ async function main() {
       details,
     };
     try {
-      eventStream.write(JSON.stringify(evt) + '\n');
+      if (!eventStream.destroyed && !eventStream.closed) {
+        eventStream.write(JSON.stringify(evt) + '\n');
+      }
     } catch {}
     console.log(`[${evt.timestamp}] [${type}] ${message}`);
   }
@@ -206,7 +213,6 @@ async function main() {
   let wsConn = null;
   let wsTraffic = null;
   let durationTimer = null;
-  let isShuttingDown = false;
   let shutdownPromise = null;
 
   async function performShutdown(reason = 'completed', errorMessage = null) {
@@ -244,6 +250,7 @@ async function main() {
       // 2. 异步等待所有文件流完成应用层写缓冲 flush (Writable stream finish/close)
       const flushTimeoutMs = 3000;
       let flushTimedOut = false;
+      let flushTimer = null;
 
       const streamsPromise = Promise.all([
         waitStreamFinish(connStream),
@@ -258,7 +265,7 @@ async function main() {
       });
 
       const timeoutPromise = new Promise((resolve) => {
-        setTimeout(() => {
+        flushTimer = setTimeout(() => {
           if (!sessionEvidence.flush.completed) {
             flushTimedOut = true;
             sessionEvidence.flush.timedOut = true;
@@ -268,6 +275,10 @@ async function main() {
       });
 
       await Promise.race([streamsPromise, timeoutPromise]);
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
 
       // 3. 计算 Evidence Quality
       const issues = [];
@@ -460,14 +471,14 @@ async function main() {
       connStream.write(JSON.stringify({ receivedAt, frame: payload }) + '\n');
     };
     wsConn.onerror = (err) => {
+      if (isShuttingDown) return;
       logEvent('ws_error', `WebSocket /connections error: ${err.message || 'unknown error'}`);
     };
     wsConn.onclose = (event) => {
+      if (isShuttingDown) return;
       logEvent('ws_close', `WebSocket /connections closed (code=${event.code}, reason=${event.reason || 'none'})`);
-      if (!isShuttingDown) {
-        sessionEvidence.channels.connections.closedUnexpectedly = true;
-        logEvent('warn', 'WebSocket /connections unexpectedly closed by server');
-      }
+      sessionEvidence.channels.connections.closedUnexpectedly = true;
+      logEvent('warn', 'WebSocket /connections unexpectedly closed by server');
     };
   } catch (e) {
     logEvent('ws_create_error', `Failed to initialize /connections WS: ${e.message}`);
@@ -494,13 +505,13 @@ async function main() {
       trafficStream.write(JSON.stringify({ receivedAt, frame: payload }) + '\n');
     };
     wsTraffic.onerror = (err) => {
+      if (isShuttingDown) return;
       logEvent('ws_error', `WebSocket /traffic error: ${err.message || 'unknown error'}`);
     };
     wsTraffic.onclose = (event) => {
+      if (isShuttingDown) return;
       logEvent('ws_close', `WebSocket /traffic closed (code=${event.code}, reason=${event.reason || 'none'})`);
-      if (!isShuttingDown) {
-        sessionEvidence.channels.traffic.closedUnexpectedly = true;
-      }
+      sessionEvidence.channels.traffic.closedUnexpectedly = true;
     };
   } catch (e) {
     logEvent('ws_create_error', `Failed to initialize /traffic WS: ${e.message}`);

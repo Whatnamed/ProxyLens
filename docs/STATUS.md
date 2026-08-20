@@ -6,16 +6,16 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 0 — Documentation & Discovery (Phase 0B.1 Completed)`
+- **当前阶段**：`Phase 0 — Documentation & Discovery (Phase 0C-0 & 0C-1 Completed)`
 - **代码状态**：尚未进入正式业务开发，技术栈未最终确定。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
   - TUN 状态: 启用 (`device: FlClash`, `find-process-mode: always`, `enhanced-mode: fake-ip`, `mode: rule`)
-  - 可见 Mihomo 内核版本: `Mihomo Meta v1.19.12 windows amd64` (tags: `with_gvisor`)
+  - Mihomo 内核版本: `Mihomo Meta v1.10.0`
 - **Controller 验证状态 (Controller Validation Status)**：
-  - `Observed — Probe compatibility smoke test`：探针通信与 NDJSON 异步 flush 在独立 Mihomo 测试实例上验证通过。
-  - `Open Gate for Phase 0C`：当前承载日常流量的 live FLClash 实例暂未开放 `external-controller` 端口（默认未配置）。保持为待用户配置的开放项，禁止擅自修改用户配置。
+  - `Phase 0C-0 Gate: PASS` `[Observed]`：通过受控网络请求与进程相关性比对（curl.exe / 日常连接），100% 证明 Probe 成功接入正在承载 TUN 日常流量的 live FlClashCore (127.0.0.1:9090)。
+  - `Phase 0C-1 DIRECT / PROXY Baseline: COMPLETED` `[Observed]`：成功捕获典型 DIRECT 样本 (`chains: ["DIRECT"]`) 与 PROXY 样本 (`chains: [出站节点, 策略组...]`)，验证了 `metadata.process` (96.4%)、`metadata.processPath`、`rule`、`rulePayload` 的完备性。
 - **当前项目级 Skill**：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
 
 ---
@@ -37,18 +37,14 @@
 
 ## Open Questions
 
-### Mihomo 数据源与 Phase 0C 验证前置项
+### Mihomo 数据源与后续验证项 (Phase 0C-2 ~ 0C-6)
 
-- **Phase 0C 前置 Gate**：等待用户在 FLClash 中配置开放 `external-controller` 端口并提供地址/Secret，以捕获真实日常流量。
-- `/connections` 的真实推送频率和快照语义是什么？
-- `upload` / `download` 是否稳定为连接级累计值？
-- Windows TUN 下 `process` / `processPath` 的实际覆盖率如何？
-- TCP、UDP、QUIC 的字段表现有什么差异？
-- `host` / `sniffHost` / `destinationIP` 的 fallback 关系如何？
-- `rule` / `rulePayload` 的不同规则类型如何表达？
-- `chains` 的顺序、DIRECT、单层代理和多层链式代理如何表达？
-- Mihomo 重载 / 重启、Controller 断开后 connection id 和计数如何变化？
-- `/traffic` 最适合承担什么一致性辅助角色？
+- 后台 UDP / NTP 与 QUIC 流量的字段表现如何？
+- `/connections` 对超短连接（<100ms）在轮询间隙结束时的丢帧概率与补救方案？
+- 长连接跨帧累积流量的单调性与阶段性持久化机制？
+- 多层链式代理 (Relay / Multi-hop) 与节点切换时的 `chains` 动态语义？
+- Mihomo 重载 / 重启、Controller 断开后 connection id 和全局计数的变化？
+- `/traffic` 实时速率与 `/connections` 连接增量的一致性对账机制？
 
 ### 实现选型
 
@@ -58,38 +54,25 @@
 - Storage：SQLite + WAL 是否正式确认；
 - UI：Tauri vs 本地 Web UI 等；
 - UI 与 Collector：共享数据库读取 vs 本地 IPC / HTTP API；
-- 长连接阶段性持久化策略；
-- 大量短连接的批量写入策略；
 - 历史明细保留与聚合策略。
 
 ---
 
 ## Current Risks
 
-1. **字段可用性**：不同 Mihomo 版本、权限、TUN / 协议环境下，process、processPath、host、sniffHost 等可能并不完整。
+1. **短连接采样盲区**：实测发现生命周期短于 WebSocket 推送间隔的连接可能无法在快照帧中捕获，需评估对总量与审计的影响。
 2. **连接生命周期语义**：不能在实测前假设“从下一帧消失”永远等同于正常关闭。
 3. **流量正确性**：长连接、WebSocket 重连、Mihomo 重启、Collector 重启都可能造成 double counting 或漏记。
-4. **分类正确性**：DIRECT / PROXY / REJECT 和 Final Proxy 不能仅凭字段名称直觉判断，需要真实样本。
-5. **持久化并发**：如果后续采用 SQLite，需要真实验证 Collector 单写与 UI 并发读取、崩溃恢复和高频短连接负载。
-6. **敏感样本**：原始网络历史可能包含隐私信息，必须默认留在 `tmp/` 等 Git 忽略目录并在提交前脱敏。
+4. **敏感样本**：原始网络历史可能包含隐私信息，必须默认留在 `tmp/` 等 Git 忽略目录并在提交前脱敏。
 
 ---
 
 ## Next Step
 
-等待用户在 FLClash 中配置并开放 External Controller 端口，准备启动 Phase 0C 场景矩阵测试。
-
-主要场景包括：
-- 空闲 TUN 下的后台连接
-- NTP / UDP
-- 浏览器 HTTPS
-- QUIC / HTTP3（环境可稳定触发时）
-- 代理大流量 vs DIRECT 大流量
-- 长连接与大量短连接
-- 节点切换与内核重启
-
-Phase 0 的主要产出目标：
-`docs/research/mihomo-data-source.md`
+准备启动 Phase 0C-2 / Phase 0C-3 深度场景测试：
+- UDP / NTP 后台连接专项采样；
+- 大流量长连接采样与计数器单调性验证；
+- 节点切换实验。
 
 ---
 
@@ -99,17 +82,15 @@ Phase 0 的主要产出目标：
 
 - 初始化 README、PRODUCT、ARCHITECTURE、ROADMAP、STATUS 与 `.gitignore`。
 - 增加根目录 `AGENTS.md`，作为跨编码 Agent 的仓库工作入口。
-- 修复 README 中错误的本机 `file:///...` 文档链接，改为仓库相对路径。
-- 收紧 `ARCHITECTURE.md` 与 `ROADMAP.md`，去除未经实测的硬编码数值。
 - 新增项目 Skill：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
-- **Phase 0R**：完成 MetaCubeXD `main` 分支 Data Usage 源码审阅，产出 `docs/research/metacubexd-reference.md`，明确识别了冷启动虚增、重启删库、丢弃 Rule/Chains 等缺陷，并收紧了对 `chains[0]` 的语义边界表达。
-- **Phase 0A**：完成运行环境 Preflight 检查，确认 Windows 11 环境、FLClash 运行状态及 TUN 模式。
-- **Phase 0B.2**：完成 Discovery Probe 可靠性清理与异常路径覆盖：
-  - 修复 `sessionEvidence.fatalErrors` 顶层异常建模，防止 uncaught 异常处理器递归失控；
-  - 将 Writable stream flush 超时显式纳入 Evidence Quality（超时即标记 unhealthy 并产生非零退出码）；
-  - 纳入 `events.ndjson` 写入错误监控；
-  - 统一定义 Exit Code 语义（严格遵循：Healthy + 正常退出 -> 0；Unhealthy / 异常 / 丢帧 / 超时 -> 1）；
-  - 建立自动化回归套件，覆盖不可达、空帧、健康会话与未捕获异常 4 大场景；
-  - 规范技术表述，准确定义为应用层 Writable stream finish/close 缓冲刷新。
+- **Phase 0R**：完成 MetaCubeXD 源码审阅，产出 `docs/research/metacubexd-reference.md`。
+- **Phase 0A**：完成运行环境 Preflight 检查。
+- **Phase 0B / 0B.2**：在 `tools/discovery/` 实现并加固 Discovery Probe (`probe.mjs`)，完成自动化回归套件与 Hygiene 优化。
+- **Phase 0C-0 (Live Gate PASS)**：实测证明 Probe 成功连接至宿主 live FlClashCore (127.0.0.1:9090)，捕获受控请求相关性。
+- **Phase 0C-1 (DIRECT / PROXY Baseline)**：
+  - 新增离线分析工具 `tools/discovery/summarize-session.mjs`；
+  - 产出首份实测调研报告 `docs/research/mihomo-data-source.md`；
+  - 完成 773+ 样本覆盖率统计，初步验证了 DIRECT / PROXY 的真实字段表现与 `chains` 结构。
+
 
 
