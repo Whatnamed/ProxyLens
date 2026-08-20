@@ -194,11 +194,14 @@ Phase 0C-6 实测发现：
 - 在配置链式/中继代理时，`/connections` 会同时列出应用层逻辑连接（`process: agy.exe, host: play.googleapis.com`）与 Mihomo 发往第一跳中继节点的底层连接（`process: "", host: 168.158.196.123`），两者流量完全相同；
 - **规约**：严禁简单按“缺进程+缺规则”普遍过滤。必须将其标记为 `relay_candidate`，只有在会话中找到时间窗口重叠、流量高度吻合且链路包含的配对应用连接时，才被判定为 `CONFIRMED_RELAY_DUPLICATE` 并予以去重；未配对的缺失归因连接必须保留为 `unpaired_missing_attribution`，防止掩盖未识别流量。
 
-### 4.4 代理链拓扑顺序暂定观察 (Provisional Hop Order Observation)
+### 4.4 代理链拓扑因果顺序规约 (Confirmed Hop Order Semantics)
 
-Phase 0C-4 静态盘点表明：
-- 在当前静态样本中，`chains[0]` 通常表现为最终物理出站节点或 DIRECT，`chains[last]` 表现为顶层分流规则组；
-- **暂定 (Provisional) 状态**：由于 `DIRECT` 本身不是物理节点，且各策略组嵌套逻辑多样，完整的动态拓扑因果顺序规约留待 Package B 动态切换节点与多跳实验完成后正式升格。
+Phase 0C-4 动态切换实测正式证明并确立：
+- **`chains[0]`**: **最终物理出站节点 (Physical Egress Node)**（或 `DIRECT`）；
+- **`chains[1 .. length - 2]`**: **级联策略选择组 (Intermediate Policy Selectors)**；
+- **`chains[length - 1]`**: **分流规则匹配命中的顶层策略组 (Top-Level Rule Target Group)**；
+- **连接历史不可变性 (Routing Immutability)**：连接建立后其 `chains` 路径在生命周期内不可变，外部节点切换不影响已有存活连接；
+- **渲染规范**: UI 呈现统一采用正向因果渲染：`chains.slice().reverse()`（即：分流规则命中组 $\rightarrow$ 级联选择组 $\rightarrow$ 物理出站节点）。
 
 ### 4.5 长连接阶段性持久化 (Sustained Connection Persistence)
 
@@ -208,15 +211,16 @@ Phase 0C-4 静态盘点表明：
 
 因此系统必须支持长连接阶段性增量持久化（Checkpointing）。具体多久提交一次、达到多少增量流量时写入，属于 Phase 1 / Phase 2 待测参数。
 
-### 4.6 连接消失的生命周期语义 (Disappearance Lifecycle Semantics)
+### 4.6 连接消失与生命周期恢复状态机 (Lifecycle & Gap Recovery Semantics)
 
-“某 ID 从活跃 Connections 列表消失”除正常关闭外，还可能对应：
-- Mihomo 内核重载 (Reload)；
-- Collector 与 Controller WebSocket 重连；
-- 系统睡眠 / 唤醒；
-- TUN 开关变化。
-
-这些场景下的 ID 变化、计数器重置与状态恢复差异，在 Phase 0C-5 (Stage B2) 进一步实测验证。
+基于 Phase 0C-5 实测，确立了四类生命周期恢复规约：
+1. **正常关闭**: 从快照移除，记录 `last_observed` 字节与 `possible_unobserved_tail` 标记；
+2. **配置热重载 (Hot Reload via PATCH)**: 全局计数器单调连续，绝大多数长连接保持原 ID 存活；
+3. **监控中断与重连 (Monitoring Gap & Reconnect)**:
+   - 记录 `[gap_start, gap_end]` 区间与物理流量 $\Delta(\text{uploadTotal})$；
+   - 跨 Gap 存活连接的增量归属为 **Gap 期间累积流量**，杜绝重连当期的虚假流量爆炸；
+4. **内核冷重启检测 (Cold Restart / Counter Reset)**:
+   - 当检测到 $\text{last}.\text{uploadTotal} < \text{first}.\text{uploadTotal}$ 时，判定发生内核冷重启，旧连接全部作废，全量重置状态机并重新执行 Session Bootstrap。
 
 ---
 

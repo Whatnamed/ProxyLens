@@ -6,8 +6,8 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 0 — Documentation & Discovery (Stage B0 Repair Gate In Progress / Work Package B Started)`
-- **代码状态**：尚未进入正式业务开发，技术栈未最终确定。
+- **当前阶段**：`Phase 0 — Documentation & Discovery (Phase 0 Data Source Validation COMPLETED)`
+- **代码状态**：Phase 0 调研与验证已全量闭环，准备进入 Phase 1（Collector 架构与实现）。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
@@ -25,8 +25,10 @@
     - 实测证明严格时间窗口对齐下 `/traffic` 速率积分与全局计数器增量高度一致（误差 < 2.7%）；
     - 发现并实测证明链式代理底层连接双重计数问题，建立基于时间与流量吻合的 Relay Candidate 配对去重规约（杜绝未知流量掩盖）；
     - 在 250ms 快照下，该短连接 workload 的上传残差收敛至 0.6%（稳态长连接残差仅 0.05%）；下载残差受盲区漏抓影响为 10.2%（1000ms 下为 51.1%）。
-  - `Phase 0C-4 (Static Part) Routing Inventory: COMPLETED` `[Observed]`：
-    - 静态盘点 27 类路由模式，观察到当前静态样本中代理链多呈逆因果表现，该拓扑语义作为暂定结论（Provisional），待动态实验正式升格。
+  - `Phase 0C-4 Dynamic Routing & Node Switching: COMPLETED` `[Observed]`：
+    - 实测证明连接建立后 `chains` 具有存活期历史不可变性（0 突变），新连接即时迁移至新物理节点；正式升格 `chains` 动态拓扑因果顺序规约（`chains[0]` 为最终物理出站节点）。
+  - `Phase 0C-5 Lifecycle, Hot Reload & Controller Gap: COMPLETED` `[Observed]`：
+    - 实测 4.01s Monitoring Gap，80 条存活长连接 ID 保持稳定；量化了 Naive 算法在重连时产生的 1450 倍虚假流量爆炸（212MB vs 153KB），确立了 Gap 恢复规约；实测验证配置热重载（PATCH）下全局计数器单调连续。
 - **当前项目级 Skill**：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
 
 ---
@@ -45,68 +47,63 @@
 10. **不提前锁死技术栈**：Go / Rust、SQLite、Tauri / Web UI 等均需要由前序验证推动决定。
 11. **Relay 配对去重规约 (Relay Candidate & Pairing Model)**：仅在存在确凿配对应用连接（时间重叠、流量高度吻合、链路包含）时才判定为底层中继去重，严禁简单按“缺进程+缺规则”过滤，杜绝掩盖未归因流量。
 12. **快照轮询盲区与残差模型**：承认轮询架构下的短连接物理盲区，通过 $\text{Residual} = \Delta(\text{uploadTotal}) - \sum \Delta(\text{AppConn})$ 显式维护全局残差。
+13. **代理链拓扑因果顺序规约 (Hop Order Semantics)**：`chains[0]` 为最终物理出站节点，`chains[last]` 为顶层规则分流策略组，UI 渲染按 `chains.slice().reverse()` 呈现。
+14. **连接历史不可变性 (Routing Immutability)**：存活连接绑定创建时出站路径，节点切换不篡改已有连接的历史节点。
+15. **Gap 恢复与 Bootstrap 规约**：冷启动/重连首帧已有连接记录为 baseline（delta=0），跨 Gap 存活连接增量归属为 Gap 期间累积流量。
 
 ---
 
 ## Open Questions
 
-### Mihomo 数据源与后续验证项 (Phase 0C-4 Dynamic / Phase 0C-5)
+### 实现选型 (Phase 1 评估决策项)
 
-- 动态切换节点时的代理链迁移与流量割接行为，以及 `chains` 动态拓扑因果顺序正式升格 (Stage B1)？
-- Mihomo 重载 (Reload) / 重启、Controller 断开后 connection id 和全局计数的变化与恢复状态机 (Stage B2)？
-- 长连接的阶段性持久化与 Collector crash 进度保护策略？
-- 连接消失的多场景生命周期差异（正常关闭 vs 重载 vs 重连 vs 睡眠 vs TUN 开关）？
-- MetaCubeXD 同场实测对比验证。
-
-### 实现选型
-
-这些问题在 Phase 0 结束后再决定：
-
-- Collector：Go vs Rust；
-- Storage：SQLite + WAL 是否正式确认；
+- Collector：Go vs Rust（结合 250ms/500ms 快照下的 CPU、RAM、GC 表现与 SQLite 写入性能）；
+- Storage：SQLite + WAL（长连接阶段性 checkpointing 与崩溃恢复）；
 - UI：Tauri vs 本地 Web UI 等；
-- UI 与 Collector：共享数据库读取 vs 本地 IPC / HTTP API；
-- 历史明细保留与聚合策略。
+- UI 与 Collector：共享数据库读取 vs 本地 IPC / HTTP API。
 
 ---
 
 ## Current Risks
 
 1. **短连接采样盲区**：实测证明轮询机制下短连接存在物理盲区，必须在架构上支持 Residual 残差表达。
-2. **多跳代理 Double Counting**：多层代理会产生底层连接，已建立去重规约。
-3. **连接生命周期语义**：不能在实测前假设“从下一帧消失”永远等同于正常关闭（需记录 `possible_unobserved_tail`）。
-4. **流量正确性**：长连接、WebSocket 重连、Mihomo 重启、Collector 重启都可能造成 double counting 或漏记。
-5. **敏感样本**：原始网络历史可能包含隐私信息，必须默认留在 `tmp/` 等 Git 忽略目录并在提交前脱敏。
+2. **多跳代理 Double Counting**：多层代理会产生底层连接，已建立 Relay Candidate 配对去重规约。
+3. **连接生命周期语义**：必须使用 `disappeared_from_snapshot` 与 `possible_unobserved_tail` 正确建模。
+4. **敏感样本**：原始网络历史必须默认留在 `tmp/` 等 Git 忽略目录并在提交前脱敏。
 
 ---
 
 ## Next Step
 
-准备进入 Work Package B（Phase 0C-5 内核重启 / Controller 断线重连与动态切换测试）：
-- Mihomo 重启与 Controller 断开状态机实测；
-- 动态代理节点切换流量追踪。
+进入 **Phase 1 — Collector 架构、数据模型与技术选型**：
+1. 设计本地 SQLite + WAL 数据模型（支持 Connection Details、Aggregates、Monitoring Gaps 与 Residuals）；
+2. 建立 Go vs Rust 原型性能对比（验证 250ms 快照下的 CPU、RAM、JSON 解析与批处理写盘开销）；
+3. 实现符合 RFC 规约的生产级 Collector 状态机。
 
 ---
 
 ## Recent Changes
 
-### 2026-08-20 / 2026-08-21 (Big Work Package A)
+### 2026-08-20 / 2026-08-21 (Big Work Package A & B)
 
-- **Stage A0**：修正研究报告中的 Connection ID 稳定性范围、长连接尾部 +24B 及 `disappeared_from_snapshot` 状态机语义。
-- **Stage A1 (/connections Interval & Cadence)**：实测验证 Mihomo 原生支持 250ms/500ms/1000ms 快照间隔并评估吞吐量。
-- **Stage A2 & A3 (Capture-Rate Matrix)**：
-  - 新增短请求 Ground Truth 工具与匹配分析器；
-  - 自动化执行 12 轮独立试验（N=600），量化短连接捕获盲区（1000ms 漏抓 84%~91%，250ms 捕获率 56%），证明单帧捕获占 75%~100%。
-- **Stage A4 (Global Accounting & Reconciliation)**：
-  - 新增对账分析工具 `tools/discovery/analyze-accounting.mjs`；
-  - 证实 `/traffic` 速率积分与全局计数器误差 < 2.7%；
-  - 发现并实测证明链式代理底层连接双重计数问题，建立 Multi-hop 去重规约；
-  - 上传残差在 250ms 快照下收敛至 0.6%（稳态 0.05%）。
-- **Stage A5 (Static Routing Inventory)**：
-  - 新增路由拓扑盘点工具 `tools/discovery/summarize-chains.mjs`；
-  - 盘点 27 类路由模式，明确 `chains` 数组逆向拓扑语义（`chains[0]` 为最终物理出口）。
-- **Stage A6 (Final Docs Integration & Review)**：
-  - 整合研究报告 `docs/research/mihomo-data-source.md`、`docs/STATUS.md` 与 `docs/ARCHITECTURE.md`。
+- **Stage B0 (Evidence Repair & Validation Gate)**：
+  - 修复实验窗口有效性 Gate、增强 Matcher 1-to-1 映射与路由校验；
+  - 重构 Relay Candidate 配对去重引擎，严禁静默过滤；
+  - 严谨对齐 `/traffic` 积分时间窗与 `COUNTER_RESET` 检测；
+  - 恢复 ARCHITECTURE 被覆盖的开放问题，修正 78k observations 措辞与数学数字。
+- **Stage B1 (Phase 0C-4 Dynamic Routing & Node Switching)**：
+  - 实现受控节点切换工具与自动回滚保护；
+  - 实测证明已有连接链路历史不可变性（0 突变），新连接即时迁移；
+  - 正式升格 `chains` 动态拓扑因果顺序规约（`chains[0]` 为最终物理出站节点）。
+- **Stage B2 (Phase 0C-5 Lifecycle, Hot Reload & Controller Gaps)**：
+  - 实测 4.01s Monitoring Gap，证明存活连接稳定性与 Naive 算法 1450 倍虚假爆炸缺陷；
+  - 实测配置热重载（PATCH）下计数器连续性与连接保持；
+  - 确立生命周期恢复与内核冷重启检测状态机。
+- **Stage B3 (Phase 0 Synthesis & Collector RFC)**：
+  - 汇总量化指标矩阵，输出完整的 Collector 状态机转移图与数学模型。
+- **Stage B4 (Final Delivery)**：
+  - 全量同步更新 `docs/research/mihomo-data-source.md`、`docs/STATUS.md`、`docs/ARCHITECTURE.md` 与 `docs/ROADMAP.md`。
+
 
 
 

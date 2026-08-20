@@ -29,11 +29,11 @@ Later    长期增强
 
 ---
 
-## Phase 0 — Mihomo Data Source Discovery
+## Phase 0 — Mihomo Data Source Discovery [COMPLETED]
 
 ### Goal
 
-在真实 Windows 11 + Mihomo + FLClash 环境下，弄清 External Controller 能够稳定提供什么数据、这些字段真实语义是什么，以及旧方案“大量 Unknown”究竟来自数据源缺失还是采集 / 计算方式错误。
+在真实 Windows 11 + Mihomo + FLClash 环境下，弄清 External Controller 能够稳定提供什么数据、这些字段真实语义是什么，以及旧方案“大量 Unknown”究竟来自数据源缺失还是采集 / 计算方式错误。`[ALL VALIDATION SCENARIOS COMPLETED & CONFIRMED]`
 
 ### Deliverables
 

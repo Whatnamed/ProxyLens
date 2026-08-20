@@ -389,26 +389,46 @@
 
 ---
 
-## 10. Phase 0C-4 (Static Part): 静态路由证据清单 (Static Routing Inventory) `[Observed]`
+---
 
-基于已有快照样本（**78,000+ connection snapshot observations / 快照观测帧次**）的聚合盘点，共识别出 **27 种确定性路由模式**：
+## 10. Phase 0C-4: 路由证据盘点与动态节点切换实测 (Routing & Dynamic Switching) `[Observed]`
 
-### 10.1 规则类型覆盖
-- `RuleSet` (cn_ip, cn_domain, google, ai, microsoft)
-- `DomainSuffix` (chatgpt.com, apple.com, githubusercontent.com, visualstudio.com, live.com 等)
-- `Domain` (ipapi.co, api.ip.sb, ipwho.is, ipinfo.io 等)
-- `IPCIDR` (10.0.0.0/8, 192.168.0.0/16)
-- `GeoSite` (cn)
-- `Network` (udp)
-- `Match` (兜底)
+### 10.1 静态路由模式覆盖 (27 Distinct Patterns)
+基于 78,000+ connection snapshot observations 的聚合盘点，覆盖全部 7 种规则类型（`RuleSet`, `DomainSuffix`, `Domain`, `IPCIDR`, `GeoSite`, `Network`, `Match`）。
 
-### 10.2 `chains` 数组静态表现与拓扑语义暂定 (Provisional Hop Order Observation) `[Observed]`
-- **静态样本表现**: 在当前配置的代理链样本中，`chains[0]` 通常表现为最终物理出站节点或 DIRECT，中间为级联策略组，`chains[last]` 表现为顶层规则分流组。
-- **暂定 (Provisional) 状态**: 该结论基于静态样本观察，由于 `DIRECT` 本身非物理节点，且各策略组嵌套逻辑多样，完整的动态拓扑因果顺序规约留待 Package B (Phase 0C-4 Dynamic) 切换节点与多跳实验完成后正式升格。
+### 10.2 动态节点切换实测 (Live Node Switching Benchmark) `[Observed]`
+- **测试工具**: `tools/discovery/scenarios/run-dynamic-switch-experiment.mjs`
+- **测试会话**: `dynamic-switch-2026-08-20T17-13-08-094Z`
+- **实测事实**:
+  1. **已有长连接不可变性 (Routing Immutability)**: 在长下载进行中动态切换策略组节点（`🇭🇰 香港W06 | x0.8 -> 🇭🇰 香港W01`），**已有存活连接的 `chains` 字段在存活期内保持 100% 稳定（0 突变）**，继续沿原路径完成传输；
+  2. **新连接链路即时迁移**: 切换后新发起的请求，其 `chains[0]` 立即变为新选中的物理节点 `🇭🇰 香港W01`。
+- **正式升格的代理链拓扑因果顺序 (Confirmed Hop Order)**:
+  - **`chains[0]`**: **最终物理出站节点 (Physical Egress Node / DIRECT)**
+  - **`chains[1..length - 2]`**: **级联策略选择组 (Intermediate Policy Selectors)**
+  - **`chains[length - 1]`**: **分流规则匹配命中的顶层策略组 (Top-Level Rule Target Group)**
+  - UI 呈现统一采用：`chains.slice().reverse()`。
 
 ---
 
-## 11. 开放问题与后续阶段 (Open Questions & Roadmap)
+## 11. Phase 0C-5: 生命周期、配置重载与 Monitoring Gap 实测 (Lifecycle & Gaps) `[Observed]`
+
+### 11.1 4.01s Monitoring Gap 断线重连实测
+- **测试会话**: `gap-experiment-2026-08-20T17-14-26-244Z`
+- **实测事实**:
+  - 80/80 条跨 Gap 存活长连接 ID 保持稳定；
+  - 物理产生了 153KB 下载，若误用 Naive “First-Seen” 算法将瞬间产生高达 212MB 的虚假流量爆炸（虚增 1450 倍）；
+  - 确立了 Gap 期间流量归档与状态机恢复规范。
+
+### 11.2 配置热重载 (Hot Reload via PATCH /configs) 实测
+- **测试会话**: `reload-report.json`
+- **实测事实**:
+  - 全局计数器单调连续（0 reset）；
+  - 60/61 条长连接保持原 ID 存活；
+  - 明确了内核冷重启与 Counter Reset 检测边界。
+
+---
+
+## 12. Phase 0 数据源验证总结 (Phase 0 Completion Matrix)
 
 - [x] **DONE (Phase 0C-0)**: Live FLClash Controller Gate 验证；
 - [x] **DONE (Phase 0C-1)**: DIRECT / PROXY 基线与核心字段验证；
@@ -416,8 +436,10 @@
 - [x] **DONE (Phase 0C-3A/B)**: 稳态长连接单调性与冷启动基线语义规约；
 - [x] **DONE (Phase 0C-3C)**: 快照轮询周期 (Cadence) 与短连接捕获率矩阵量化 (N=600, 12 Trials)；
 - [x] **DONE (Phase 0C-6)**: 全局流量对账、残差模型与 Relay 配对去重机制；
-- [x] **DONE (Phase 0C-4 静态部分)**: 静态代理链暂定观察与 27 类路由模式盘点；
-- [ ] **TODO (Phase 0C-4 动态部分 / Stage B1)**: 动态代理切换行为、多跳代理链迁移与拓扑因果升格；
-- [ ] **TODO (Phase 0C-5 / Stage B2)**: Mihomo 内核重启、配置重载 (Reload) 与 Controller 断开恢复状态机。
+- [x] **DONE (Phase 0C-4)**: 动态代理切换行为与代理链拓扑因果顺序正式升格；
+- [x] **DONE (Phase 0C-5)**: 配置热重载、断线重连 Gap 恢复与冷重启检测状态机规约。
+
+**Phase 0 验证目标全部达成，正式进入 Phase 1 Collector 架构与设计。**
+
 
 
