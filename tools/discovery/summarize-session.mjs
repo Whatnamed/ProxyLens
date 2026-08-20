@@ -12,12 +12,50 @@ import path from 'node:path';
 
 function printHelp() {
   console.log(`
-Usage:
-  node tools/discovery/summarize-session.mjs <session-directory>
+ProxyLens Phase 0 — Session Summarizer
 
-Example:
+Usage:
+  node tools/discovery/summarize-session.mjs <session-directory> [options]
+
+Options:
+  --network <tcp|udp>    仅统计特定传输层协议连接
+  --port <port>          仅统计特定目标端口连接
+  --process <name>       仅统计特定进程名连接 (包含子串匹配)
+  -h, --help             显示帮助信息
+
+Examples:
   node tools/discovery/summarize-session.mjs tmp/discovery/0c0-live-gate-2026-08-20T15-26-37-119Z
+  node tools/discovery/summarize-session.mjs tmp/discovery/0c2-idle-udp-xxx --network udp
+  node tools/discovery/summarize-session.mjs tmp/discovery/0c2-idle-udp-xxx --port 123
 `);
+}
+
+function parseArgs() {
+  const args = process.argv.slice(2);
+  let sessionDir = '';
+  const filters = {
+    network: null,
+    port: null,
+    process: null,
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--network') {
+      filters.network = args[++i]?.toLowerCase();
+    } else if (arg === '--port') {
+      filters.port = args[++i];
+    } else if (arg === '--process') {
+      filters.process = args[++i]?.toLowerCase();
+    } else if (arg === '-h' || arg === '--help') {
+      printHelp();
+      process.exit(0);
+    } else if (!sessionDir && !arg.startsWith('-')) {
+      sessionDir = arg;
+    }
+  }
+
+  return { sessionDir, filters };
 }
 
 function formatPercent(count, total) {
@@ -25,19 +63,11 @@ function formatPercent(count, total) {
   return ((count / total) * 100).toFixed(1) + '%';
 }
 
-function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
-}
-
 async function main() {
-  const sessionDir = process.argv[2];
-  if (!sessionDir || sessionDir === '-h' || sessionDir === '--help') {
+  const { sessionDir, filters } = parseArgs();
+  if (!sessionDir) {
     printHelp();
-    process.exit(sessionDir ? 0 : 1);
+    process.exit(1);
   }
 
   const absDir = path.resolve(sessionDir);
@@ -48,7 +78,6 @@ async function main() {
 
   const manifestPath = path.join(absDir, 'manifest.json');
   const connPath = path.join(absDir, 'connections.ndjson');
-  const trafficPath = path.join(absDir, 'traffic.ndjson');
 
   if (!fs.existsSync(manifestPath) || !fs.existsSync(connPath)) {
     console.error(`[ERROR] 缺少核心文件 (manifest.json 或 connections.ndjson) 于 ${absDir}`);
@@ -59,6 +88,9 @@ async function main() {
 
   console.log('===============================================================');
   console.log(`ProxyLens Session Summary: ${path.basename(absDir)}`);
+  if (filters.network || filters.port || filters.process) {
+    console.log(`Filters Applied : ${JSON.stringify(filters)}`);
+  }
   console.log('===============================================================');
   console.log(`Probe Version   : ${manifest.probeVersion}`);
   console.log(`Mihomo Version  : ${JSON.stringify(manifest.preflight?.mihomoVersion || manifest.mihomoVersion)}`);
@@ -78,7 +110,7 @@ async function main() {
   const connectionsMap = new Map(); // id -> tracker
   let totalRawObservations = 0;
 
-  connLines.forEach((line, frameIndex) => {
+  connLines.forEach((line) => {
     let parsed;
     try {
       parsed = JSON.parse(line);
@@ -91,6 +123,13 @@ async function main() {
     conns.forEach((c) => {
       totalRawObservations++;
       const id = c.id;
+      const meta = c.metadata || {};
+
+      // 过滤器应用
+      if (filters.network && meta.network?.toLowerCase() !== filters.network) return;
+      if (filters.port && String(meta.destinationPort) !== String(filters.port)) return;
+      if (filters.process && !meta.process?.toLowerCase()?.includes(filters.process)) return;
+
       if (!connectionsMap.has(id)) {
         connectionsMap.set(id, {
           id,
@@ -121,7 +160,7 @@ async function main() {
   console.log(`Total Connection Snapshots     : ${totalRawObservations}`);
 
   if (uniqueCount === 0) {
-    console.log('\n(No connection records observed in this session)');
+    console.log('\n(No matching connection records observed in this session)');
     return;
   }
 
@@ -132,6 +171,7 @@ async function main() {
     host: 0,
     sniffHost: 0,
     destinationIP: 0,
+    remoteDestination: 0,
     destinationPort: 0,
     network: 0,
     rule: 0,
@@ -144,6 +184,7 @@ async function main() {
   const rules = new Map();
   const chainsForms = new Map();
   const processes = new Map();
+  const ports = new Map();
   const hosts = new Map();
   let counterDecreasedCount = 0;
 
@@ -156,6 +197,7 @@ async function main() {
     if (meta.host && meta.host.trim() !== '') coverage.host++;
     if (meta.sniffHost && meta.sniffHost.trim() !== '') coverage.sniffHost++;
     if (meta.destinationIP && meta.destinationIP.trim() !== '') coverage.destinationIP++;
+    if (meta.remoteDestination && meta.remoteDestination.trim() !== '') coverage.remoteDestination++;
     if (meta.destinationPort) coverage.destinationPort++;
     if (meta.network) coverage.network++;
     if (c.rule && c.rule.trim() !== '') coverage.rule++;
@@ -178,28 +220,38 @@ async function main() {
     const procKey = meta.process || '(empty-process)';
     processes.set(procKey, (processes.get(procKey) || 0) + 1);
 
-    const targetKey = meta.host || meta.destinationIP || '(empty-target)';
+    const portKey = String(meta.destinationPort || '(empty-port)');
+    ports.set(portKey, (ports.get(portKey) || 0) + 1);
+
+    const targetKey = meta.host || meta.destinationIP || meta.remoteDestination || '(empty-target)';
     hosts.set(targetKey, (hosts.get(targetKey) || 0) + 1);
   });
 
   console.log(`\n--- Raw Field Coverage (Unique Connections: ${uniqueCount}) ---`);
-  console.log(`metadata.process         : ${coverage.process} / ${uniqueCount} (${formatPercent(coverage.process, uniqueCount)})`);
-  console.log(`metadata.processPath     : ${coverage.processPath} / ${uniqueCount} (${formatPercent(coverage.processPath, uniqueCount)})`);
-  console.log(`metadata.host            : ${coverage.host} / ${uniqueCount} (${formatPercent(coverage.host, uniqueCount)})`);
-  console.log(`metadata.sniffHost       : ${coverage.sniffHost} / ${uniqueCount} (${formatPercent(coverage.sniffHost, uniqueCount)})`);
-  console.log(`metadata.destinationIP   : ${coverage.destinationIP} / ${uniqueCount} (${formatPercent(coverage.destinationIP, uniqueCount)})`);
-  console.log(`metadata.destinationPort : ${coverage.destinationPort} / ${uniqueCount} (${formatPercent(coverage.destinationPort, uniqueCount)})`);
-  console.log(`metadata.network         : ${coverage.network} / ${uniqueCount} (${formatPercent(coverage.network, uniqueCount)})`);
-  console.log(`rule                     : ${coverage.rule} / ${uniqueCount} (${formatPercent(coverage.rule, uniqueCount)})`);
-  console.log(`rulePayload              : ${coverage.rulePayload} / ${uniqueCount} (${formatPercent(coverage.rulePayload, uniqueCount)})`);
-  console.log(`chains (non-empty array) : ${coverage.chains} / ${uniqueCount} (${formatPercent(coverage.chains, uniqueCount)})`);
-  console.log(`has traffic (>0 bytes)   : ${coverage.hasUploadOrDownload} / ${uniqueCount} (${formatPercent(coverage.hasUploadOrDownload, uniqueCount)})`);
-  console.log(`counter decreased cases  : ${counterDecreasedCount} / ${uniqueCount}`);
+  console.log(`metadata.process           : ${coverage.process} / ${uniqueCount} (${formatPercent(coverage.process, uniqueCount)})`);
+  console.log(`metadata.processPath       : ${coverage.processPath} / ${uniqueCount} (${formatPercent(coverage.processPath, uniqueCount)})`);
+  console.log(`metadata.host              : ${coverage.host} / ${uniqueCount} (${formatPercent(coverage.host, uniqueCount)})`);
+  console.log(`metadata.sniffHost         : ${coverage.sniffHost} / ${uniqueCount} (${formatPercent(coverage.sniffHost, uniqueCount)})`);
+  console.log(`metadata.destinationIP     : ${coverage.destinationIP} / ${uniqueCount} (${formatPercent(coverage.destinationIP, uniqueCount)})`);
+  console.log(`metadata.remoteDestination : ${coverage.remoteDestination} / ${uniqueCount} (${formatPercent(coverage.remoteDestination, uniqueCount)})`);
+  console.log(`metadata.destinationPort   : ${coverage.destinationPort} / ${uniqueCount} (${formatPercent(coverage.destinationPort, uniqueCount)})`);
+  console.log(`metadata.network           : ${coverage.network} / ${uniqueCount} (${formatPercent(coverage.network, uniqueCount)})`);
+  console.log(`rule                       : ${coverage.rule} / ${uniqueCount} (${formatPercent(coverage.rule, uniqueCount)})`);
+  console.log(`rulePayload                : ${coverage.rulePayload} / ${uniqueCount} (${formatPercent(coverage.rulePayload, uniqueCount)})`);
+  console.log(`chains (non-empty array)   : ${coverage.chains} / ${uniqueCount} (${formatPercent(coverage.chains, uniqueCount)})`);
+  console.log(`has traffic (>0 bytes)     : ${coverage.hasUploadOrDownload} / ${uniqueCount} (${formatPercent(coverage.hasUploadOrDownload, uniqueCount)})`);
+  console.log(`counter decreased cases    : ${counterDecreasedCount} / ${uniqueCount}`);
 
   console.log(`\n--- Network Distribution ---`);
   for (const [k, v] of networks.entries()) {
     console.log(`  ${k.padEnd(12)}: ${v} (${formatPercent(v, uniqueCount)})`);
   }
+
+  console.log(`\n--- Top Destination Ports ---`);
+  const sortedPorts = Array.from(ports.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  sortedPorts.forEach(([k, v]) => {
+    console.log(`  Port ${k.padEnd(8)}: ${v} (${formatPercent(v, uniqueCount)})`);
+  });
 
   console.log(`\n--- Rule Distribution ---`);
   for (const [k, v] of rules.entries()) {
