@@ -374,7 +374,9 @@ async function main() {
       console.log(`========================================\n`);
 
       // Exit Code 规则：只有完全 Healthy 且非显式失败才为 0；Unhealthy / Failed 一律非 0 (1)
-      process.exitCode = isHealthySession && reason !== 'failed' ? 0 : 1;
+      const finalExitCode = isHealthySession && reason !== 'failed' ? 0 : 1;
+      process.exitCode = finalExitCode;
+      process.exit(finalExitCode);
     })();
 
     return shutdownPromise;
