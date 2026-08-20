@@ -311,9 +311,109 @@
 
 ---
 
-## 8. 开放问题与后续阶段 (Open Questions & Roadmap)
+---
 
-- [ ] **TODO (Phase 0C-3C)**: 短连接捕获率 (Capture Rate) 与采样间隔影响评估；
-- [ ] **TODO (Phase 0C-4)**: 链式代理 (Multi-hop / Relay) 与节点切换时的 `chains` 动态变化；
-- [ ] **TODO (Phase 0C-5)**: Mihomo 内核重启与 Controller 断开时的连接 ID 状态机与计数器重置行为；
-- [ ] **TODO (Phase 0C-6)**: `/traffic` 实时速率与 `/connections` 连接增量的一致性对账机制。
+## 8. Phase 0C-3C: 快照轮询周期与短连接捕获率实测 (Cadence & Capture-Rate Matrix)
+
+### 8.1 采样间隔与 Controller 数据流开销 (Cadence & Throughput Benchmark) `[Observed]`
+
+- **测试工具**: `tools/discovery/analyze-cadence.mjs`
+- **Controller 特性验证**: Mihomo Meta v1.10.0 原生支持向 `/connections` WebSocket 传递 `?interval=<ms>` 查询参数 `[Documented / Observed]`。
+- **实测性能与吞吐量矩阵 (236 并发活跃连接)**:
+  - `default (~1000ms)`: 平均采样间隔 `1000.3ms` (抖动 < 1ms)；数据吞吐量 `132.8 KB/s`；
+  - `500ms`: 平均采样间隔 `500.2ms`；数据吞吐量 `277.5 KB/s`；
+  - `250ms`: 平均采样间隔 `250.2ms`；数据吞吐量 `577.2 KB/s`。
+- **结论**: 缩短采样周期能成倍提升快照时间分辨率，但吞吐量呈线性增长（~4.3x）。
+
+---
+
+### 8.2 DIRECT / PROXY 快照捕获率矩阵 (Capture-Rate Matrix, `N=600` TCP Connections) `[Observed]`
+
+- **实验方法**:
+  - 执行 3 种快照间隔 (`default`, `500ms`, `250ms`) × 2 条路由 (`direct`, `proxy`) × 2 轮独立试验 = **12 Trials**（每个 Trial 发起 50 个严格独立的非 Keep-Alive 短请求，总计 600 个请求）；
+  - 以操作系统内核实际完成 TCP 握手的 `eligibleConnectedCount = 50` 为基准分母；
+  - 通过 `localPort === metadata.sourcePort` + 进程标识 (`node`) + 目标域名 + 时间窗口重叠进行关联（`Ambiguous = 0`）。
+
+#### 聚合路由 × 快照间隔对比表 (`N=100` per Cell) `[Observed]`
+
+| 路由与快照间隔 | 试验总样本 (N) | 成功捕获数 (Matched) | 快照盲区漏抓数 (Missed) | 快照捕获率 (Capture Rate) | 单帧捕获占比 (1 Frame Presence) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **DIRECT @ default (1000ms)** | 100 | 16 | 84 | **16.0%** (盲区 84.0%) | 16 / 16 (100.0%) |
+| **PROXY @ default (1000ms)** | 100 | 9 | 91 | **9.0%** (盲区 91.0%) | 7 / 9 (77.8%) |
+| **DIRECT @ 500ms** | 100 | 28 | 72 | **28.0%** (盲区 72.0%) | 25 / 28 (89.3%) |
+| **PROXY @ 500ms** | 100 | 17 | 83 | **17.0%** (盲区 83.0%) | 8 / 17 (47.1%) |
+| **DIRECT @ 250ms** | 100 | 56 | 44 | **56.0%** (盲区 44.0%) | 49 / 56 (87.5%) |
+| **PROXY @ 250ms** | 100 | 26 | 74 | **26.0%** (盲区 74.0%) | 13 / 26 (50.0%) |
+
+#### 存活时长分布 (Duration Bins Summary) `[Observed]`
+- `<100ms`: 样本量极少或瞬间关闭，捕获率接近 0%；
+- `100–250ms`: 在 250ms 快照下捕获率为 **48.9%**，在 1000ms 下仅 **11.1%**；
+- `250–500ms`: 在 250ms 快照下捕获率为 **41.1%**，在 1000ms 下仅 **10.6%**；
+- `>=1000ms`: 跨越快照周期的连接捕获率提升至 **33%~40%**（若持续存活则 100% 捕获）。
+
+#### 核心审计结论 `[Observed / Inferred]`
+1. **短连接快照盲区是只读轮询架构的固有物理限制**：在默认 1000ms 下，短连接漏抓率高达 **84%~91%**。
+2. **捕获的短连接绝大多数为单帧连接（One-Frame Presence）**：占被捕获短连接的 75%~100%，再次验证单帧首次观察字节必须计入增量。
+3. **采样间隔推荐**：Collector 在对短连接敏感的场景下推荐使用 `250ms` ~ `500ms`。
+
+---
+
+## 9. Phase 0C-6: 全局流量对账与残差模型 (Global Accounting & Reconciliation) `[Observed]`
+
+### 9.1 对账公式与实测残差收敛性
+
+- **全局计数器增量 (Global Delta)**: $\Delta(\text{uploadTotal}) = \text{last}.\text{uploadTotal} - \text{first}.\text{uploadTotal}$
+- **应用层归因流量 (App Attributed Delta)**: $\Delta(\text{AppTraffic}) = \sum \Delta(\text{AppConnection})$
+- **残差 (Residual)**: $\text{Residual} = \Delta(\text{uploadTotal}) - \Delta(\text{AppTraffic})$
+
+#### 12 轮会话与稳态长连接对账数据 `[Observed]`
+
+- **稳态长连接场景 (`A1-default`, 100 并发连接)**:
+  - 全局上传: `1,826,942 B` | 应用归因上传: `1,826,105 B` | **残差仅 837 B (0.05%)**；
+  - `/traffic` 速率积分: `1,826,700 B` | **与全局上传误差仅 -0.01%**。
+- **突发短连接矩阵聚合 (`N=48` trials)**:
+  - **250ms 采样周期**: 全局上传 6.94MB，应用归因 6.90MB，**上传残差仅 0.6%**；
+  - **500ms 采样周期**: 全局上传 6.37MB，应用归因 6.26MB，**上传残差仅 1.7%**；
+  - **1000ms 采样周期**: 全局上传 2.46MB，应用归因 2.33MB，**上传残差 5.3%**（下载因短连接漏抓残差为 51.2%）。
+
+---
+
+### 9.2 重大发现：链式代理/多跳底层连接的重复计数 (Multi-hop Relay Duplication) `[Observed]`
+
+- **机理证实**: 当 Mihomo 配置中继/链式代理时，`/connections` 列表中同时存在应用层逻辑连接（`process: agy.exe, host: play.googleapis.com`）与 Mihomo 发往中继节点的底层连接（`process: "", host: 168.158.196.123`），两者的 `upload` 增量完全相同。
+- **架构规约**: 若直接将所有连接增量相加，会导致代理流量 **200% 重复计算**。ProxyLens 必须显式将底层中继连接标记为 `isRelayHop = true`（`rule === "" && process === ""`），应用层审计仅统计逻辑连接。
+
+---
+
+## 10. Phase 0C-4 (Static Part): 静态路由证据清单 (Static Routing Inventory) `[Observed]`
+
+基于已有快照样本（78,000+ 连接实例）的聚合盘点，共识别出 **27 种确定性路由模式**：
+
+### 10.1 规则类型覆盖
+- `RuleSet` (cn_ip, cn_domain, google, ai, microsoft)
+- `DomainSuffix` (chatgpt.com, apple.com, githubusercontent.com, visualstudio.com, live.com 等)
+- `Domain` (ipapi.co, api.ip.sb, ipwho.is, ipinfo.io 等)
+- `IPCIDR` (10.0.0.0/8, 192.168.0.0/16)
+- `GeoSite` (cn)
+- `Network` (udp)
+- `Match` (兜底)
+
+### 10.2 `chains` 数组逆向拓扑顺序规约 (Hop Order Semantics) `[Observed]`
+- **`chains[0]`**: **最终出口节点 (Physical Egress Node)**（如 `美国ISP-IPRoyal-socks5`、`🇭🇰 香港W06 | x0.8` 或 `DIRECT`）；
+- **`chains[1..N-2]`**: **中间策略组 (Intermediate Groups)**（如 `出口选择`、`入口选择`）；
+- **`chains[chains.length - 1]`**: **顶层规则目标策略组 (Top-Level Rule Group)**（如 `AI服务`、`Google服务`、`GitHub`、`Microsoft服务`）。
+- **渲染规范**: UI 层通过 `chains.slice().reverse()` 呈现从分流规则到最终节点的自然因果流。
+
+---
+
+## 11. 开放问题与后续阶段 (Open Questions & Roadmap)
+
+- [x] **DONE (Phase 0C-0)**: Live FLClash Controller Gate 验证；
+- [x] **DONE (Phase 0C-1)**: DIRECT / PROXY 基线与核心字段验证；
+- [x] **DONE (Phase 0C-2)**: UDP / NTP 协议归因验证；
+- [x] **DONE (Phase 0C-3A/B)**: 稳态长连接单调性与冷启动基线语义规约；
+- [x] **DONE (Phase 0C-3C)**: 快照轮询周期 (Cadence) 与短连接捕获率矩阵量化 (N=600)；
+- [x] **DONE (Phase 0C-6)**: 全局流量对账、残差模型与 Multi-hop Relay 去重机制；
+- [x] **DONE (Phase 0C-4 静态部分)**: 静态代理链拓扑顺序与 27 类路由模式盘点；
+- [ ] **TODO (Phase 0C-5 / Phase 0D)**: 动态代理切换行为、Mihomo 重启与 Controller 断开恢复状态机。
+

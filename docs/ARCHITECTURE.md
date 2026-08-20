@@ -158,50 +158,50 @@ rulePayload
 
 ProxyLens 最难的部分不是 UI，而是把持续变化的连接快照转换成不重复、不漏记、可解释的历史。
 
-### 4.1 Connection Diff
+### 4.1 Connection Diff 与状态机规约 (State Machine Specification)
 
-需要验证 `/connections` 中 `upload` / `download` 是否为连接级累计值，以及同一 `id` 在相邻快照中的稳定性。
-
-若验证成立，基本模型为：
+基于 Phase 0C-3 实测，确立了连接状态机的核心基线规则：
 
 ```text
-当前累计值 - 上一次累计值 = 本次增量
+增量计算 = 当前累计值 - 上一次累计值
 ```
 
-实现必须处理：
+实现必须严格区分以下生命周期阶段：
 
-- 新连接首次出现；
-- 活跃连接多次更新；
-- 连接消失；
-- 字节计数异常回退或重置；
-- Controller 断开后重新连接；
-- Mihomo 重启后旧 ID 全部失效；
-- Collector 自己重启后没有上一帧状态。
+1. **会话冷启动 (Session Bootstrap)**：
+   - 采集器启动首帧收到的全部已有连接，记录为 `preexisting_at_session_start`，其 `upload`/`download` 作为 baseline，**不得作为当期增量流量计入**（防止 MetaCubeXD 式的冷启动历史流量虚假当期爆发）；
+2. **稳态新连接 (Steady-State New Connection)**：
+   - 在连续监控中新出现的 ID，以 `0 B` 为基线，首次观测到的计数器直接计入当期增量（支持单帧瞬态短连接的流量计入）；
+3. **连接移出快照 (Disappeared from Snapshot)**：
+   - 当连接从活跃列表消失时标记为 `disappeared_from_snapshot`，并记录 `last_observed` 计数，显式标记 `possible_unobserved_tail`。
 
-任何无法安全计算的情况都要显式标记，不得用猜测补齐。
+### 4.2 快照轮询盲区与残差模型 (Snapshot Blind Spot & Residual Accounting)
 
-### 4.2 长连接
+Phase 0C-3C 与 0C-6 实测确立了快照轮询机制的物理边界：
 
-只在连接关闭时保存最终值可能导致：
+1. **短连接快照盲区**：
+   - 默认 1000ms 采样下，存活短于 500ms 的短连接有 **84%~91%** 无法被快照捕获；
+   - 提升采样率至 250ms 可将捕获率提升 3.5 倍至 56%，但无法完全消除物理盲区；
+2. **残差模型 (Residual Model)**：
+   - 内核全局计数器 $\Delta(\text{uploadTotal})$ 记录了包含盲区短连接在内的全量物理流量；
+   - 连接层归因流量之和 $\sum \Delta(\text{AppConn})$ 记录了所有被快照捕获的应用连接流量；
+   - 系统必须显式计算并持久化残差：$$\text{Residual} = \Delta(\text{uploadTotal}) - \sum \Delta(\text{AppConn})$$
+   - 在 250ms 快照下，上传残差收敛至 **<1%**（稳态长连接残差 < 0.1%）。
 
-- UI 长时间看不到正在产生的大流量；
-- Collector 异常退出时丢掉未持久化进度。
+### 4.3 链式代理/多跳底层连接去重规约 (Multi-hop Relay Deduplication)
 
-因此可能需要阶段性快照或增量持久化。
+Phase 0C-6 实测发现：
+- 在配置链式/中继代理时，`/connections` 会同时列出应用层逻辑连接（`process: agy.exe, host: play.googleapis.com`）与 Mihomo 发往第一跳中继节点的底层连接（`process: "", host: 168.158.196.123`），两者流量完全相同；
+- **规约**：底层中继连接必须被显式识别（`rule === "" && process === ""`），并在应用层流量汇总时进行**去重过滤**，防止代理流量产生 **200% 重复计算（Double Counting）**。
 
-具体多久写一次、达到多少流量时写一次，目前均属于待测参数，不设固定“5 分钟 / 50 MB”之类的硬编码基线。
+### 4.4 代理链拓扑顺序规约 (Hop Order Semantics)
 
-### 4.3 连接消失的语义
+Phase 0C-4 实测证明：
+- `chains[0]` 为**最终物理出口节点 (Physical Egress Node)**；
+- `chains[chains.length - 1]` 为**顶层分流规则匹配策略组 (Top-Level Rule Group)**；
+- UI 呈现统一采用正向因果顺序渲染：`chains.slice().reverse()`。
 
-“某 ID 从下一帧 Connections 列表消失”很可能代表连接结束，但 Phase 0 必须验证：
-
-- 正常关闭；
-- Mihomo 重载；
-- Controller WebSocket 重连；
-- 系统睡眠 / 唤醒；
-- TUN 开关变化；
-
-这些情况下是否能够被可靠区分。
+---
 
 ---
 
