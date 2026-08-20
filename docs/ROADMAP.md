@@ -1,157 +1,238 @@
-# ProxyLens 开发与验证路线图 (ROADMAP.md)
+# ProxyLens 开发与验证路线图
 
 ---
 
-## 路线图规划原则
+## 路线图原则
 
-1. **验证导向，先核后壳**：按实际技术难点与数据验证顺序推进，严禁在底层数据未验证前提前开发复杂前端。
-2. **渐进交付**：每个阶段均设立明确的目标 (Goal)、交付物 (Deliverables)、验收标准 (Acceptance) 与范围外事项 (Out of scope)。
-3. **拒绝空泛排期**：本路线图聚焦于工程里程碑与质量关卡，不设置主观的时间估算。
+1. **验证导向**：先确认 Mihomo 真实数据语义，再设计生产级 Collector。
+2. **正确性优先**：先解决归因、连接生命周期、double counting、重启与监控缺口，再做完整 UI。
+3. **逐阶段收敛技术选型**：Go / Rust、SQLite、Tauri / Web UI 等不能只凭偏好决定，应由前一阶段证据推动。
+4. **阶段验收优于时间排期**：当前不设置主观日期和未经基准测试的性能数字。
 
 ---
 
 ## 阶段概览
 
-```
-Phase 0: 数据源验证 (Discovery & Validation)
-   │
-   ▼
-Phase 1: 采集器原型 (Collector Prototype)
-   │
-   ▼
-Phase 2: 持久化与一致性 (Persistence & Correctness)
-   │
-   ▼
-Phase 3: 审计可视化 (Audit UI)
-   │
-   ▼
-Phase 4: 待检查流量引擎 (Audit Intelligence)
-   │
-   ▼
-Later: 长期增强 (Long-term Enhancements)
+```text
+Phase 0  Mihomo 数据源验证
+   ↓
+Phase 1  Collector 原型
+   ↓
+Phase 2  持久化与正确性
+   ↓
+Phase 3  审计 UI
+   ↓
+Phase 4  待检查流量
+   ↓
+Later    长期增强
 ```
 
 ---
 
-## Phase 0 — 数据源验证 (Mihomo Data Source Discovery)
+## Phase 0 — Mihomo Data Source Discovery
 
-### 🎯 Goal
-在 Windows 11 + Mihomo (TUN) 真实环境下，深入调研并实测 Mihomo External Controller 的 WebSocket / REST 接口，验证数据完备性，彻底搞清过往旧方案中“大量 Unknown 流量”的技术成因。
+### Goal
 
-### 📦 Deliverables
-1. **API 数据字段实测报告**：详细记录 `process`, `processPath`, `host`, `sniffHost`, `destinationIP`, `rule`, `rulePayload`, `chains` 在不同应用场景下的表现。
-2. **连接生命周期抓包样本**：捕获 TCP 长连接、短连接、UDP 突发包在 WebSocket `/connections` 中的事件流。
-3. **参考实现对比备忘**：分析 MetaCubeXD Data Usage 等开源实现的优缺点与边界陷阱。
+在真实 Windows 11 + Mihomo + FLClash 环境下，弄清 External Controller 能够稳定提供什么数据、这些字段真实语义是什么，以及旧方案“大量 Unknown”究竟来自数据源缺失还是采集 / 计算方式错误。
 
-### ✅ Acceptance
-- 明确验证以下场景下的数据捕获能力：
-  - Windows 系统后台服务（如 NTP 同步、Windows Update）
-  - 常见浏览器访问（HTTP/1.1、HTTP/2、HTTP/3 QUIC）
-  - 常见桌面软件（聊天工具、IDE、下载工具）
-- 形成清晰的 Unknown 归因分类表，证明 Mihomo 原生数据能够支撑可解释的审计诉求。
+### Deliverables
 
-### 🚫 Out of scope
-- 编写生产级代码
-- 初始化数据库或桌面 UI
+1. `docs/research/mihomo-data-source.md`
+   - Mihomo 版本与测试环境；
+   - `/connections`、`/traffic` 等实际行为；
+   - 字段覆盖率；
+   - TCP / UDP / QUIC 差异；
+   - DIRECT / PROXY / REJECT / 多层代理链表达；
+   - 连接生命周期和重启行为；
+   - 已确认风险和仍未解决问题。
+2. 一组**本地保存、不提交 Git**的原始 JSON 样本，用于复核真实行为。
+3. 必要时提供极少量脱敏后的示例片段放进调研报告。
+4. MetaCubeXD Data Usage 等参考实现的对比结论：哪些思路可借鉴、哪些不能直接当作 Mihomo 事实。
 
----
+### Required scenarios
 
-## Phase 1 — Collector 原型验证 (Collector Prototype)
+至少覆盖：
 
-### 🎯 Goal
-实现一个极简的命令行版 Collector 原型，验证核心连接状态机、连接生命周期追踪、差值 (diff) 计算与 Controller 断线自愈能力。
+- 空闲 TUN 下的后台连接；
+- NTP / UDP；
+- 浏览器 HTTPS；
+- QUIC / HTTP3（在环境能够稳定触发时）；
+- 常见桌面软件；
+- 一个明确走代理的大流量场景；
+- 一个明确 DIRECT 的大流量场景；
+- 长连接；
+- 节点 / 策略切换；
+- Mihomo 重载或重启；
+- External Controller 断开和恢复。
 
-### 📦 Deliverables
-1. **CLI 采集器原型**：能够连接指定的 Mihomo Controller，持续监听并在内存中维护当前活跃连接哈希表。
-2. **连接关闭与 Diff 算法**：在连接关闭时准确计算总传输量，支持在控制台输出审计日志。
-3. **自愈与重连模块**：当 Mihomo 重启或网络波动时，能够平滑断线重连并标记中断状态。
+### Acceptance
 
-### ✅ Acceptance
-- 在 500+ 并发短连接冲击下，Collector 内存占用 $\le 30\,\text{MB}$，无内存泄漏。
-- 当模拟 Mihomo 内核主动重启时，Collector 不崩溃且能在 Mihomo 恢复后 3 秒内恢复采集。
-- 捕获到的单条连接字节数与实际传输量相符。
+Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须回答的问题”，并明确区分：
 
-### 🚫 Out of scope
-- 数据库落库
-- 多维聚合统计
-- 图形用户界面
+- **Documented**：官方文档明确说明；
+- **Observed**：当前真实环境已经复现；
+- **Inferred**：合理推断但尚未直接验证。
 
----
+对关键字段形成覆盖率和缺失原因表，不得只写“基本可用”。
 
-## Phase 2 — 持久化与一致性 (Persistence & Correctness)
+### Out of scope
 
-### 🎯 Goal
-引入本地持久化存储（SQLite），解决大规模连接历史落库、Double Counting 防范、监控缺口 (Monitoring Gap) 持久化与 Unknown 精准归因。
-
-### 📦 Deliverables
-1. **SQLite 存储引擎**：设计 `connections`、`monitoring_gaps` 及必要的索引。
-2. **批量事务写入队列**：支持内存缓冲与批量 Flush 机制，保障磁盘 IO 效率与并发读写安全。
-3. **数据一致性验证脚本**：用于比对 Mihomo 总 Traffic 速率与 ProxyLens 入库流量的一致性。
-4. **监控缺口记录器**：自动在采集中断时生成 Gap 记录。
-
-### ✅ Acceptance
-- **场景 A（后台 NTP）**：成功持久化后台 UDP 连接且关机重启后仍能查询。
-- **场景 B（1GB 下载）**：大文件下载后入库流量与实际一致，无未解释的 Unknown。
-- **场景 C（DIRECT 隔离）**：DIRECT 大流量准确标记，不计入 PROXY 流量池。
-- **场景 D（停机缺口）**：关闭 Collector 10 分钟后启动，数据库中精确生成 10 分钟 Gap 记录。
-- **场景 E（节点切换）**：上午走节点 A、下午走节点 B 的记录在数据库中各自独立且保持原样。
-
-### 🚫 Out of scope
-- 前端图表展示与交互界面
-- 智能规则推荐算法
+- 生产级 Collector；
+- 正式数据库 schema；
+- 桌面 UI；
+- 为了完成调研提前初始化完整应用技术栈。
 
 ---
 
-## Phase 3 — 审计可视化 (Audit UI)
+## Phase 1 — Collector Prototype
 
-### 🎯 Goal
-开发随用随开的审计 UI 界面，提供直观的历史连接查询、多维过滤检索、流量聚合看板与监控覆盖率表达。
+### Goal
 
-### 📦 Deliverables
-1. **历史连接审计视图**：支持按时间范围、进程名、域名、目标 IP、规则、节点、传输协议等进行多维组合过滤与分页搜索。
-2. **多维聚合看板**：展示今日/最近 7 天/自定义周期的进程排行、域名排行、规则命中排行与节点消耗排行。
-3. **监控健康度与覆盖率视图**：以时间轴形式直观标出正常监控时段与监控缺口 (Gap)，展示统计周期的覆盖率百分比。
-4. **单条连接溯源卡片**：清晰展示“进程 $\to$ 目标 $\to$ 规则 $\to$ 策略链 $\to$ 节点 $\to$ 流量”的因果链路。
+基于 Phase 0 的真实结论，实现最小 CLI / console Collector 原型，验证连接状态管理、Diff 算法和 Controller 断线恢复。
 
-### ✅ Acceptance
-- UI 启动速度 $\le 1.5$ 秒，关闭后后台 Collector 运行不受任何影响。
-- 在 10 万条历史记录下，多维条件搜索与聚合结果在 200 毫秒内渲染完成。
-- 用户可一眼识别指定时间段内是否存在监控盲区。
+### Deliverables
 
-### 🚫 Out of scope
-- 自动修改系统代理或分流规则
-- 云端同步
+1. 可连接指定 Mihomo External Controller 的最小 Collector；
+2. 内存 Active Connection 状态表；
+3. 基于真实语义的 upload / download 增量计算；
+4. 连接出现、更新、消失的生命周期处理；
+5. Controller 断线 / 重连处理；
+6. 对 Mihomo 重启、Collector 自身重启、未知状态转换的显式日志；
+7. 第一轮性能和资源 benchmark。
 
----
+### Acceptance
 
-## Phase 4 — 待检查流量引擎 (Audit Intelligence)
+- 常见 TCP / UDP / QUIC 场景下不会明显漏记或 double count；
+- 大量短连接下运行稳定，无明显持续内存增长；
+- Mihomo / Controller 中断后 Collector 不崩溃，并能自动恢复观察；
+- 对无法安全续算的区间明确标记，而不是猜测补齐；
+- 形成真实 benchmark，之后才决定合理的 RAM、CPU、重连延迟和采样 / 缓冲目标。
 
-### 🎯 Goal
-构建基于规则与启发式特征的“待检查流量”分析引擎，主动识别可疑或低效的代理分流行为，提供规则优化建议。
+### Out of scope
 
-### 📦 Deliverables
-1. **待检查流量推荐列表**：
-   - 首次走代理的后台进程
-   - Windows / 安全软件后台服务走代理
-   - `MATCH` 兜底规则产生的大流量
-   - 宽泛 UDP 规则（如 `NETWORK,udp`）产生的代理连接
-   - 纯 IP 目标且缺乏反查域名的代理大流量
-   - 长期 DIRECT 突变为 PROXY 的目标
-2. **规则优化辅助面板**：生成可供复制的 Mihomo 规则片段（如 `DOMAIN-SUFFIX,example.com,DIRECT`）。
-
-### ✅ Acceptance
-- 系统能够自动高亮场景 A 中的 NTP 错误代理连接，并给出推荐的 DIRECT 规则建议。
-- 所有异常判断逻辑完全透明可解释，不引入不可控的黑盒算法。
-
-### 🚫 Out of scope
-- 未经用户确认直接修改 Mihomo 配置文件
+- 完整持久化历史；
+- 图形 UI；
+- 复杂聚合统计。
 
 ---
 
-## Later — 长期增强规划
+## Phase 2 — Persistence & Correctness
 
-以下功能在核心审计价值稳定后再行评估：
-- **机场套餐与计费估算**：支持配置月度重置日、节点计费倍率，生成估算账单。
-- **数据归档与压缩**：超过 30 天的历史明细自动降采样聚合为小时/天统计，释放存储空间。
-- **历史数据导出**：支持导出 CSV / JSON 审计报表。
-- **多客户端与跨平台支持**：探索 Linux / macOS 运行环境及其他兼容 External Controller 的代理内核。
+### Goal
+
+把已经验证可靠的连接状态转换为长期可查询的本地历史，并建立正确性对账和 Monitoring Gap 模型。
+
+### Deliverables
+
+1. 本地持久化层；
+2. 正式历史连接数据模型；
+3. Monitoring Gap 数据模型；
+4. 长连接阶段性持久化机制；
+5. 批量写入与崩溃恢复策略；
+6. 必要索引；
+7. 流量一致性验证工具 / 测试；
+8. 第二轮存储与查询 benchmark。
+
+SQLite + WAL 是当前首选候选，但应在这一阶段通过真实负载正式确认，而不是因为文档提前写过就不可修改。
+
+### Acceptance
+
+必须通过 `PRODUCT.md` 中的核心场景：
+
+- **后台 NTP / UDP**：连接结束后仍能完整回查；
+- **代理大文件**：能解释进程、目标、规则、代理链和流量，不出现无原因的大块 Unknown；
+- **DIRECT 大流量**：不会错误计入 Proxy Traffic；
+- **Collector / Controller 中断**：形成明确 Gap；
+- **节点切换**：历史保留发生当时的代理路径；
+- **应用 / Mihomo 重启**：不会把重启造成的数据缺口伪装成正常连续统计。
+
+### Out of scope
+
+- 完整用户界面；
+- 自动规则建议。
+
+---
+
+## Phase 3 — Audit UI
+
+### Goal
+
+开发随用随开的审计 UI，让用户能够快速从历史中回答“谁、去哪、为什么、走哪里、多少”。
+
+### Deliverables
+
+1. 历史连接列表与搜索；
+2. 时间、进程、域名 / IP、规则、协议、节点等组合筛选；
+3. 单连接审计链；
+4. 按应用 / 域名 / 规则 / 节点等聚合；
+5. DIRECT / PROXY / REJECT 等分类视图；
+6. 监控覆盖率和 Gap 时间轴；
+7. UI 与 Collector 生命周期彻底解耦。
+
+### Acceptance
+
+- UI 关闭后 Collector 不受影响；
+- 在 Phase 2 建立的目标数据集规模下查询和交互保持流畅；
+- 用户可以快速识别统计区间是否存在监控缺口；
+- 单条代理连接能够清楚展示可用的完整因果链；
+- 基于真实数据建立启动和查询性能基准，不为满足早期文档数字而优化。
+
+### Out of scope
+
+- 自动修改 Mihomo；
+- 云同步；
+- 与系统网络路径耦合。
+
+---
+
+## Phase 4 — Audit Intelligence
+
+### Goal
+
+在可靠历史之上，用透明、可解释的规则筛选“值得检查的代理流量”，辅助用户优化分流。
+
+### Initial checks
+
+优先考虑：
+
+- 首次走代理的后台进程；
+- Windows / 安全软件后台服务走代理；
+- `MATCH` 兜底的大流量；
+- `NETWORK,udp` 等宽泛 UDP 规则；
+- 只有 IP、缺少域名的大流量；
+- 单连接或单进程异常增长；
+- 过去长期 DIRECT、近期变成 PROXY 的目标。
+
+### Deliverables
+
+1. 待检查流量列表；
+2. 每个检查项的触发理由；
+3. 相关历史连接快速下钻；
+4. 必要时生成**可复制但不自动应用**的 Mihomo 规则建议。
+
+### Acceptance
+
+- 能从真实历史中高亮类似“后台 NTP 被宽泛 UDP 规则送入代理”的场景；
+- 所有判断均能解释“为什么被标记”；
+- 规则建议必须由用户决定是否应用；
+- 不引入不可解释的黑盒评分作为核心依据。
+
+### Out of scope
+
+- 未经用户确认直接修改配置；
+- 自动切换节点；
+- 防火墙或阻断功能。
+
+---
+
+## Later — Long-term Enhancements
+
+核心审计链稳定后再评估：
+
+- 机场套餐周期与用户自定义重置日；
+- 节点倍率和机场计费估算；
+- 更长历史的聚合 / 清理策略；
+- CSV / JSON 导出；
+- 多 Mihomo GUI 兼容验证；
+- Linux / macOS；
+- 如果 Mihomo 数据源经长期实测确实存在无法接受的盲区，再评估第二观测数据源。
