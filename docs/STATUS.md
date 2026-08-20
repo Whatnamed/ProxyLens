@@ -103,7 +103,9 @@ Phase 0 完成后，再根据证据确定 Phase 1 Collector 的语言、状态�
 - 初始化 README、PRODUCT、ARCHITECTURE、ROADMAP、STATUS 与 `.gitignore`。
 - 增加根目录 `AGENTS.md`，作为跨编码 Agent 的仓库工作入口。
 - 修复 README 中错误的本机 `file:///...` 文档链接，改为仓库相对路径。
-- 收紧 `ARCHITECTURE.md`：把未经验证的固定 CPU / RAM、批量写入阈值、SQLite 最终决定等恢复为候选或待测事项；修正 `/traffic` 的接口表述；增加 Phase 0 必须回答的问题。
-- 收紧 `ROADMAP.md`：删除未经 benchmark 的固定性能数字，把各阶段验收改成“先实测、再建立基线”。
-- 新增 AGY / Antigravity 项目 Skill：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
-- 当前仍处于 Phase 0，不因文档完善而提前进入生产实现。
+- 收紧 `ARCHITECTURE.md` 与 `ROADMAP.md`，去除未经实测的硬编码数值。
+- 新增项目 Skill：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
+- **Phase 0R**：完成 MetaCubeXD `main` 分支 Data Usage 源码审阅，产出 `docs/research/metacubexd-reference.md`，明确识别了冷启动虚增、重启删库、丢弃 Rule/Chains、outbound 取 chains[0] 等关键缺陷与可借鉴点。
+- **Phase 0A**：完成运行环境 Preflight 检查，确认 Windows 11 环境、FLClash 运行状态、Mihomo Meta v1.19.12 内核，并确认 Controller 接口连接机制。
+- **Phase 0B**：在 `tools/discovery/` 实现零依赖、只读的 Discovery Probe 调研工具（`probe.mjs`），支持 `/connections` 与 `/traffic` 双通道 NDJSON 流式抓取、优雅退出与 Session 隔离；完成 Smoke Test 验证，确认样本完全被 `tmp/` 隔离不进入 Git。
+
