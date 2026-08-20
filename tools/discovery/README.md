@@ -63,7 +63,7 @@ $env:MIHOMO_SECRET="your_secret_here"; node tools/discovery/probe.mjs
 
 ## 4. 如何停止
 
-- **手动停止**：在终端随时按下 `Ctrl + C`，探针将捕获中断信号，安全关闭 WebSocket 连接并完整刷新 (flush) 写入磁盘，退出状态标记为 `interrupted_by_user`。
+- **手动停止**：在终端随时按下 `Ctrl + C`，探针将捕获中断信号，安全关闭 WebSocket 连接并等待所有 Node.js Writable stream 正常 finish/close，确保应用层写缓冲完成写出，退出状态标记为 `interrupted_by_user`。
 - **定时停止**：指定 `--duration <秒数>`，到达设定时长后自动平滑关闭。
 
 ---

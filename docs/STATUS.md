@@ -104,10 +104,12 @@ Phase 0 的主要产出目标：
 - 新增项目 Skill：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
 - **Phase 0R**：完成 MetaCubeXD `main` 分支 Data Usage 源码审阅，产出 `docs/research/metacubexd-reference.md`，明确识别了冷启动虚增、重启删库、丢弃 Rule/Chains 等缺陷，并收紧了对 `chains[0]` 的语义边界表达。
 - **Phase 0A**：完成运行环境 Preflight 检查，确认 Windows 11 环境、FLClash 运行状态及 TUN 模式。
-- **Phase 0B / 0B.1**：在 `tools/discovery/` 实现并加固 Discovery Probe 调研工具（`probe.mjs`）：
-  - 引入基于 `Promise.all` + stream `finish`/`close` 的可靠异步磁盘 flush 机制，消除抢先退出丢帧风险；
-  - 增加 Evidence Quality 会话健康度检查（Preflight、通道 Open 状态、帧数一致性、解析/写入错误统计）；
-  - 完善 Secret 安全提示，推荐环境变量避免历史命令泄漏；
-  - 通过 5000 行高频写入 flush 压力测试与异常分支回归测试。
+- **Phase 0B.2**：完成 Discovery Probe 可靠性清理与异常路径覆盖：
+  - 修复 `sessionEvidence.fatalErrors` 顶层异常建模，防止 uncaught 异常处理器递归失控；
+  - 将 Writable stream flush 超时显式纳入 Evidence Quality（超时即标记 unhealthy 并产生非零退出码）；
+  - 纳入 `events.ndjson` 写入错误监控；
+  - 统一定义 Exit Code 语义（严格遵循：Healthy + 正常退出 -> 0；Unhealthy / 异常 / 丢帧 / 超时 -> 1）；
+  - 建立自动化回归套件，覆盖不可达、空帧、健康会话与未捕获异常 4 大场景；
+  - 规范技术表述，准确定义为应用层 Writable stream finish/close 缓冲刷新。
 
 

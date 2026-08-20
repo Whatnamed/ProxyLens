@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PROBE_VERSION = '0.2.0-discovery';
+const PROBE_VERSION = '0.3.0-discovery';
 
 // 命令行参数解析
 function parseArgs() {
@@ -88,17 +88,23 @@ function sanitizeUrl(urlStr) {
   }
 }
 
+// 等待单个 WritableStream 完成应用层写缓冲 flush (finish/close)
 function waitStreamFinish(stream) {
   return new Promise((resolve) => {
-    if (stream.destroyed || stream.closed) {
+    if (!stream || stream.destroyed || stream.closed) {
       return resolve();
     }
-    stream.end(() => {
-      resolve();
-    });
-    stream.on('error', () => {
-      resolve();
-    });
+    let finished = false;
+    const onDone = () => {
+      if (!finished) {
+        finished = true;
+        resolve();
+      }
+    };
+    stream.end(onDone);
+    stream.once('finish', onDone);
+    stream.once('close', onDone);
+    stream.once('error', onDone);
   });
 }
 
@@ -125,7 +131,7 @@ async function main() {
   const trafficStream = fs.createWriteStream(trafficPath, { flags: 'a', encoding: 'utf8' });
   const eventStream = fs.createWriteStream(eventsPath, { flags: 'a', encoding: 'utf8' });
 
-  // 状态与 Evidence Quality 追踪
+  // 状态与 Evidence Quality 追踪建模
   const sessionEvidence = {
     preflight: {
       status: 'pending',
@@ -148,8 +154,17 @@ async function main() {
         parseErrors: 0,
         writeErrors: 0,
       },
+      events: {
+        writeErrors: 0,
+      },
+    },
+    flush: {
+      completed: false,
+      timedOut: false,
+      error: null,
     },
     eventsCount: 0,
+    fatalErrors: [],
   };
 
   connStream.on('error', (err) => {
@@ -163,6 +178,7 @@ async function main() {
   });
 
   eventStream.on('error', (err) => {
+    sessionEvidence.channels.events.writeErrors++;
     console.error(`[STREAM_ERR] events.ndjson write error: ${err.message}`);
   });
 
@@ -225,16 +241,33 @@ async function main() {
         } catch {}
       }
 
-      // 2. 异步等待所有文件流完成真实磁盘 flush
+      // 2. 异步等待所有文件流完成应用层写缓冲 flush (Writable stream finish/close)
       const flushTimeoutMs = 3000;
-      await Promise.race([
-        Promise.all([
-          waitStreamFinish(connStream),
-          waitStreamFinish(trafficStream),
-          waitStreamFinish(eventStream),
-        ]),
-        new Promise((resolve) => setTimeout(resolve, flushTimeoutMs)),
-      ]);
+      let flushTimedOut = false;
+
+      const streamsPromise = Promise.all([
+        waitStreamFinish(connStream),
+        waitStreamFinish(trafficStream),
+        waitStreamFinish(eventStream),
+      ]).then(() => {
+        if (!flushTimedOut) {
+          sessionEvidence.flush.completed = true;
+        }
+      }).catch((err) => {
+        sessionEvidence.flush.error = err.message;
+      });
+
+      const timeoutPromise = new Promise((resolve) => {
+        setTimeout(() => {
+          if (!sessionEvidence.flush.completed) {
+            flushTimedOut = true;
+            sessionEvidence.flush.timedOut = true;
+          }
+          resolve();
+        }, flushTimeoutMs);
+      });
+
+      await Promise.race([streamsPromise, timeoutPromise]);
 
       // 3. 计算 Evidence Quality
       const issues = [];
@@ -265,8 +298,20 @@ async function main() {
       if (sessionEvidence.channels.traffic.parseErrors > 0) {
         issues.push(`Traffic channel encountered ${sessionEvidence.channels.traffic.parseErrors} JSON parse errors`);
       }
-      if (sessionEvidence.channels.connections.writeErrors > 0 || sessionEvidence.channels.traffic.writeErrors > 0) {
-        issues.push('Encountered file write stream errors');
+      if (sessionEvidence.channels.connections.writeErrors > 0) {
+        issues.push(`Connections file stream encountered ${sessionEvidence.channels.connections.writeErrors} write errors`);
+      }
+      if (sessionEvidence.channels.traffic.writeErrors > 0) {
+        issues.push(`Traffic file stream encountered ${sessionEvidence.channels.traffic.writeErrors} write errors`);
+      }
+      if (sessionEvidence.channels.events.writeErrors > 0) {
+        issues.push(`Events file stream encountered ${sessionEvidence.channels.events.writeErrors} write errors`);
+      }
+      if (sessionEvidence.flush.timedOut) {
+        issues.push(`File write stream flush timed out after ${flushTimeoutMs}ms`);
+      }
+      if (sessionEvidence.fatalErrors.length > 0) {
+        issues.push(`Encountered ${sessionEvidence.fatalErrors.length} fatal/unhandled errors`);
       }
 
       const isHealthySession = issues.length === 0;
@@ -289,7 +334,9 @@ async function main() {
         },
         preflight: sessionEvidence.preflight,
         channels: sessionEvidence.channels,
+        flush: sessionEvidence.flush,
         eventsCount: sessionEvidence.eventsCount,
+        fatalErrors: sessionEvidence.fatalErrors,
         files: {
           manifest: 'manifest.json',
           connections: 'connections.ndjson',
@@ -315,7 +362,8 @@ async function main() {
       console.log(`样本保存目录: ${outputDir}`);
       console.log(`========================================\n`);
 
-      process.exitCode = (reason === 'failed' || !isHealthySession) && reason !== 'interrupted_by_user' && reason !== 'duration_elapsed' ? 1 : 0;
+      // Exit Code 规则：只有完全 Healthy 且非显式失败才为 0；Unhealthy / Failed 一律非 0 (1)
+      process.exitCode = isHealthySession && reason !== 'failed' ? 0 : 1;
     })();
 
     return shutdownPromise;
@@ -332,15 +380,20 @@ async function main() {
   });
 
   process.on('uncaughtException', (err) => {
-    logEvent('uncaught_exception', err.message, { stack: err.stack });
-    sessionEvidence.errors.push(`uncaughtException: ${err.message}`);
-    performShutdown('failed', err.message);
+    const msg = err instanceof Error ? err.message : String(err);
+    try {
+      logEvent('uncaught_exception', msg, { stack: err?.stack });
+      sessionEvidence.fatalErrors.push(`uncaughtException: ${msg}`);
+    } catch {}
+    performShutdown('failed', msg);
   });
 
   process.on('unhandledRejection', (reason) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
-    logEvent('unhandled_rejection', msg);
-    sessionEvidence.errors.push(`unhandledRejection: ${msg}`);
+    try {
+      logEvent('unhandled_rejection', msg);
+      sessionEvidence.fatalErrors.push(`unhandledRejection: ${msg}`);
+    } catch {}
     performShutdown('failed', msg);
   });
 
