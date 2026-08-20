@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PROBE_VERSION = '0.1.0-discovery';
+const PROBE_VERSION = '0.2.0-discovery';
 
 // 命令行参数解析
 function parseArgs() {
@@ -22,7 +22,7 @@ function parseArgs() {
     controller: process.env.MIHOMO_CONTROLLER || 'http://127.0.0.1:9090',
     secret: process.env.MIHOMO_SECRET || process.env.PROBE_SECRET || '',
     output: '',
-    duration: 0, // 0 表示无限期运行直到 Ctrl+C
+    duration: 0, // 0 表示持续运行直到 Ctrl+C
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -53,14 +53,14 @@ Usage:
 
 Options:
   -c, --controller <URL>   Mihomo External Controller 地址 (默认: http://127.0.0.1:9090)
-  -s, --secret <SECRET>    Controller Secret 鉴权凭据 (也可通过 MIHOMO_SECRET 环境变量提供)
+  -s, --secret <SECRET>    Controller Secret (注意: 优先推荐使用 MIHOMO_SECRET 环境变量以防泄漏)
   -o, --output <DIR>       输出目录 (默认: tmp/discovery/<timestamp>)
   -d, --duration <SEC>     采集持续时间 (秒)，0 表示持续运行直到 Ctrl+C (默认: 0)
   -h, --help               显示帮助信息
 
-Examples:
-  node tools/discovery/probe.mjs --controller http://127.0.0.1:9090
-  node tools/discovery/probe.mjs -c http://127.0.0.1:9097 -s mysecret --duration 60
+Security Note:
+  使用 CLI 命令行参数 -s 可能会将 Secret 暴露于系统进程表及 Shell 历史记录中。
+  推荐方式: $env:MIHOMO_SECRET="your_secret"; node tools/discovery/probe.mjs
 `);
 }
 
@@ -88,6 +88,20 @@ function sanitizeUrl(urlStr) {
   }
 }
 
+function waitStreamFinish(stream) {
+  return new Promise((resolve) => {
+    if (stream.destroyed || stream.closed) {
+      return resolve();
+    }
+    stream.end(() => {
+      resolve();
+    });
+    stream.on('error', () => {
+      resolve();
+    });
+  });
+}
+
 async function main() {
   const options = parseArgs();
   const startTime = new Date();
@@ -98,7 +112,6 @@ async function main() {
     ? path.resolve(options.output)
     : path.join(repoRoot, 'tmp', 'discovery', sessionId);
 
-  // 确保输出目录存在
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
@@ -112,21 +125,58 @@ async function main() {
   const trafficStream = fs.createWriteStream(trafficPath, { flags: 'a', encoding: 'utf8' });
   const eventStream = fs.createWriteStream(eventsPath, { flags: 'a', encoding: 'utf8' });
 
-  const stats = {
-    connectionsFrames: 0,
-    trafficFrames: 0,
+  // 状态与 Evidence Quality 追踪
+  const sessionEvidence = {
+    preflight: {
+      status: 'pending',
+      httpStatus: null,
+      mihomoVersion: null,
+      error: null,
+    },
+    channels: {
+      connections: {
+        opened: false,
+        closedUnexpectedly: false,
+        framesReceived: 0,
+        parseErrors: 0,
+        writeErrors: 0,
+      },
+      traffic: {
+        opened: false,
+        closedUnexpectedly: false,
+        framesReceived: 0,
+        parseErrors: 0,
+        writeErrors: 0,
+      },
+    },
     eventsCount: 0,
   };
 
+  connStream.on('error', (err) => {
+    sessionEvidence.channels.connections.writeErrors++;
+    console.error(`[STREAM_ERR] connections.ndjson write error: ${err.message}`);
+  });
+
+  trafficStream.on('error', (err) => {
+    sessionEvidence.channels.traffic.writeErrors++;
+    console.error(`[STREAM_ERR] traffic.ndjson write error: ${err.message}`);
+  });
+
+  eventStream.on('error', (err) => {
+    console.error(`[STREAM_ERR] events.ndjson write error: ${err.message}`);
+  });
+
   function logEvent(type, message, details = null) {
-    stats.eventsCount++;
+    sessionEvidence.eventsCount++;
     const evt = {
       timestamp: new Date().toISOString(),
       type,
       message,
       details,
     };
-    eventStream.write(JSON.stringify(evt) + '\n');
+    try {
+      eventStream.write(JSON.stringify(evt) + '\n');
+    } catch {}
     console.log(`[${evt.timestamp}] [${type}] ${message}`);
   }
 
@@ -137,8 +187,164 @@ async function main() {
     durationSec: options.duration,
   });
 
+  let wsConn = null;
+  let wsTraffic = null;
+  let durationTimer = null;
+  let isShuttingDown = false;
+  let shutdownPromise = null;
+
+  async function performShutdown(reason = 'completed', errorMessage = null) {
+    if (isShuttingDown) {
+      return shutdownPromise;
+    }
+    isShuttingDown = true;
+
+    shutdownPromise = (async () => {
+      if (durationTimer) {
+        clearTimeout(durationTimer);
+        durationTimer = null;
+      }
+
+      logEvent('probe_shutdown', `Shutting down probe (reason=${reason})`, {
+        errorMessage,
+      });
+
+      // 1. 关闭 WebSocket
+      if (wsConn) {
+        try {
+          if (wsConn.readyState === WebSocket.OPEN || wsConn.readyState === WebSocket.CONNECTING) {
+            wsConn.close(1000, 'Probe shutdown');
+          }
+        } catch {}
+      }
+      if (wsTraffic) {
+        try {
+          if (wsTraffic.readyState === WebSocket.OPEN || wsTraffic.readyState === WebSocket.CONNECTING) {
+            wsTraffic.close(1000, 'Probe shutdown');
+          }
+        } catch {}
+      }
+
+      // 2. 异步等待所有文件流完成真实磁盘 flush
+      const flushTimeoutMs = 3000;
+      await Promise.race([
+        Promise.all([
+          waitStreamFinish(connStream),
+          waitStreamFinish(trafficStream),
+          waitStreamFinish(eventStream),
+        ]),
+        new Promise((resolve) => setTimeout(resolve, flushTimeoutMs)),
+      ]);
+
+      // 3. 计算 Evidence Quality
+      const issues = [];
+      if (sessionEvidence.preflight.status !== 'success') {
+        issues.push(`Preflight failed: ${sessionEvidence.preflight.error || 'unknown error'}`);
+      }
+      if (!sessionEvidence.channels.connections.opened) {
+        issues.push('Connections WebSocket channel was never opened');
+      }
+      if (!sessionEvidence.channels.traffic.opened) {
+        issues.push('Traffic WebSocket channel was never opened');
+      }
+      if (sessionEvidence.channels.connections.framesReceived === 0) {
+        issues.push('Connections channel received 0 frames');
+      }
+      if (sessionEvidence.channels.traffic.framesReceived === 0) {
+        issues.push('Traffic channel received 0 frames');
+      }
+      if (sessionEvidence.channels.connections.closedUnexpectedly) {
+        issues.push('Connections WebSocket closed unexpectedly during session');
+      }
+      if (sessionEvidence.channels.traffic.closedUnexpectedly) {
+        issues.push('Traffic WebSocket closed unexpectedly during session');
+      }
+      if (sessionEvidence.channels.connections.parseErrors > 0) {
+        issues.push(`Connections channel encountered ${sessionEvidence.channels.connections.parseErrors} JSON parse errors`);
+      }
+      if (sessionEvidence.channels.traffic.parseErrors > 0) {
+        issues.push(`Traffic channel encountered ${sessionEvidence.channels.traffic.parseErrors} JSON parse errors`);
+      }
+      if (sessionEvidence.channels.connections.writeErrors > 0 || sessionEvidence.channels.traffic.writeErrors > 0) {
+        issues.push('Encountered file write stream errors');
+      }
+
+      const isHealthySession = issues.length === 0;
+
+      // 4. 写出最终 manifest.json
+      const endTime = new Date();
+      const manifest = {
+        probeVersion: PROBE_VERSION,
+        sessionId,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        durationSeconds: Math.round((endTime.getTime() - startTime.getTime()) / 1000),
+        controllerUrl: sanitizeUrl(options.controller),
+        hasSecret: !!options.secret,
+        status: reason,
+        errorMessage,
+        evidenceQuality: {
+          isHealthySession,
+          issues,
+        },
+        preflight: sessionEvidence.preflight,
+        channels: sessionEvidence.channels,
+        eventsCount: sessionEvidence.eventsCount,
+        files: {
+          manifest: 'manifest.json',
+          connections: 'connections.ndjson',
+          traffic: 'traffic.ndjson',
+          events: 'events.ndjson',
+        },
+      };
+
+      try {
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+      } catch (err) {
+        console.error(`[ERROR] Failed to write manifest.json: ${err.message}`);
+      }
+
+      console.log(`\n========================================`);
+      console.log(`Probe 采集结束 (reason=${reason})`);
+      console.log(`健康会话 (Healthy Session): ${isHealthySession ? 'YES' : 'NO'}`);
+      if (!isHealthySession) {
+        console.log(`存在问题 (Issues):`);
+        issues.forEach((iss) => console.log(`  - ${iss}`));
+      }
+      console.log(`总抓取: ${sessionEvidence.channels.connections.framesReceived} 帧 Connections, ${sessionEvidence.channels.traffic.framesReceived} 帧 Traffic`);
+      console.log(`样本保存目录: ${outputDir}`);
+      console.log(`========================================\n`);
+
+      process.exitCode = (reason === 'failed' || !isHealthySession) && reason !== 'interrupted_by_user' && reason !== 'duration_elapsed' ? 1 : 0;
+    })();
+
+    return shutdownPromise;
+  }
+
+  // 捕获系统信号与未捕获异常
+  process.once('SIGINT', () => {
+    console.log('\n[INFO] 接收到中断信号 (SIGINT/Ctrl+C)，正在安全 flush 并退出...');
+    performShutdown('interrupted_by_user');
+  });
+
+  process.once('SIGTERM', () => {
+    performShutdown('terminated');
+  });
+
+  process.on('uncaughtException', (err) => {
+    logEvent('uncaught_exception', err.message, { stack: err.stack });
+    sessionEvidence.errors.push(`uncaughtException: ${err.message}`);
+    performShutdown('failed', err.message);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    logEvent('unhandled_rejection', msg);
+    sessionEvidence.errors.push(`unhandledRejection: ${msg}`);
+    performShutdown('failed', msg);
+  });
+
   // 1. Preflight: 检查 /version
-  let mihomoVersionInfo = null;
   try {
     const versionUrl = new URL('/version', options.controller);
     const headers = {};
@@ -152,168 +358,105 @@ async function main() {
       signal: AbortSignal.timeout(5000),
     });
 
+    sessionEvidence.preflight.httpStatus = res.status;
+
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       throw new Error(`Controller returned HTTP ${res.status}: ${body.slice(0, 100)}`);
     }
 
-    mihomoVersionInfo = await res.json();
-    logEvent('preflight_success', `Connected to Mihomo successfully`, mihomoVersionInfo);
+    const versionData = await res.json();
+    sessionEvidence.preflight.status = 'success';
+    sessionEvidence.preflight.mihomoVersion = versionData;
+    logEvent('preflight_success', `Connected to Mihomo successfully`, versionData);
   } catch (err) {
+    sessionEvidence.preflight.status = 'failed';
+    sessionEvidence.preflight.error = err.message;
     logEvent('preflight_failed', `Failed to connect to External Controller: ${err.message}`);
     console.error(`\n[ERROR] 无法连接到 External Controller: ${err.message}`);
     console.error(`请确认 Mihomo / FLClash 是否运行，且已在配置中开启 external-controller 端口与正确的 secret。\n`);
     
-    // 写入失败 manifest 后退出
-    saveManifest('failed', err.message);
-    cleanupStreams();
-    process.exit(1);
+    await performShutdown('failed', err.message);
+    return;
   }
 
   // 2. 建立 WebSocket 采集连接
   const wsConnectionsUrl = buildWsUrl(options.controller, '/connections', options.secret);
   const wsTrafficUrl = buildWsUrl(options.controller, '/traffic', options.secret);
 
-  let wsConn = null;
-  let wsTraffic = null;
-  let isShuttingDown = false;
+  logEvent('ws_connecting', `Connecting to /connections and /traffic WebSockets`);
 
-  function initWebSockets() {
-    logEvent('ws_connecting', `Connecting to /connections and /traffic WebSockets`);
-
-    // Connections WS
-    try {
-      wsConn = new WebSocket(wsConnectionsUrl);
-      wsConn.onopen = () => {
-        logEvent('ws_open', 'WebSocket /connections connected');
-      };
-      wsConn.onmessage = (event) => {
-        stats.connectionsFrames++;
-        const receivedAt = new Date().toISOString();
-        let payload;
-        try {
-          payload = JSON.parse(event.data);
-        } catch {
-          payload = { raw: event.data, error: 'JSON_PARSE_ERROR' };
-        }
-        connStream.write(JSON.stringify({ receivedAt, frame: payload }) + '\n');
-      };
-      wsConn.onerror = (err) => {
-        logEvent('ws_error', `WebSocket /connections error: ${err.message || 'unknown error'}`);
-      };
-      wsConn.onclose = (event) => {
-        logEvent('ws_close', `WebSocket /connections closed (code=${event.code}, reason=${event.reason || 'none'})`);
-        if (!isShuttingDown) {
-          logEvent('warn', 'WebSocket /connections unexpectedly closed by server');
-        }
-      };
-    } catch (e) {
-      logEvent('ws_create_error', `Failed to initialize /connections WS: ${e.message}`);
-    }
-
-    // Traffic WS
-    try {
-      wsTraffic = new WebSocket(wsTrafficUrl);
-      wsTraffic.onopen = () => {
-        logEvent('ws_open', 'WebSocket /traffic connected');
-      };
-      wsTraffic.onmessage = (event) => {
-        stats.trafficFrames++;
-        const receivedAt = new Date().toISOString();
-        let payload;
-        try {
-          payload = JSON.parse(event.data);
-        } catch {
-          payload = { raw: event.data, error: 'JSON_PARSE_ERROR' };
-        }
-        trafficStream.write(JSON.stringify({ receivedAt, frame: payload }) + '\n');
-      };
-      wsTraffic.onerror = (err) => {
-        logEvent('ws_error', `WebSocket /traffic error: ${err.message || 'unknown error'}`);
-      };
-      wsTraffic.onclose = (event) => {
-        logEvent('ws_close', `WebSocket /traffic closed (code=${event.code}, reason=${event.reason || 'none'})`);
-      };
-    } catch (e) {
-      logEvent('ws_create_error', `Failed to initialize /traffic WS: ${e.message}`);
-    }
-  }
-
-  function saveManifest(status, errorMessage = null) {
-    const manifest = {
-      probeVersion: PROBE_VERSION,
-      sessionId,
-      startTime: startTime.toISOString(),
-      endTime: new Date().toISOString(),
-      durationSeconds: Math.round((Date.now() - startTime.getTime()) / 1000),
-      controllerUrl: sanitizeUrl(options.controller),
-      hasSecret: !!options.secret,
-      mihomoVersion: mihomoVersionInfo,
-      status,
-      errorMessage,
-      stats,
-      files: {
-        manifest: 'manifest.json',
-        connections: 'connections.ndjson',
-        traffic: 'traffic.ndjson',
-        events: 'events.ndjson',
-      },
+  // Connections WS
+  try {
+    wsConn = new WebSocket(wsConnectionsUrl);
+    wsConn.onopen = () => {
+      sessionEvidence.channels.connections.opened = true;
+      logEvent('ws_open', 'WebSocket /connections connected');
     };
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    wsConn.onmessage = (event) => {
+      if (isShuttingDown) return;
+      sessionEvidence.channels.connections.framesReceived++;
+      const receivedAt = new Date().toISOString();
+      let payload;
+      try {
+        payload = JSON.parse(event.data);
+      } catch {
+        sessionEvidence.channels.connections.parseErrors++;
+        payload = { raw: event.data, error: 'JSON_PARSE_ERROR' };
+      }
+      connStream.write(JSON.stringify({ receivedAt, frame: payload }) + '\n');
+    };
+    wsConn.onerror = (err) => {
+      logEvent('ws_error', `WebSocket /connections error: ${err.message || 'unknown error'}`);
+    };
+    wsConn.onclose = (event) => {
+      logEvent('ws_close', `WebSocket /connections closed (code=${event.code}, reason=${event.reason || 'none'})`);
+      if (!isShuttingDown) {
+        sessionEvidence.channels.connections.closedUnexpectedly = true;
+        logEvent('warn', 'WebSocket /connections unexpectedly closed by server');
+      }
+    };
+  } catch (e) {
+    logEvent('ws_create_error', `Failed to initialize /connections WS: ${e.message}`);
   }
 
-  function cleanupStreams() {
-    try { connStream.end(); } catch {}
-    try { trafficStream.end(); } catch {}
-    try { eventStream.end(); } catch {}
+  // Traffic WS
+  try {
+    wsTraffic = new WebSocket(wsTrafficUrl);
+    wsTraffic.onopen = () => {
+      sessionEvidence.channels.traffic.opened = true;
+      logEvent('ws_open', 'WebSocket /traffic connected');
+    };
+    wsTraffic.onmessage = (event) => {
+      if (isShuttingDown) return;
+      sessionEvidence.channels.traffic.framesReceived++;
+      const receivedAt = new Date().toISOString();
+      let payload;
+      try {
+        payload = JSON.parse(event.data);
+      } catch {
+        sessionEvidence.channels.traffic.parseErrors++;
+        payload = { raw: event.data, error: 'JSON_PARSE_ERROR' };
+      }
+      trafficStream.write(JSON.stringify({ receivedAt, frame: payload }) + '\n');
+    };
+    wsTraffic.onerror = (err) => {
+      logEvent('ws_error', `WebSocket /traffic error: ${err.message || 'unknown error'}`);
+    };
+    wsTraffic.onclose = (event) => {
+      logEvent('ws_close', `WebSocket /traffic closed (code=${event.code}, reason=${event.reason || 'none'})`);
+      if (!isShuttingDown) {
+        sessionEvidence.channels.traffic.closedUnexpectedly = true;
+      }
+    };
+  } catch (e) {
+    logEvent('ws_create_error', `Failed to initialize /traffic WS: ${e.message}`);
   }
-
-  function shutdown(reason = 'completed') {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-    logEvent('probe_shutdown', `Shutting down probe (reason=${reason})`, { stats });
-
-    if (wsConn && wsConn.readyState === WebSocket.OPEN) {
-      try { wsConn.close(1000, 'Probe shutdown'); } catch {}
-    }
-    if (wsTraffic && wsTraffic.readyState === WebSocket.OPEN) {
-      try { wsTraffic.close(1000, 'Probe shutdown'); } catch {}
-    }
-
-    saveManifest(reason);
-    cleanupStreams();
-
-    console.log(`\n========================================`);
-    console.log(`Probe 采集已结束 (${reason})`);
-    console.log(`总抓取: ${stats.connectionsFrames} 帧 Connections, ${stats.trafficFrames} 帧 Traffic`);
-    console.log(`样本保存目录: ${outputDir}`);
-    console.log(`========================================\n`);
-
-    process.exit(0);
-  }
-
-  // 信号与异常捕获
-  process.on('SIGINT', () => {
-    console.log('\n[INFO] 接收到中断信号 (SIGINT/Ctrl+C)，正在安全退出...');
-    shutdown('interrupted_by_user');
-  });
-
-  process.on('SIGTERM', () => {
-    shutdown('terminated');
-  });
-
-  process.on('uncaughtException', (err) => {
-    logEvent('uncaught_exception', err.message, { stack: err.stack });
-    shutdown('failed');
-  });
-
-  // 启动采集
-  initWebSockets();
 
   if (options.duration > 0) {
     logEvent('timer_set', `Probe will automatically stop after ${options.duration} seconds`);
-    setTimeout(() => {
-      shutdown('duration_elapsed');
+    durationTimer = setTimeout(() => {
+      performShutdown('duration_elapsed');
     }, options.duration * 1000);
   }
 }

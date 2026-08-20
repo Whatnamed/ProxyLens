@@ -37,10 +37,16 @@ $env:MIHOMO_SECRET="your_secret_here"; node tools/discovery/probe.mjs
 | 参数 | 缩写 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `--controller` | `-c` | `http://127.0.0.1:9090` | Mihomo External Controller 地址 |
-| `--secret` | `-s` | 无 (或读取 `MIHOMO_SECRET` 环境变量) | Controller 鉴权密钥 (如有) |
+| `--secret` | `-s` | 无 (或读取 `MIHOMO_SECRET` 环境变量) | Controller 鉴权密钥 (强烈建议优先使用环境变量) |
 | `--output` | `-o` | `tmp/discovery/<timestamp>/` | 原始样本保存目录 |
 | `--duration` | `-d` | `0` (持续运行) | 采集持续秒数，到期自动退出 |
 | `--help` | `-h` | - | 查看帮助信息 |
+
+> [!WARNING]
+> **Secret 凭据安全须知**：
+> 1. **推荐方式**：优先通过环境变量设置密钥（例如 PowerShell: `$env:MIHOMO_SECRET="your_secret"` 或 cmd: `set MIHOMO_SECRET=your_secret`），避免密钥在命令行中显式暴露。
+> 2. **CLI 传参风险**：若使用 `-s / --secret` 传参，Secret 可能会被记录进 PowerShell / Bash 的本地命令历史文件，或在 Windows 任务管理器 / `Get-Process` 命令行中被本地其他进程读取。
+> 3. **严禁硬编码与提交**：严禁在探针脚本、测试脚本、报告文档或 Git 提交中硬编码真实 Secret。探针日志与生成的 `manifest.json` 会对 URL Token 进行自动脱敏 (`***REDACTED***`)。
 
 ---
 
@@ -48,7 +54,7 @@ $env:MIHOMO_SECRET="your_secret_here"; node tools/discovery/probe.mjs
 
 所有采集样本默认输出到已被 `.gitignore` 排除的 `tmp/discovery/<session-id>/` 目录中：
 
-- `manifest.json`：记录探针版本、开始/结束时间、Mihomo 版本、脱敏后的配置与统计帧数。
+- `manifest.json`：记录探针版本、开始/结束时间、Mihomo 版本、脱敏后的配置、Evidence Quality 会话健康度状态与统计帧数。
 - `connections.ndjson`：原样保存收到的每一帧 `/connections` 快照（每行一条 JSON，附带接收时间戳 `receivedAt`）。
 - `traffic.ndjson`：原样保存收到的每一帧 `/traffic` 速率数据。
 - `events.ndjson`：记录探针生命周期中的诊断事件（启动、连接成功、断线、异常、优雅关闭等）。
@@ -57,7 +63,7 @@ $env:MIHOMO_SECRET="your_secret_here"; node tools/discovery/probe.mjs
 
 ## 4. 如何停止
 
-- **手动停止**：在终端随时按下 `Ctrl + C`，探针将捕获中断信号，安全关闭 WebSocket 连接并完整刷新写入磁盘，退出状态标记为 `interrupted_by_user`。
+- **手动停止**：在终端随时按下 `Ctrl + C`，探针将捕获中断信号，安全关闭 WebSocket 连接并完整刷新 (flush) 写入磁盘，退出状态标记为 `interrupted_by_user`。
 - **定时停止**：指定 `--duration <秒数>`，到达设定时长后自动平滑关闭。
 
 ---

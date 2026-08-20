@@ -6,11 +6,17 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 0 — Documentation & Discovery`
+- **当前阶段**：`Phase 0 — Documentation & Discovery (Phase 0B.1 Completed)`
 - **代码状态**：尚未进入正式业务开发，技术栈未最终确定。
-- **目标环境**：Windows 11 + Mihomo + FLClash。
-- **当前首要任务**：验证 Mihomo External Controller 的真实数据语义和字段完备性。
-- **当前项目级 Skill**：`.agents/skills/mihomo-data-source-validation/SKILL.md`，用于规范 Phase 0 数据源实验与报告方式。
+- **环境资产清单 (Environment Inventory)**：
+  - OS: Windows 11 (AMD64)
+  - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
+  - TUN 状态: 启用 (`device: FlClash`, `find-process-mode: always`, `enhanced-mode: fake-ip`, `mode: rule`)
+  - 可见 Mihomo 内核版本: `Mihomo Meta v1.19.12 windows amd64` (tags: `with_gvisor`)
+- **Controller 验证状态 (Controller Validation Status)**：
+  - `Observed — Probe compatibility smoke test`：探针通信与 NDJSON 异步 flush 在独立 Mihomo 测试实例上验证通过。
+  - `Open Gate for Phase 0C`：当前承载日常流量的 live FLClash 实例暂未开放 `external-controller` 端口（默认未配置）。保持为待用户配置的开放项，禁止擅自修改用户配置。
+- **当前项目级 Skill**：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
 
 ---
 
@@ -31,8 +37,9 @@
 
 ## Open Questions
 
-### Mihomo 数据源
+### Mihomo 数据源与 Phase 0C 验证前置项
 
+- **Phase 0C 前置 Gate**：等待用户在 FLClash 中配置开放 `external-controller` 端口并提供地址/Secret，以捕获真实日常流量。
 - `/connections` 的真实推送频率和快照语义是什么？
 - `upload` / `download` 是否稳定为连接级累计值？
 - Windows TUN 下 `process` / `processPath` 的实际覆盖率如何？
@@ -70,29 +77,19 @@
 
 ## Next Step
 
-执行 Phase 0 Mihomo 数据源验证。
+等待用户在 FLClash 中配置并开放 External Controller 端口，准备启动 Phase 0C 场景矩阵测试。
 
-优先使用项目 Skill：
-
-```text
-.agents/skills/mihomo-data-source-validation/SKILL.md
-```
-
-第一轮不要做生产级 Collector。先用最小只读探针采集真实 `/connections` / `/traffic` 数据，覆盖空闲后台、NTP / UDP、HTTPS、QUIC（可稳定触发时）、代理大流量、DIRECT 大流量、长连接、节点切换、Mihomo 重启和 Controller 重连等场景。
+主要场景包括：
+- 空闲 TUN 下的后台连接
+- NTP / UDP
+- 浏览器 HTTPS
+- QUIC / HTTP3（环境可稳定触发时）
+- 代理大流量 vs DIRECT 大流量
+- 长连接与大量短连接
+- 节点切换与内核重启
 
 Phase 0 的主要产出目标：
-
-```text
-docs/research/mihomo-data-source.md
-```
-
-关键结论必须区分：
-
-- Documented
-- Observed
-- Inferred
-
-Phase 0 完成后，再根据证据确定 Phase 1 Collector 的语言、状态机边界和初步数据模型。
+`docs/research/mihomo-data-source.md`
 
 ---
 
@@ -105,7 +102,12 @@ Phase 0 完成后，再根据证据确定 Phase 1 Collector 的语言、状态�
 - 修复 README 中错误的本机 `file:///...` 文档链接，改为仓库相对路径。
 - 收紧 `ARCHITECTURE.md` 与 `ROADMAP.md`，去除未经实测的硬编码数值。
 - 新增项目 Skill：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
-- **Phase 0R**：完成 MetaCubeXD `main` 分支 Data Usage 源码审阅，产出 `docs/research/metacubexd-reference.md`，明确识别了冷启动虚增、重启删库、丢弃 Rule/Chains、outbound 取 chains[0] 等关键缺陷与可借鉴点。
-- **Phase 0A**：完成运行环境 Preflight 检查，确认 Windows 11 环境、FLClash 运行状态、Mihomo Meta v1.19.12 内核，并确认 Controller 接口连接机制。
-- **Phase 0B**：在 `tools/discovery/` 实现零依赖、只读的 Discovery Probe 调研工具（`probe.mjs`），支持 `/connections` 与 `/traffic` 双通道 NDJSON 流式抓取、优雅退出与 Session 隔离；完成 Smoke Test 验证，确认样本完全被 `tmp/` 隔离不进入 Git。
+- **Phase 0R**：完成 MetaCubeXD `main` 分支 Data Usage 源码审阅，产出 `docs/research/metacubexd-reference.md`，明确识别了冷启动虚增、重启删库、丢弃 Rule/Chains 等缺陷，并收紧了对 `chains[0]` 的语义边界表达。
+- **Phase 0A**：完成运行环境 Preflight 检查，确认 Windows 11 环境、FLClash 运行状态及 TUN 模式。
+- **Phase 0B / 0B.1**：在 `tools/discovery/` 实现并加固 Discovery Probe 调研工具（`probe.mjs`）：
+  - 引入基于 `Promise.all` + stream `finish`/`close` 的可靠异步磁盘 flush 机制，消除抢先退出丢帧风险；
+  - 增加 Evidence Quality 会话健康度检查（Preflight、通道 Open 状态、帧数一致性、解析/写入错误统计）；
+  - 完善 Secret 安全提示，推荐环境变量避免历史命令泄漏；
+  - 通过 5000 行高频写入 flush 压力测试与异常分支回归测试。
+
 

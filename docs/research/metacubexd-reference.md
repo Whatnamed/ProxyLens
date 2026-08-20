@@ -87,12 +87,13 @@
   - ❌ 丢失单条连接粒度（无 UUID、无独立起止时间与时长）。
 
 ### 7. outbound / chains 的解释方式
-- **实现逻辑**：
+- **源码事实 (Documented from MetaCubeXD implementation)**：
   ```ts
   outbound: conn.chains[0] ?? 'DIRECT'
   ```
-- **关键风险与陷阱**：
-  - 在 Mihomo 的 `chains` 数组中，`chains[0]` 通常是入口策略组（例如“节点选择”或“漏网之鱼”），而非实际出站物理节点。将 `chains[0]` 作为 outbound 会导致用户只能看到策略组名称，无法追溯实际出口节点（如“香港 01”）。
+  MetaCubeXD 在其数据模型中直接提取 `conn.chains[0]` 作为其 `outbound` 字段，并在缺失时回退为 `'DIRECT'`。
+- **待验证推论 (Inferred / To be observed in Phase 0C)**：
+  `chains[0]` 是否等价于最终出站物理节点，以及 `chains` 数组在 DIRECT、单层直连代理、多层嵌套/链式代理时的元素顺序与语义，不能仅凭第三方前端的单方面映射来假定，必须由 Phase 0C 捕获到的 Mihomo 真实连接原始样本进行严格验证。第三方实现不能定义 Mihomo 官方语义。
 
 ---
 
@@ -107,12 +108,12 @@
 1. ❌ **重启删库逻辑**：Mihomo 重启触发 `db.clearAll()` 抹除全部历史数据。
 2. ❌ **冷启动虚增**：未建立初始 baseline 就直接将连接的已传输总量视为 delta。
 3. ❌ **过度聚合丢弃审计明细**：完全丢弃单连接元数据，无法回答“刚才那次请求为什么走代理”。
-4. ❌ **粗暴的 Outbound 映射**：直接取 `chains[0]` 掩盖了真实代理链路与最终节点。
+4. ❌ **未经实测的 Outbound 映射**：直接假设 `chains[0]` 代表出站节点，存在掩盖真实代理链路的风险。
 5. ❌ **UI 与采集强耦合在浏览器内**：网页关闭即停止采集，无法实现后台持续守护。
 
 ### 10. MetaCubeXD 实现 $\neq$ Mihomo 官方语义
 - **事实澄清 1**：MetaCubeXD 数据库中没有 `rule` 和 `chains`，是其自身为缩减前端 IndexedDB 存储所做的裁切设计，**并不代表 Mihomo API 不提供这些字段**。
-- **事实澄清 2**：MetaCubeXD 把 `chains[0]` 当 outbound 是其简化展示的选择，Mihomo 的 `chains` 实际上是一个完整的策略跳转链路。
+- **事实澄清 2**：MetaCubeXD 把 `chains[0]` 当 outbound 是其自身的展示设计选择，Mihomo 原生 `chains` 数组的真实语义与顺序必须通过原始样本验证。
 - **事实澄清 3**：MetaCubeXD 在页面重载时把连接累计量算为当前增量，属于前端采集生命周期的缺陷，不能误认为 Mihomo 推送的是瞬时增量。
 
 ---
