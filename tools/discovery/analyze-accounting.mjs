@@ -58,7 +58,7 @@ export async function analyzeSessionAccounting(sessionDir) {
     throw new Error(`No connections frames found in ${sessionDir}`);
   }
 
-  // 1. Global Delta 计算
+  // 1. Global Delta 计算与 Counter Reset 检测
   const firstConn = connFrames[0];
   const lastConn = connFrames[connFrames.length - 1];
 
@@ -70,8 +70,12 @@ export async function analyzeSessionAccounting(sessionDir) {
   const firstDownloadTotal = firstConnData.downloadTotal ?? 0;
   const lastDownloadTotal = lastConnData.downloadTotal ?? 0;
 
-  const globalUploadDelta = Math.max(0, lastUploadTotal - firstUploadTotal);
-  const globalDownloadDelta = Math.max(0, lastDownloadTotal - firstDownloadTotal);
+  const isCounterReset = (lastUploadTotal < firstUploadTotal || lastDownloadTotal < firstDownloadTotal);
+  const globalUploadDelta = isCounterReset ? null : (lastUploadTotal - firstUploadTotal);
+  const globalDownloadDelta = isCounterReset ? null : (lastDownloadTotal - firstDownloadTotal);
+
+  const firstConnTs = new Date(firstConn.receivedAt || firstConn.timestamp).getTime();
+  const lastConnTs = new Date(lastConn.receivedAt || lastConn.timestamp).getTime();
 
   // 2. Per-connection Attributed Delta 计算
   const connectionsMap = new Map();
@@ -86,7 +90,7 @@ export async function analyzeSessionAccounting(sessionDir) {
       if (!c.id) continue;
       const up = c.upload ?? 0;
       const down = c.download ?? 0;
-      const isRelayHop = (!c.metadata?.process && !c.rule && c.chains && c.chains.length > 0);
+      const isRelayCandidate = (!c.metadata?.process && !c.rule && c.chains && c.chains.length > 0);
 
       if (!connectionsMap.has(c.id)) {
         connectionsMap.set(c.id, {
@@ -103,7 +107,9 @@ export async function analyzeSessionAccounting(sessionDir) {
           maxDown: down,
           snapshotsCount: 1,
           isPreExisting: (frameIdx === 0),
-          isRelayHop,
+          isRelayCandidate,
+          isConfirmedRelay: false,
+          pairedAppConnId: null,
           metadata: c.metadata,
           rule: c.rule,
           chains: c.chains
@@ -122,16 +128,51 @@ export async function analyzeSessionAccounting(sessionDir) {
     }
   }
 
+  // 3. Relay 配对与验证引擎 (Pairing & Validation Engine)
+  const appConns = [];
+  const relayCandidates = [];
+
+  for (const conn of connectionsMap.values()) {
+    if (conn.isRelayCandidate) {
+      relayCandidates.push(conn);
+    } else if (conn.metadata?.process && conn.rule) {
+      appConns.push(conn);
+    }
+  }
+
+  // 尝试为每个 relayCandidate 寻找确凿的应用连接配对
+  for (const rc of relayCandidates) {
+    const rcUpDelta = rc.isPreExisting ? (rc.finalUp - rc.initialUp) : rc.finalUp;
+    const rcDownDelta = rc.isPreExisting ? (rc.finalDown - rc.initialDown) : rc.finalDown;
+
+    for (const ac of appConns) {
+      const acUpDelta = ac.isPreExisting ? (ac.finalUp - ac.initialUp) : ac.finalUp;
+      const acDownDelta = ac.isPreExisting ? (ac.finalDown - ac.initialDown) : ac.finalDown;
+
+      // 配对条件:
+      // a. 时间窗口重叠
+      const timeOverlap = (rc.firstSeen <= ac.lastSeen + 2000 && rc.lastSeen >= ac.firstSeen - 2000);
+      // b. 流量高度吻合 (差值 < 2000B 或相对差 < 5%)
+      const upMatch = Math.abs(rcUpDelta - acUpDelta) < 2000 || (acUpDelta > 0 && Math.abs(rcUpDelta - acUpDelta) / acUpDelta < 0.05);
+      const downMatch = Math.abs(rcDownDelta - acDownDelta) < 2000 || (acDownDelta > 0 && Math.abs(rcDownDelta - acDownDelta) / acDownDelta < 0.05);
+
+      if (timeOverlap && (upMatch || downMatch) && (rcUpDelta > 500 || rcDownDelta > 500)) {
+        rc.isConfirmedRelay = true;
+        rc.pairedAppConnId = ac.id;
+        break;
+      }
+    }
+  }
+
+  // 4. 流量汇总与归因
   let attributedUpload = 0;
   let attributedDownload = 0;
   let appUpload = 0;
   let appDownload = 0;
-  let relayUpload = 0;
-  let relayDownload = 0;
-  let preExistingUpload = 0;
-  let preExistingDownload = 0;
-  let newConnUpload = 0;
-  let newConnDownload = 0;
+  let confirmedRelayUpload = 0;
+  let confirmedRelayDownload = 0;
+  let unpairedMissingAttributionUpload = 0;
+  let unpairedMissingAttributionDownload = 0;
 
   for (const conn of connectionsMap.values()) {
     let connUp = 0;
@@ -140,75 +181,97 @@ export async function analyzeSessionAccounting(sessionDir) {
     if (conn.isPreExisting) {
       connUp = conn.finalUp - conn.initialUp;
       connDown = conn.finalDown - conn.initialDown;
-      preExistingUpload += connUp;
-      preExistingDownload += connDown;
     } else {
       connUp = conn.finalUp;
       connDown = conn.finalDown;
-      newConnUpload += connUp;
-      newConnDownload += connDown;
     }
 
     attributedUpload += connUp;
     attributedDownload += connDown;
 
-    if (conn.isRelayHop) {
-      relayUpload += connUp;
-      relayDownload += connDown;
+    if (conn.isConfirmedRelay) {
+      confirmedRelayUpload += connUp;
+      confirmedRelayDownload += connDown;
+    } else if (conn.isRelayCandidate && !conn.isConfirmedRelay) {
+      // 未配对成功的缺归因连接：保留，不作为 Relay 剔除
+      unpairedMissingAttributionUpload += connUp;
+      unpairedMissingAttributionDownload += connDown;
+      appUpload += connUp;
+      appDownload += connDown;
     } else {
       appUpload += connUp;
       appDownload += connDown;
     }
   }
 
-  // 3. 残差 (Residual) 计算
-  // 原始残差 (vs all connections) 与 应用层残差 (vs app connections)
-  const residualUpload = globalUploadDelta - attributedUpload;
-  const residualDownload = globalDownloadDelta - attributedDownload;
-  const appResidualUpload = globalUploadDelta - appUpload;
-  const appResidualDownload = globalDownloadDelta - appDownload;
+  // 5. 残差 (Residual) 计算
+  let appResidualUpload = null;
+  let appResidualDownload = null;
+  let appResidualUploadPct = null;
+  let appResidualDownloadPct = null;
 
-  const residualUploadPct = globalUploadDelta > 0 ? (residualUpload / globalUploadDelta) * 100 : 0;
-  const residualDownloadPct = globalDownloadDelta > 0 ? (residualDownload / globalDownloadDelta) * 100 : 0;
-  const appResidualUploadPct = globalUploadDelta > 0 ? (appResidualUpload / globalUploadDelta) * 100 : 0;
-  const appResidualDownloadPct = globalDownloadDelta > 0 ? (appResidualDownload / globalDownloadDelta) * 100 : 0;
+  if (!isCounterReset && globalUploadDelta !== null && globalDownloadDelta !== null) {
+    appResidualUpload = globalUploadDelta - appUpload;
+    appResidualDownload = globalDownloadDelta - appDownload;
+    appResidualUploadPct = globalUploadDelta > 0 ? (appResidualUpload / globalUploadDelta) * 100 : 0;
+    appResidualDownloadPct = globalDownloadDelta > 0 ? (appResidualDownload / globalDownloadDelta) * 100 : 0;
+  }
 
-  // 4. /traffic 速率积分计算与总计数器比对
+  // 6. /traffic 严格时间窗口对齐积分 (Strictly Window-Aligned Integration)
   let integratedUpload = 0;
   let integratedDownload = 0;
+  let trafficFramesInWindow = 0;
 
-  for (let i = 0; i < trafficFrames.length; i++) {
-    const rawFrame = trafficFrames[i];
-    const frameData = rawFrame.frame || rawFrame.payload || {};
-    const upRate = frameData.up ?? 0;
-    const downRate = frameData.down ?? 0;
+  // 过滤并排序窗口内的 traffic frames
+  const windowedTraffic = trafficFrames
+    .map(f => ({
+      ts: new Date(f.receivedAt || f.timestamp).getTime(),
+      up: (f.frame || f.payload)?.up ?? 0,
+      down: (f.frame || f.payload)?.down ?? 0
+    }))
+    .filter(f => f.ts >= firstConnTs - 1500 && f.ts <= lastConnTs + 1500)
+    .sort((a, b) => a.ts - b.ts);
+
+  for (let i = 0; i < windowedTraffic.length; i++) {
+    const curr = windowedTraffic[i];
+    trafficFramesInWindow++;
 
     let dtSec = 1.0;
     if (i > 0) {
-      const prevTs = new Date(trafficFrames[i - 1].receivedAt || trafficFrames[i - 1].timestamp).getTime();
-      const currTs = new Date(rawFrame.receivedAt || rawFrame.timestamp).getTime();
-      const diffMs = currTs - prevTs;
+      const prev = windowedTraffic[i - 1];
+      const diffMs = curr.ts - prev.ts;
+      if (diffMs > 0 && diffMs < 5000) {
+        dtSec = diffMs / 1000.0;
+      }
+    } else if (i === 0 && windowedTraffic.length > 1) {
+      const next = windowedTraffic[1];
+      const diffMs = next.ts - curr.ts;
       if (diffMs > 0 && diffMs < 5000) {
         dtSec = diffMs / 1000.0;
       }
     }
 
-    integratedUpload += upRate * dtSec;
-    integratedDownload += downRate * dtSec;
+    integratedUpload += curr.up * dtSec;
+    integratedDownload += curr.down * dtSec;
   }
 
-  const trafficDiscrepancyUp = globalUploadDelta > 0 ? ((integratedUpload - globalUploadDelta) / globalUploadDelta) * 100 : 0;
-  const trafficDiscrepancyDown = globalDownloadDelta > 0 ? ((integratedDownload - globalDownloadDelta) / globalDownloadDelta) * 100 : 0;
-
-  const firstConnTs = new Date(firstConn.receivedAt || firstConn.timestamp).getTime();
-  const lastConnTs = new Date(lastConn.receivedAt || lastConn.timestamp).getTime();
+  let trafficDiscrepancyUp = null;
+  let trafficDiscrepancyDown = null;
+  if (!isCounterReset && globalUploadDelta !== null && globalDownloadDelta !== null) {
+    trafficDiscrepancyUp = globalUploadDelta > 0 ? ((integratedUpload - globalUploadDelta) / globalUploadDelta) * 100 : 0;
+    trafficDiscrepancyDown = globalDownloadDelta > 0 ? ((integratedDownload - globalDownloadDelta) / globalDownloadDelta) * 100 : 0;
+  }
 
   return {
     sessionDir,
     durationMs: lastConnTs - firstConnTs,
+    isCounterReset,
     connectionFramesCount: connFrames.length,
     trafficFramesCount: trafficFrames.length,
+    trafficFramesInWindow,
     totalObservedConnections: connectionsMap.size,
+    confirmedRelayCount: relayCandidates.filter(r => r.isConfirmedRelay).length,
+    unpairedMissingAttributionCount: relayCandidates.filter(r => !r.isConfirmedRelay).length,
     global: {
       firstUploadTotal,
       lastUploadTotal,
@@ -222,18 +285,12 @@ export async function analyzeSessionAccounting(sessionDir) {
       totalDownload: attributedDownload,
       appUpload,
       appDownload,
-      relayUpload,
-      relayDownload,
-      preExistingUpload,
-      preExistingDownload,
-      newConnUpload,
-      newConnDownload
+      confirmedRelayUpload,
+      confirmedRelayDownload,
+      unpairedMissingAttributionUpload,
+      unpairedMissingAttributionDownload
     },
     residual: {
-      uploadResidual: residualUpload,
-      downloadResidual: residualDownload,
-      uploadResidualPct: residualUploadPct,
-      downloadResidualPct: residualDownloadPct,
       appResidualUpload,
       appResidualDownload,
       appResidualUploadPct,
@@ -272,23 +329,31 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
         console.log(`Total Connections Tracked : ${result.totalObservedConnections}`);
         console.log('----------------------------------------------------------------');
         console.log('1. GLOBAL COUNTERS (uploadTotal / downloadTotal):');
-        console.log(`   Global Upload Delta   : ${result.global.uploadDelta.toLocaleString()} Bytes`);
-        console.log(`   Global Download Delta : ${result.global.downloadDelta.toLocaleString()} Bytes`);
+        if (result.isCounterReset) {
+          console.log('   [WARN: COUNTER RESET DETECTED - GLOBAL DELTA INVALIDATED]');
+        } else {
+          console.log(`   Global Upload Delta   : ${result.global.uploadDelta.toLocaleString()} Bytes`);
+          console.log(`   Global Download Delta : ${result.global.downloadDelta.toLocaleString()} Bytes`);
+        }
         console.log('----------------------------------------------------------------');
-        console.log('2. ATTRIBUTED TRAFFIC:');
-        console.log(`   Application Upload    : ${result.attributed.appUpload.toLocaleString()} Bytes`);
-        console.log(`   Application Download  : ${result.attributed.appDownload.toLocaleString()} Bytes`);
-        console.log(`   Relay Hop Upload      : ${result.attributed.relayUpload.toLocaleString()} Bytes (Multi-hop duplicate)`);
-        console.log(`   Relay Hop Download    : ${result.attributed.relayDownload.toLocaleString()} Bytes (Multi-hop duplicate)`);
+        console.log('2. ATTRIBUTED TRAFFIC & RELAY PAIRING:');
+        console.log(`   Application Upload    : ${result.attributed.appUpload.toLocaleString()} Bytes (Includes ${result.attributed.unpairedMissingAttributionUpload}B unpaired)`);
+        console.log(`   Application Download  : ${result.attributed.appDownload.toLocaleString()} Bytes (Includes ${result.attributed.unpairedMissingAttributionDownload}B unpaired)`);
+        console.log(`   Confirmed Relay Dedup : Up ${result.attributed.confirmedRelayUpload.toLocaleString()} Bytes, Down ${result.attributed.confirmedRelayDownload.toLocaleString()} Bytes (${result.confirmedRelayCount} paired conns)`);
+        console.log(`   Unpaired Missing Attrib: Up ${result.attributed.unpairedMissingAttributionUpload.toLocaleString()} Bytes, Down ${result.attributed.unpairedMissingAttributionDownload.toLocaleString()} Bytes (${result.unpairedMissingAttributionCount} conns)`);
         console.log(`   Total (Raw Sum)       : Up ${result.attributed.totalUpload.toLocaleString()} Bytes, Down ${result.attributed.totalDownload.toLocaleString()} Bytes`);
         console.log('----------------------------------------------------------------');
         console.log('3. RESIDUAL & UNATTRIBUTED GAP (Global - Application):');
-        console.log(`   App Upload Residual   : ${result.residual.appResidualUpload.toLocaleString()} Bytes (${result.residual.appResidualUploadPct.toFixed(2)}%)`);
-        console.log(`   App Download Residual : ${result.residual.appResidualDownload.toLocaleString()} Bytes (${result.residual.appResidualDownloadPct.toFixed(2)}%)`);
+        if (result.isCounterReset) {
+          console.log('   Residual unavailable due to counter reset');
+        } else {
+          console.log(`   App Upload Residual   : ${result.residual.appResidualUpload.toLocaleString()} Bytes (${result.residual.appResidualUploadPct.toFixed(2)}%)`);
+          console.log(`   App Download Residual : ${result.residual.appResidualDownload.toLocaleString()} Bytes (${result.residual.appResidualDownloadPct.toFixed(2)}%)`);
+        }
         console.log('----------------------------------------------------------------');
-        console.log('4. /traffic RATE INTEGRATION RECONCILIATION:');
-        console.log(`   Integrated Upload     : ${result.trafficIntegration.integratedUpload.toLocaleString()} Bytes (Diff vs Global: ${result.trafficIntegration.discrepancyUpPct.toFixed(2)}%)`);
-        console.log(`   Integrated Download   : ${result.trafficIntegration.integratedDownload.toLocaleString()} Bytes (Diff vs Global: ${result.trafficIntegration.discrepancyDownPct.toFixed(2)}%)`);
+        console.log('4. /traffic STRICT WINDOW RECONCILIATION:');
+        console.log(`   Integrated Upload     : ${result.trafficIntegration.integratedUpload.toLocaleString()} Bytes ${result.trafficIntegration.discrepancyUpPct !== null ? '(Diff: ' + result.trafficIntegration.discrepancyUpPct.toFixed(2) + '%)' : ''}`);
+        console.log(`   Integrated Download   : ${result.trafficIntegration.integratedDownload.toLocaleString()} Bytes ${result.trafficIntegration.discrepancyDownPct !== null ? '(Diff: ' + result.trafficIntegration.discrepancyDownPct.toFixed(2) + '%)' : ''}`);
         console.log('================================================================');
       }
     })

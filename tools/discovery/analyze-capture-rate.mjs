@@ -70,8 +70,8 @@ async function main() {
     } catch {
       return;
     }
-    const receivedAt = parsed.receivedAt;
-    const conns = parsed.frame?.connections || [];
+    const receivedAt = parsed.receivedAt || parsed.timestamp;
+    const conns = (parsed.frame || parsed.payload)?.connections || [];
 
     conns.forEach((c) => {
       mihomoSnapshots.push({ frameIndex, receivedAt, conn: c });
@@ -79,14 +79,21 @@ async function main() {
     });
   });
 
+  const firstConnFrame = JSON.parse(connLines[0]);
+  const lastConnFrame = JSON.parse(connLines[connLines.length - 1]);
+  const probeStartMs = new Date(firstConnFrame.receivedAt || firstConnFrame.timestamp).getTime();
+  const probeEndMs = new Date(lastConnFrame.receivedAt || lastConnFrame.timestamp).getTime();
+
   // 3. 执行确定性匹配
   const results = [];
   const matchedMihomoIds = new Set();
+  const mihomoIdToGtIndex = new Map(); // id -> gtIndex (用于 1-to-1 互斥)
 
   let eligibleConnectedCount = 0;
   let completedSuccessCount = 0;
+  let windowViolations = 0;
 
-  groundTruths.forEach((gt) => {
+  groundTruths.forEach((gt, gtIdx) => {
     if (gt.eligibleConnected) eligibleConnectedCount++;
     if (gt.success) completedSuccessCount++;
 
@@ -98,6 +105,11 @@ async function main() {
     const reqTargetHost = new URL(gt.targetUrl).hostname.toLowerCase();
     const reqStartMs = new Date(gt.requestedAt).getTime();
     const reqEndMs = new Date(gt.completedAt || gt.responseAt || gt.requestedAt).getTime();
+
+    // 检查是否超出 Probe 监控有效窗口
+    if (reqStartMs < probeStartMs || reqEndMs > probeEndMs) {
+      windowViolations++;
+    }
 
     // 匹配候选
     const candidates = mihomoSnapshots.filter((snap) => {
@@ -128,9 +140,25 @@ async function main() {
     const uniqueIds = Array.from(new Set(candidates.map((cand) => cand.conn.id)));
 
     let status = 'MISSED';
+    let matchedConn = null;
+    let actualRoute = null;
+
     if (uniqueIds.length === 1) {
-      status = 'MATCHED';
-      matchedMihomoIds.add(uniqueIds[0]);
+      const targetId = uniqueIds[0];
+      // 检查 1-to-1 唯一性
+      if (mihomoIdToGtIndex.has(targetId) && mihomoIdToGtIndex.get(targetId) !== gtIdx) {
+        status = 'AMBIGUOUS'; // 冲突：同一 ID 已被其他 GT request 匹配
+      } else {
+        status = 'MATCHED';
+        matchedMihomoIds.add(targetId);
+        mihomoIdToGtIndex.set(targetId, gtIdx);
+        matchedConn = candidates[0].conn;
+
+        // 真实路由分类验证
+        if (matchedConn.chains && matchedConn.chains.length > 0) {
+          actualRoute = (matchedConn.chains[0] === 'DIRECT') ? 'DIRECT' : 'PROXY';
+        }
+      }
     } else if (uniqueIds.length > 1) {
       status = 'AMBIGUOUS';
     }
@@ -140,7 +168,8 @@ async function main() {
       status,
       uniqueIds,
       candidateObservations: candidates.length,
-      matchedConn: uniqueIds.length === 1 ? candidates[0].conn : null,
+      matchedConn,
+      actualRoute,
       matchedFrames: uniqueIds.length === 1 ? connIdObservations.get(uniqueIds[0]) : 0,
     });
   });
@@ -198,6 +227,7 @@ async function main() {
           requestedIntervalMs: manifest.requestedConnectionsIntervalMs,
           eligibleConnectedCount,
           completedSuccessCount,
+          windowViolations,
           matched,
           missed,
           ambiguous,
@@ -220,6 +250,7 @@ async function main() {
   console.log(`Ground Truth Total Requests    : ${groundTruths.length}`);
   console.log(`Eligible Connected (Primary N) : ${eligibleConnectedCount}`);
   console.log(`Completed Success (Secondary N): ${completedSuccessCount}`);
+  console.log(`Window Out-of-Bound Violations : ${windowViolations} ${windowViolations > 0 ? '[WARN: REQUEST OUTSIDE PROBE WINDOW]' : '[VALID]'}`);
   console.log('---------------------------------------------------------------');
   console.log(`Matching Classification Results:`);
   console.log(`  MATCHED                      : ${matched} / ${eligibleConnectedCount} (${formatPercent(matched, eligibleConnectedCount)})`);

@@ -78,18 +78,25 @@ async function main() {
 
         console.log(`\n>>> [TRIAL START] ${trialName} (Interval: ${intv.name}, Route: ${route.name}, Rep: ${rep})`);
 
-        // 1. 启动 Probe 后台执行
+        // 1. 启动 Probe 后台执行 (赋予更长超时保护，由 runner 在 burst 后显式退出)
         const probeArgs = [
           'tools/discovery/probe.mjs',
           '--controller', 'http://127.0.0.1:9090',
           '--output', sessionDir,
-          '--duration', String(intv.probeDuration),
+          '--duration', '60', // 充足的上限保护
         ];
         if (intv.ms) {
           probeArgs.push('--connections-interval', String(intv.ms));
         }
 
-        const probePromise = runProcess('node', probeArgs);
+        const probeProcess = spawn('node', probeArgs, { stdio: 'inherit' });
+        const probePromise = new Promise((resolve, reject) => {
+          probeProcess.on('error', reject);
+          probeProcess.on('close', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`Probe exited with code ${code}`));
+          });
+        });
 
         // 2. 等待 2 秒进入稳定监控
         await new Promise((r) => setTimeout(r, 2000));
@@ -106,7 +113,11 @@ async function main() {
 
         await runProcess('node', burstArgs);
 
-        // 4. 等待 Probe 自然完成
+        // 4. Burst 全部完成后，额外留出 2 秒采样缓冲，然后通知 Probe 优雅关闭
+        console.log('[PROBE] Burst finished, waiting 2s buffer before graceful probe shutdown...');
+        await new Promise((r) => setTimeout(r, 2000));
+        probeProcess.kill('SIGINT');
+
         await probePromise;
 
         // 5. 检查 manifest 健康
@@ -117,8 +128,13 @@ async function main() {
           process.exit(1);
         }
 
-        // 6. 执行分析
+        // 6. 执行分析并检查 windowViolations Gate
         const res = await runCaptureAnalyzer(sessionDir, gtFile);
+        if (res.windowViolations > 0) {
+          console.error(`[FATAL] Window integrity violation in ${trialName}: ${res.windowViolations} requests outside probe window!`);
+          process.exit(1);
+        }
+
         res.trial = trialName;
         res.intervalName = intv.name;
         res.routeName = route.name;
@@ -127,7 +143,7 @@ async function main() {
         allResults.push(res);
 
         const rateStr = ((res.matched / res.eligibleConnectedCount) * 100).toFixed(1) + '%';
-        console.log(`<<< [TRIAL DONE] ${trialName} -> Matched: ${res.matched}/${res.eligibleConnectedCount} (${rateStr}), Missed: ${res.missed}, Ambiguous: ${res.ambiguous}`);
+        console.log(`<<< [TRIAL DONE] ${trialName} -> Matched: ${res.matched}/${res.eligibleConnectedCount} (${rateStr}), Missed: ${res.missed}, Ambiguous: ${res.ambiguous}, Violations: ${res.windowViolations}`);
 
         await new Promise((r) => setTimeout(r, 1000));
       }

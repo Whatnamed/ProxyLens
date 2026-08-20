@@ -181,27 +181,42 @@ Phase 0C-3C 与 0C-6 实测确立了快照轮询机制的物理边界：
 
 1. **短连接快照盲区**：
    - 默认 1000ms 采样下，存活短于 500ms 的短连接有 **84%~91%** 无法被快照捕获；
-   - 提升采样率至 250ms 可将捕获率提升 3.5 倍至 56%，但无法完全消除物理盲区；
+   - 提升采样率至 250ms 可将 DIRECT 捕获率提升至 56.0%，PROXY 捕获率提升至 26.0%，但无法完全消除物理盲区；
 2. **残差模型 (Residual Model)**：
    - 内核全局计数器 $\Delta(\text{uploadTotal})$ 记录了包含盲区短连接在内的全量物理流量；
    - 连接层归因流量之和 $\sum \Delta(\text{AppConn})$ 记录了所有被快照捕获的应用连接流量；
    - 系统必须显式计算并持久化残差：$$\text{Residual} = \Delta(\text{uploadTotal}) - \sum \Delta(\text{AppConn})$$
-   - 在 250ms 快照下，上传残差收敛至 **<1%**（稳态长连接残差 < 0.1%）。
+   - 在特定短请求测试负载下，250ms 快照时上传残差收敛至 **0.6%**（稳态长连接残差 < 0.1%），下载残差因短连接漏抓为 10.2%（1000ms 下为 51.1%）。
 
-### 4.3 链式代理/多跳底层连接去重规约 (Multi-hop Relay Deduplication)
+### 4.3 链式代理/多跳底层连接 Relay Candidate 配对规约 (Relay Pairing Model)
 
 Phase 0C-6 实测发现：
 - 在配置链式/中继代理时，`/connections` 会同时列出应用层逻辑连接（`process: agy.exe, host: play.googleapis.com`）与 Mihomo 发往第一跳中继节点的底层连接（`process: "", host: 168.158.196.123`），两者流量完全相同；
-- **规约**：底层中继连接必须被显式识别（`rule === "" && process === ""`），并在应用层流量汇总时进行**去重过滤**，防止代理流量产生 **200% 重复计算（Double Counting）**。
+- **规约**：严禁简单按“缺进程+缺规则”普遍过滤。必须将其标记为 `relay_candidate`，只有在会话中找到时间窗口重叠、流量高度吻合且链路包含的配对应用连接时，才被判定为 `CONFIRMED_RELAY_DUPLICATE` 并予以去重；未配对的缺失归因连接必须保留为 `unpaired_missing_attribution`，防止掩盖未识别流量。
 
-### 4.4 代理链拓扑顺序规约 (Hop Order Semantics)
+### 4.4 代理链拓扑顺序暂定观察 (Provisional Hop Order Observation)
 
-Phase 0C-4 实测证明：
-- `chains[0]` 为**最终物理出口节点 (Physical Egress Node)**；
-- `chains[chains.length - 1]` 为**顶层分流规则匹配策略组 (Top-Level Rule Group)**；
-- UI 呈现统一采用正向因果顺序渲染：`chains.slice().reverse()`。
+Phase 0C-4 静态盘点表明：
+- 在当前静态样本中，`chains[0]` 通常表现为最终物理出站节点或 DIRECT，`chains[last]` 表现为顶层分流规则组；
+- **暂定 (Provisional) 状态**：由于 `DIRECT` 本身不是物理节点，且各策略组嵌套逻辑多样，完整的动态拓扑因果顺序规约留待 Package B 动态切换节点与多跳实验完成后正式升格。
 
----
+### 4.5 长连接阶段性持久化 (Sustained Connection Persistence)
+
+只在连接关闭时保存最终值可能导致：
+- UI 长时间看不到正在产生的大流量；
+- Collector 异常退出或崩溃时丢失未持久化的中间进度。
+
+因此系统必须支持长连接阶段性增量持久化（Checkpointing）。具体多久提交一次、达到多少增量流量时写入，属于 Phase 1 / Phase 2 待测参数。
+
+### 4.6 连接消失的生命周期语义 (Disappearance Lifecycle Semantics)
+
+“某 ID 从活跃 Connections 列表消失”除正常关闭外，还可能对应：
+- Mihomo 内核重载 (Reload)；
+- Collector 与 Controller WebSocket 重连；
+- 系统睡眠 / 唤醒；
+- TUN 开关变化。
+
+这些场景下的 ID 变化、计数器重置与状态恢复差异，在 Phase 0C-5 (Stage B2) 进一步实测验证。
 
 ---
 
