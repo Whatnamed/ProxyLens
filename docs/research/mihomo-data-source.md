@@ -334,75 +334,73 @@
 - **实验方法**:
   - 执行 3 种快照间隔 (`default`, `500ms`, `250ms`) × 2 条路由 (`direct`, `proxy`) × 2 轮独立试验 = **12 Trials**（每个 Trial 发起 50 个严格独立的非 Keep-Alive 短请求，总计 600 个请求）；
   - 以操作系统内核实际完成 TCP 握手的 `eligibleConnectedCount = 50` 为基准分母；
-  - 强制 1-to-1 唯一性映射与真实 `chains`/`rule` 路由校验（`Ambiguous = 0`，`WindowViolations = 0`）。
+  - 强制 1-to-1 唯一性映射、Probe 窗口全生命周期覆盖（`windowViolations = 0`）与 Raw chains 路由验证（`routeMismatches = 0`, `routeUnknown = 0`, `ambiguous = 0`）。
 
 #### 聚合路由 × 快照间隔对比表 (`N=100` per Cell) `[Observed]`
 
 | 路由与快照间隔 | 试验总样本 (N) | 成功捕获数 (Matched) | 快照盲区漏抓数 (Missed) | 快照捕获率 (Capture Rate) | 单帧捕获占比 (1 Frame Presence) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **DIRECT @ default (1000ms)** | 100 | 16 | 84 | **16.0%** (盲区 84.0%) | 16 / 16 (100.0%) |
-| **PROXY @ default (1000ms)** | 100 | 9 | 91 | **9.0%** (盲区 91.0%) | 7 / 9 (77.8%) |
-| **DIRECT @ 500ms** | 100 | 28 | 72 | **28.0%** (盲区 72.0%) | 25 / 28 (89.3%) |
-| **PROXY @ 500ms** | 100 | 17 | 83 | **17.0%** (盲区 83.0%) | 8 / 17 (47.1%) |
-| **DIRECT @ 250ms** | 100 | 56 | 44 | **56.0%** (盲区 44.0%) | 49 / 56 (87.5%) |
-| **PROXY @ 250ms** | 100 | 26 | 74 | **26.0%** (盲区 74.0%) | 13 / 26 (50.0%) |
+| **DIRECT @ default (1000ms)** | 100 | 14 | 86 | **14.0%** (盲区 86.0%) | 14 / 14 (100.0%) |
+| **PROXY @ default (1000ms)** | 100 | 28 | 72 | **28.0%** (盲区 72.0%) | 27 / 28 (96.4%) |
+| **DIRECT @ 500ms** | 100 | 28 | 72 | **28.0%** (盲区 72.0%) | 28 / 28 (100.0%) |
+| **PROXY @ 500ms** | 100 | 52 | 48 | **52.0%** (盲区 48.0%) | 49 / 52 (94.2%) |
+| **DIRECT @ 250ms** | 100 | 55 | 45 | **55.0%** (盲区 45.0%) | 55 / 55 (100.0%) |
+| **PROXY @ 250ms** | 100 | 86 | 14 | **86.0%** (盲区 14.0%) | 73 / 86 (84.9%) |
 
 #### 存活时长分布 (Duration Bins Summary) `[Observed]`
 - `<100ms`: 样本量极少或瞬间关闭，捕获率接近 0%；
-- `100–250ms`: 在 250ms 快照下捕获率为 **48.9%**，在 1000ms 下仅 **11.1%**；
-- `250–500ms`: 在 250ms 快照下捕获率为 **41.1%**，在 1000ms 下仅 **10.6%**；
-- `>=1000ms`: 跨越快照周期的连接捕获率提升至 **33%~40%**（若持续存活则 100% 捕获）。
+- `100–250ms`: 在 250ms 快照下捕获率为 **55.9%**，在 1000ms 下仅 **15.4%**；
+- `250–500ms`: 在 250ms 快照下捕获率为 **87.2%**，在 1000ms 下仅 **22.9%**；
+- `>=500ms`: 跨越快照周期的连接捕获率提升至 **60%~100%**。
 
 #### 核心审计结论 `[Observed / Inferred]`
-1. **短连接快照盲区是只读轮询架构的固有物理限制**：在默认 1000ms 下，短连接漏抓率高达 **84%~91%**；缩短周期至 250ms 能将 DIRECT 捕获率提升至 **56.0%**，PROXY 捕获率提升至 **26.0%**。
-2. **捕获的短连接呈现明显的单帧捕获特征**：在被捕获的短连接中，单帧占比分布在 **47.1% ~ 100.0%**（DIRECT 为 87.5%~100%，PROXY 为 47.1%~77.8%），再次验证单帧首次观察字节必须计入增量。
+1. **短连接快照盲区是只读轮询架构的固有物理限制**：在默认 1000ms 下，短连接漏抓率为 **72%~86%**；缩短周期至 250ms 能将 DIRECT 捕获率提升至 **55.0%**，PROXY 捕获率提升至 **86.0%**。
+2. **捕获的短连接呈现明显的单帧捕获特征**：在被捕获的短连接中，DIRECT 单帧占比为 100.0%，PROXY 单帧占比为 84.9%~96.4%，再次验证单帧首次观察字节必须计入增量。
 
 ---
 
-## 9. Phase 0C-6: 全局流量对账与残差模型 (Global Accounting & Reconciliation) `[Observed]`
+## 9. Phase 0C-6: 全局流量对账与分层归因模型 (Global Accounting & Hierarchical Attribution) `[Observed]`
 
-### 9.1 对账公式与实测残差收敛性
+### 9.1 分层归因公式与残差模型
 
-- **全局计数器增量 (Global Delta)**: $\Delta(\text{uploadTotal}) = \text{last}.\text{uploadTotal} - \text{first}.\text{uploadTotal}$
-- **应用层归因流量 (App Attributed Delta)**: $\Delta(\text{AppTraffic}) = \sum \Delta(\text{AppConnection})$
-- **残差 (Residual)**: $\text{Residual} = \Delta(\text{uploadTotal}) - \Delta(\text{AppTraffic})$
+- **已知应用归因流量 (Known App Attributed)**: $\sum \Delta(\text{KnownAppConnection})$（具备确凿进程与规则）
+- **未配对缺归因流量 (Unpaired Missing Attribution)**: $\sum \Delta(\text{MissingAttrConnection})$（保留在独立观测中，绝不冒充已知应用）
+- **确认中继底层连接 (Confirmed Relay Duplicate)**: 仅在时间重叠、流量高度吻合且存在结构包含关系时去重
+- **唯一独立观测总和 (Unique Observed)**: $\text{KnownApp} + \text{UnpairedMissingAttr} + \text{OtherUnique}$
+- **残差 (Residual)**: $\text{Residual} = \Delta(\text{uploadTotal}) - \text{UniqueObserved}$
 
-#### 12 轮会话与稳态长连接对账数据 (严格时间窗对齐) `[Observed]`
+#### 12 轮会话与稳态长连接对账数据 `[Observed]`
 
 - **稳态长连接场景 (`A1-default`, 100 并发连接)**:
   - 全局上传: `1,826,942 B` | 应用归因上传: `1,826,105 B` | **上传残差仅 837 B (0.05%)**；
-  - `/traffic` 速率严格窗口积分: `1,826,700 B` | **与全局上传误差仅 -0.01%**。
+  - `/traffic` 速率近似时间积分: `1,826,700 B` | **与全局上传误差仅 -0.01%**。
 - **突发短连接矩阵聚合 (12 trials, N=600 requests)**:
-  - **250ms 采样周期**: 全局上传 6.94MB，应用归因 6.90MB，**在该 workload 下上传残差收敛至 0.6%**；下载残差受短连接盲区影响为 **10.2%**；
-  - **500ms 采样周期**: 全局上传 6.37MB，应用归因 6.26MB，上传残差为 **1.7%**；下载残差为 **3.4%**；
-  - **1000ms 采样周期**: 全局上传 2.46MB，应用归因 2.33MB，上传残差为 **5.3%**；**下载残差因短连接漏抓达到 51.1%**。
+  - 严格分层统计证明未配对缺归因流量得到完整保留；
+  - `/traffic` 近似积分偏差在各采样周期下收敛在 **-1.7% ~ +1.7%** 之间。
 
 ---
 
-### 9.2 链式代理底层连接双重计数与 Relay Candidate 配对模型 `[Observed / Inferred]`
+### 9.2 链式代理底层连接双重计数与 Relay Candidate 配对模型 `[Observed / Provisional]`
 
-- **机理证实**: 当 Mihomo 配置中继/链式代理时，`/connections` 列表中同时存在应用层逻辑连接（如 `process: agy.exe, host: play.googleapis.com`）与 Mihomo 发往第一跳中继节点的底层连接（`process: "", host: 168.158.196.123`），两者的流量完全相同。
+- **机理证实**: 当 Mihomo 配置中继/链式代理时，`/connections` 列表中同时存在应用层逻辑连接与 Mihomo 发往第一跳中继节点的底层连接，两者的流量高度吻合。
 - **严谨去重规约 (Relay Candidate & Pairing Model)**:
-  - 严禁简单地把“缺 process + 缺 rule”普遍当成 relay 过滤（否则会掩盖未归因流量）；
-  - 必须将其先标记为 `relay_candidate`，只有在会话中找到时间重叠、流量高度吻合且链路包含的配对应用连接时，才被判定为 `CONFIRMED_RELAY_DUPLICATE` 并予以去重；
+  - 严禁简单地把“缺 process + 缺 rule”普遍当成 relay 过滤；
+  - 必须将其先标记为 `relay_candidate`，只有在会话中找到时间重叠、流量高度吻合且存在结构链条关系的配对应用连接时，才被判定为 `CONFIRMED_RELAY_DUPLICATE` 并予以去重；
   - 未配对成功的候选连接保留为 `unpaired_missing_attribution`，计入待核查流量。
 
 ---
 
----
-
-## 10. Phase 0C-4: 路由证据盘点与动态节点切换实测 (Routing & Dynamic Switching) `[Observed]`
+## 10. Phase 0C-4: 路由证据盘点与动态节点切换实测 (Routing & Dynamic Switching) `[Observed / Scoped]`
 
 ### 10.1 静态路由模式覆盖 (27 Distinct Patterns)
 基于 78,000+ connection snapshot observations 的聚合盘点，覆盖全部 7 种规则类型（`RuleSet`, `DomainSuffix`, `Domain`, `IPCIDR`, `GeoSite`, `Network`, `Match`）。
 
-### 10.2 动态节点切换实测 (Live Node Switching Benchmark) `[Observed]`
-- **测试工具**: `tools/discovery/scenarios/run-dynamic-switch-experiment.mjs`
-- **测试会话**: `dynamic-switch-2026-08-20T17-13-08-094Z`
+### 10.2 动态节点切换受控实测 `[Scoped Observed / Provisional]`
+- **测试工具**: `tools/discovery/scenarios/switch-node.mjs`（带 `--allow-live-mutation`、二次 GET 验证与 Best-effort 回滚保护）、`tools/discovery/analyze-dynamic-switch.mjs`
 - **实测事实**:
-  1. **已有长连接不可变性 (Routing Immutability)**: 在长下载进行中动态切换策略组节点（`🇭🇰 香港W06 | x0.8 -> 🇭🇰 香港W01`），**已有存活连接的 `chains` 字段在存活期内保持 100% 稳定（0 突变）**，继续沿原路径完成传输；
+  1. **已有长连接不可变性**: 在受控下载进行中切换策略组节点（`🇭🇰 香港W06 | x0.8 -> 🇭🇰 香港W01`），已有存活连接的 `chains` 字段在生命周期内保持稳定（0 突变），继续沿原路径完成传输；
   2. **新连接链路即时迁移**: 切换后新发起的请求，其 `chains[0]` 立即变为新选中的物理节点 `🇭🇰 香港W01`。
-- **正式升格的代理链拓扑因果顺序 (Confirmed Hop Order)**:
+- **代理链拓扑因果顺序规约 (Confirmed Hop Order)**:
   - **`chains[0]`**: **最终物理出站节点 (Physical Egress Node / DIRECT)**
   - **`chains[1..length - 2]`**: **级联策略选择组 (Intermediate Policy Selectors)**
   - **`chains[length - 1]`**: **分流规则匹配命中的顶层策略组 (Top-Level Rule Target Group)**
@@ -410,36 +408,61 @@
 
 ---
 
-## 11. Phase 0C-5: 生命周期、配置重载与 Monitoring Gap 实测 (Lifecycle & Gaps) `[Observed]`
+## 11. Phase 0C-5: 生命周期、配置更新与 Monitoring Gap 实测 (Lifecycle & Gaps)
 
-### 11.1 4.01s Monitoring Gap 断线重连实测
+### 11.1 4.46s Monitoring Gap 断线重连实测 `[Observed]`
 - **测试会话**: `gap-experiment-2026-08-20T17-14-26-244Z`
 - **实测事实**:
+  - `coverageGap`: `2026-08-20T17:14:30.437Z -> 17:14:34.900Z` (4.46s)；
   - 80/80 条跨 Gap 存活长连接 ID 保持稳定；
-  - 物理产生了 153KB 下载，若误用 Naive “First-Seen” 算法将瞬间产生高达 212MB 的虚假流量爆炸（虚增 1450 倍）；
-  - 确立了 Gap 期间流量归档与状态机恢复规范。
+  - 真实物理流量为 153KB，Naive “First-Seen” 算法产生 212MB 虚假流量爆炸（虚增 1450 倍）；
+  - 确立了 Gap 期间流量归档为区间增量 `attributionInterval: [lastObserved, firstObserved]`。
 
-### 11.2 配置热重载 (Hot Reload via PATCH /configs) 实测
-- **测试会话**: `reload-report.json`
+### 11.2 同进程 WebSocket 断线重连故障注入实测 `[Observed]`
+- **测试工具**: `tools/discovery/scenarios/run-ws-reconnect-experiment.mjs`
+- **测试报告**: `ws-reconnect-report.json`
 - **实测事实**:
-  - 全局计数器单调连续（0 reset）；
-  - 60/61 条长连接保持原 ID 存活；
-  - 明确了内核冷重启与 Counter Reset 检测边界。
+  - 同一 Collector 客户端断线 3.02s 后重新建立 WS，42/42 条活跃连接 ID 保持连续稳定；
+  - 确立了自动重连后的首帧 Baseline 状态机处理。
+
+### 11.3 基础配置运行时更新 (Runtime Config PATCH) 实测 `[Observed]`
+- **测试工具**: `tools/discovery/scenarios/run-config-patch-experiment.mjs`
+- **实测事实**:
+  - `PATCH /configs` 下全局计数器单调连续（0 reset），连接保持存活。
+
+### 11.4 官方 API 语义说明 `[Documented]`
+根据 Metacubex 官方 API 文档：
+- `PATCH /configs`: Update basic configuration
+- `PUT /configs?force=true`: Reload basic configuration
+- `POST /restart`: Restart the kernel
+
+### 11.5 内核冷重启与 Counter Reset 检测信号 `[Inferred / Documented]`
+- 计数器回退（$\text{current} < \text{previous}$）规范为 `counter_epoch_break` 信号，指示可能发生了内核重启或数据源重置，状态机应触发 Re-bootstrap 并记录生命周期事件，禁止单凭此等式强行假定唯一根因。
 
 ---
 
-## 12. Phase 0 数据源验证总结 (Phase 0 Completion Matrix)
+## 12. Phase 0 核心数据源验证总结 (Phase 0 Completion Matrix)
 
-- [x] **DONE (Phase 0C-0)**: Live FLClash Controller Gate 验证；
-- [x] **DONE (Phase 0C-1)**: DIRECT / PROXY 基线与核心字段验证；
-- [x] **DONE (Phase 0C-2)**: UDP / NTP 协议归因验证；
-- [x] **DONE (Phase 0C-3A/B)**: 稳态长连接单调性与冷启动基线语义规约；
-- [x] **DONE (Phase 0C-3C)**: 快照轮询周期 (Cadence) 与短连接捕获率矩阵量化 (N=600, 12 Trials)；
-- [x] **DONE (Phase 0C-6)**: 全局流量对账、残差模型与 Relay 配对去重机制；
-- [x] **DONE (Phase 0C-4)**: 动态代理切换行为与代理链拓扑因果顺序正式升格；
-- [x] **DONE (Phase 0C-5)**: 配置热重载、断线重连 Gap 恢复与冷重启检测状态机规约。
+| 核心课题 | 验证状态 | 证据类型 | 阻塞 Phase 1? | 结论 |
+| :--- | :---: | :---: | :---: | :--- |
+| **Live Controller Correlation** | **PASS** | `[Observed]` | **YES** | 100% 确认接入承载 TUN 的 live Mihomo |
+| **Core Fields Coverage** | **PASS** | `[Observed]` | **YES** | 字段语义与缺失分类完全清晰 |
+| **Connection Counter Monotonicity** | **PASS** | `[Observed]` | **YES** | 稳态单调非递减确立 |
+| **Bootstrap Baseline** | **PASS** | `[Observed]` | **YES** | 区分冷启动与稳态增量 |
+| **Snapshot Blind Spot** | **PASS** | `[Observed]` | **YES** | N=600 矩阵量化短连接物理盲区 |
+| **Residual Accounting** | **PASS** | `[Observed]` | **YES** | 分层归因与残差模型确立 |
+| **Relay Candidate Dedup** | **PASS** | `[Observed/Provisional]` | **YES** | 配对去重与未配对保留 |
+| **Dynamic Routing Hop Order** | **PASS** | `[Observed scoped]` | **YES** | `chains[0]` 出口节点，逆向因果流 |
+| **Collector Offline Gap** | **PASS** | `[Observed]` | **YES** | Coverage Gap 与跨 Gap 存活连接归档 |
+| **Same-Process WS Reconnect** | **PASS** | `[Observed]` | **YES** | 自动重连首帧 Baseline 状态机 |
+| **Config Update (PATCH)** | **PASS** | `[Observed]` | **NO** | 计数器连续，连接保持 |
+| **True Config Reload (PUT)** | **DOCUMENTED** | `[Documented]` | **NO** | 保守处理：检测 epoch break |
+| **Kernel Cold Restart** | **DOCUMENTED** | `[Documented/Inferred]` | **NO** | `counter_epoch_break` 信号模型 |
+| **QUIC / HTTP3** | **NOT OBSERVED** | `[Not Observed]` | **NO** | 非阻塞项，按 UDP 通用建模 |
+| **REJECT Rule** | **NOT OBSERVED** | `[Not Observed]` | **NO** | 非阻塞项，独立分类桶 |
 
-**Phase 0 验证目标全部达成，正式进入 Phase 1 Collector 架构与设计。**
+**Phase 0 核心阻塞证据全部达成闭环。Live FLClash restart 行为作为 scoped 非阻塞验证项。系统正式具备进入 Phase 1 的充分实测基石。**
+
 
 
 

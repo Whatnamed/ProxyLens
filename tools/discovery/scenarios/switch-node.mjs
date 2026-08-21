@@ -1,15 +1,16 @@
 /**
  * switch-node.mjs
  * 
- * ProxyLens Safe Controlled Node Switching & Dynamic Routing Validation Tool
+ * ProxyLens Safe Controlled Node Switching Tool
  * 
- * 功能:
- * 1. 查询策略组当前选中节点
- * 2. 切换策略组到指定目标节点
- * 3. 具备自动回滚 (Auto-Rollback) 机制，实验结束后或异常退出时 100% 恢复初始节点
+ * 安全特性:
+ * 1. 默认仅进行 Preflight / Dry-run，必须显式传入 --allow-live-mutation 才允许执行变更
+ * 2. 变更后二次 GET 验证 (Verify switch)
+ * 3. Best-effort 回滚保护 (SIGINT, SIGTERM, uncaughtException, unhandledRejection, finally)
+ * 4. 回滚后二次 GET 验证 (Verify rollback)，若失败则 fail closed (exit 1, rollbackVerified: false)
  * 
  * 用法:
- *   node tools/discovery/scenarios/switch-node.mjs --group <groupName> --target <targetNode> [--duration <sec>]
+ *   node tools/discovery/scenarios/switch-node.mjs --group <groupName> --target <targetNode> [--allow-live-mutation] [--duration <sec>]
  */
 
 import http from 'http';
@@ -69,6 +70,7 @@ export async function runControlledSwitch({
   groupName,
   targetNode,
   durationSec = 5,
+  allowLiveMutation = false,
   onSwitched = null
 }) {
   const initialInfo = await getProxyGroup(controllerUrl, groupName);
@@ -82,36 +84,69 @@ export async function runControlledSwitch({
 
   if (originalNode === targetNode) {
     console.log(`[SWITCH-GUARD] Target node is same as original node. No switch needed.`);
-    return { originalNode, switchedNode: targetNode };
+    return { originalNode, switchedNode: targetNode, rollbackVerified: true };
+  }
+
+  if (!allowLiveMutation) {
+    console.log(`[DRY-RUN] Live mutation not enabled (--allow-live-mutation not specified). Skipping actual PUT.`);
+    return { originalNode, targetNode, dryRun: true, rollbackVerified: true };
   }
 
   let rollbackDone = false;
-  const rollback = async () => {
+  let rollbackVerified = false;
+
+  const performRollback = async () => {
     if (rollbackDone) return;
     rollbackDone = true;
     try {
-      console.log(`\n[SWITCH-GUARD] Performing rollback: switching [${groupName}] back to [${originalNode}]...`);
+      console.log(`\n[SWITCH-GUARD] Performing best-effort rollback: switching [${groupName}] back to [${originalNode}]...`);
       await setProxyGroupNode(controllerUrl, groupName, originalNode);
-      console.log(`[SWITCH-GUARD] Rollback successfully completed.`);
+      
+      // 二次 GET 验证回滚结果
+      const postRollbackInfo = await getProxyGroup(controllerUrl, groupName);
+      if (postRollbackInfo.now === originalNode) {
+        rollbackVerified = true;
+        console.log(`[SWITCH-GUARD] Rollback successfully verified: [${groupName}] is restored to [${originalNode}].`);
+      } else {
+        rollbackVerified = false;
+        console.error(`[FATAL ROLLBACK MISMATCH] Group [${groupName}] expected [${originalNode}], but GET returned [${postRollbackInfo.now}]!`);
+      }
     } catch (err) {
+      rollbackVerified = false;
       console.error(`[FATAL ROLLBACK ERROR] Failed to restore node for ${groupName}:`, err.message);
     }
   };
 
-  process.on('SIGINT', async () => {
-    await rollback();
-    process.exit(130);
-  });
+  const cleanupAndExit = async (code) => {
+    await performRollback();
+    if (!rollbackVerified) {
+      console.error(`[CRITICAL] Rollback verification failed! Manual inspection required.`);
+      process.exit(1);
+    }
+    process.exit(code);
+  };
+
+  process.once('SIGINT', () => cleanupAndExit(130));
+  process.once('SIGTERM', () => cleanupAndExit(143));
   process.on('uncaughtException', async (err) => {
-    console.error('[UNCAUGHT EXCEPTION]', err);
-    await rollback();
-    process.exit(1);
+    console.error('[UNCAUGHT EXCEPTION IN SWITCH GUARD]', err);
+    await cleanupAndExit(1);
+  });
+  process.on('unhandledRejection', async (reason) => {
+    console.error('[UNHANDLED REJECTION IN SWITCH GUARD]', reason);
+    await cleanupAndExit(1);
   });
 
   try {
     console.log(`[SWITCH-GUARD] Switching [${groupName}] from [${originalNode}] -> [${targetNode}]...`);
     await setProxyGroupNode(controllerUrl, groupName, targetNode);
-    console.log(`[SWITCH-GUARD] Switched successfully.`);
+
+    // 二次 GET 验证切换生效
+    const verifyInfo = await getProxyGroup(controllerUrl, groupName);
+    if (verifyInfo.now !== targetNode) {
+      throw new Error(`Switch verification failed: Expected [${targetNode}], but GET returned [${verifyInfo.now}]`);
+    }
+    console.log(`[SWITCH VERIFIED] Group [${groupName}] is confirmed active on [${targetNode}].`);
 
     if (typeof onSwitched === 'function') {
       await onSwitched();
@@ -120,10 +155,14 @@ export async function runControlledSwitch({
       await new Promise(r => setTimeout(r, durationSec * 1000));
     }
   } finally {
-    await rollback();
+    await performRollback();
   }
 
-  return { originalNode, switchedNode: targetNode };
+  if (!rollbackVerified) {
+    throw new Error(`Rollback verification failed: Group [${groupName}] was not verified restored to [${originalNode}]`);
+  }
+
+  return { originalNode, switchedNode: targetNode, rollbackVerified: true };
 }
 
 // CLI 执行
@@ -132,21 +171,24 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   let groupName = null;
   let targetNode = null;
   let durationSec = 5;
+  let allowLiveMutation = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--group' && args[i + 1]) groupName = args[++i];
     if (args[i] === '--target' && args[i + 1]) targetNode = args[++i];
     if (args[i] === '--duration' && args[i + 1]) durationSec = parseInt(args[++i], 10);
+    if (args[i] === '--allow-live-mutation') allowLiveMutation = true;
   }
 
   if (!groupName || !targetNode) {
-    console.log('Usage: node tools/discovery/scenarios/switch-node.mjs --group <groupName> --target <targetNode> [--duration <sec>]');
+    console.log('Usage: node tools/discovery/scenarios/switch-node.mjs --group <groupName> --target <targetNode> [--allow-live-mutation] [--duration <sec>]');
     process.exit(1);
   }
 
-  runControlledSwitch({ groupName, targetNode, durationSec })
-    .then(() => {
-      console.log('[DONE] Controlled switch cycle completed.');
+  runControlledSwitch({ groupName, targetNode, durationSec, allowLiveMutation })
+    .then((res) => {
+      console.log('[DONE] Controlled switch cycle completed.', res);
+      if (!res.rollbackVerified) process.exit(1);
     })
     .catch(err => {
       console.error('[ERROR]', err.message);

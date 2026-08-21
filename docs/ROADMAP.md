@@ -33,7 +33,7 @@ Later    长期增强
 
 ### Goal
 
-在真实 Windows 11 + Mihomo + FLClash 环境下，弄清 External Controller 能够稳定提供什么数据、这些字段真实语义是什么，以及旧方案“大量 Unknown”究竟来自数据源缺失还是采集 / 计算方式错误。`[ALL VALIDATION SCENARIOS COMPLETED & CONFIRMED]`
+在真实 Windows 11 + Mihomo + FLClash 环境下，弄清 External Controller 能够稳定提供什么数据、这些字段真实语义是什么，以及旧方案“大量 Unknown”究竟来自数据源缺失还是采集 / 计算方式错误。`[Core Blocking Evidence Complete, Live FLClash Restart Remains Scoped Non-Blocking Item]`
 
 ### Deliverables
 

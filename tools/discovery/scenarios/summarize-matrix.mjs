@@ -48,7 +48,7 @@ for (const t of trials) {
   const sessionDir = path.join(captureBase, matchedDirs[matchedDirs.length - 1]);
   const groundTruthFile = path.join(sessionDir, 'ground-truth.ndjson');
   
-  const cmd = `node "${path.join(projectRoot, 'tools/discovery/analyze-capture-rate.mjs')}" "${sessionDir}" "${groundTruthFile}" --json`;
+  const cmd = `node "${path.join(projectRoot, 'tools/discovery/analyze-capture-rate.mjs')}" "${sessionDir}" "${groundTruthFile}" --expected-route "${t.route}" --json`;
   const out = execSync(cmd, { encoding: 'utf8' });
   const result = JSON.parse(out);
   

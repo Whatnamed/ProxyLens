@@ -1,16 +1,17 @@
 /**
  * analyze-accounting.mjs
  * 
- * ProxyLens Global Accounting & /traffic Reconciliation Tool
+ * ProxyLens Global Accounting, Residual Analysis & Traffic Integration Tool
  * 
- * 分析与量化：
- * 1. Global Delta: uploadTotal / downloadTotal 的起止差值
- * 2. Attributed Delta: 全量连接的 per-connection delta 求和
- * 3. Residual: Global Delta - Attributed Delta (以及短连接盲区等对残差的影响)
- * 4. Traffic Rate Integration: /traffic 速率积分与 Global Delta 的对比
- * 
- * 用法:
- *   node tools/discovery/analyze-accounting.mjs <sessionDir> [--json]
+ * 核心功能:
+ * 1. Global Counter Delta: 基于相邻帧扫描检测 counter_epoch_break / reset
+ * 2. 分层归因计算:
+ *    - knownApplication: 有确凿 process + rule 的应用层连接
+ *    - confirmedRelayDuplicate: 具备严密时间重叠、流量吻合、链路结构关系的底层中继连接
+ *    - unpairedMissingAttribution: 缺归因且未配对的独立连接 (保留，绝不冒充 Known App)
+ *    - uniqueObserved: 去重后的独立观测流量总和
+ * 3. Residual: Global Delta - uniqueObserved
+ * 4. Approximate Traffic Integration: /traffic 速率时间积分 (明确为近似校验 helper)
  */
 
 import fs from 'fs';
@@ -29,9 +30,7 @@ async function parseNdjson(filePath) {
     if (line.trim()) {
       try {
         lines.push(JSON.parse(line));
-      } catch (err) {
-        // ignore malformed line
-      }
+      } catch (err) {}
     }
   }
   return lines;
@@ -58,10 +57,31 @@ export async function analyzeSessionAccounting(sessionDir) {
     throw new Error(`No connections frames found in ${sessionDir}`);
   }
 
-  // 1. Global Delta 计算与 Counter Reset 检测
+  // 1. 逐帧扫描相邻 frames 检测 Counter Reset / Epoch Break
+  let hasCounterEpochBreak = false;
+  const epochBreaks = [];
+
+  for (let i = 1; i < connFrames.length; i++) {
+    const prevData = connFrames[i - 1].frame || connFrames[i - 1].payload || {};
+    const currData = connFrames[i].frame || connFrames[i].payload || {};
+    const prevUp = prevData.uploadTotal ?? 0;
+    const currUp = currData.uploadTotal ?? 0;
+    const prevDown = prevData.downloadTotal ?? 0;
+    const currDown = currData.downloadTotal ?? 0;
+
+    if (currUp < prevUp || currDown < prevDown) {
+      hasCounterEpochBreak = true;
+      epochBreaks.push({
+        frameIndex: i,
+        timestamp: connFrames[i].receivedAt || connFrames[i].timestamp,
+        prevCounters: { uploadTotal: prevUp, downloadTotal: prevDown },
+        currCounters: { uploadTotal: currUp, downloadTotal: currDown }
+      });
+    }
+  }
+
   const firstConn = connFrames[0];
   const lastConn = connFrames[connFrames.length - 1];
-
   const firstConnData = firstConn.frame || firstConn.payload || {};
   const lastConnData = lastConn.frame || lastConn.payload || {};
 
@@ -70,14 +90,13 @@ export async function analyzeSessionAccounting(sessionDir) {
   const firstDownloadTotal = firstConnData.downloadTotal ?? 0;
   const lastDownloadTotal = lastConnData.downloadTotal ?? 0;
 
-  const isCounterReset = (lastUploadTotal < firstUploadTotal || lastDownloadTotal < firstDownloadTotal);
-  const globalUploadDelta = isCounterReset ? null : (lastUploadTotal - firstUploadTotal);
-  const globalDownloadDelta = isCounterReset ? null : (lastDownloadTotal - firstDownloadTotal);
+  const globalUploadDelta = hasCounterEpochBreak ? null : (lastUploadTotal - firstUploadTotal);
+  const globalDownloadDelta = hasCounterEpochBreak ? null : (lastDownloadTotal - firstDownloadTotal);
 
   const firstConnTs = new Date(firstConn.receivedAt || firstConn.timestamp).getTime();
   const lastConnTs = new Date(lastConn.receivedAt || lastConn.timestamp).getTime();
 
-  // 2. Per-connection Attributed Delta 计算
+  // 2. Per-connection 追踪与生命周期计算
   const connectionsMap = new Map();
 
   for (let frameIdx = 0; frameIdx < connFrames.length; frameIdx++) {
@@ -90,6 +109,7 @@ export async function analyzeSessionAccounting(sessionDir) {
       if (!c.id) continue;
       const up = c.upload ?? 0;
       const down = c.download ?? 0;
+      const isMissingAttribution = (!c.metadata?.process || !c.rule);
       const isRelayCandidate = (!c.metadata?.process && !c.rule && c.chains && c.chains.length > 0);
 
       if (!connectionsMap.has(c.id)) {
@@ -101,13 +121,10 @@ export async function analyzeSessionAccounting(sessionDir) {
           initialDown: down,
           finalUp: up,
           finalDown: down,
-          minUp: up,
-          maxUp: up,
-          minDown: down,
-          maxDown: down,
           snapshotsCount: 1,
           isPreExisting: (frameIdx === 0),
           isRelayCandidate,
+          isMissingAttribution,
           isConfirmedRelay: false,
           pairedAppConnId: null,
           metadata: c.metadata,
@@ -119,16 +136,12 @@ export async function analyzeSessionAccounting(sessionDir) {
         item.lastSeen = frameTs;
         item.finalUp = up;
         item.finalDown = down;
-        item.maxUp = Math.max(item.maxUp, up);
-        item.maxDown = Math.max(item.maxDown, down);
-        item.minUp = Math.min(item.minUp, up);
-        item.minDown = Math.min(item.minDown, down);
         item.snapshotsCount += 1;
       }
     }
   }
 
-  // 3. Relay 配对与验证引擎 (Pairing & Validation Engine)
+  // 3. Relay 配对与结构关系验证
   const appConns = [];
   const relayCandidates = [];
 
@@ -140,7 +153,6 @@ export async function analyzeSessionAccounting(sessionDir) {
     }
   }
 
-  // 尝试为每个 relayCandidate 寻找确凿的应用连接配对
   for (const rc of relayCandidates) {
     const rcUpDelta = rc.isPreExisting ? (rc.finalUp - rc.initialUp) : rc.finalUp;
     const rcDownDelta = rc.isPreExisting ? (rc.finalDown - rc.initialDown) : rc.finalDown;
@@ -152,11 +164,14 @@ export async function analyzeSessionAccounting(sessionDir) {
       // 配对条件:
       // a. 时间窗口重叠
       const timeOverlap = (rc.firstSeen <= ac.lastSeen + 2000 && rc.lastSeen >= ac.firstSeen - 2000);
-      // b. 流量高度吻合 (差值 < 2000B 或相对差 < 5%)
+      // b. 流量高度吻合 (Up 吻合且 Down 吻合，或主要方向吻合)
       const upMatch = Math.abs(rcUpDelta - acUpDelta) < 2000 || (acUpDelta > 0 && Math.abs(rcUpDelta - acUpDelta) / acUpDelta < 0.05);
       const downMatch = Math.abs(rcDownDelta - acDownDelta) < 2000 || (acDownDelta > 0 && Math.abs(rcDownDelta - acDownDelta) / acDownDelta < 0.05);
+      // c. 结构关系 (链路存在代理策略且有流量)
+      const hasTraffic = (rcUpDelta > 500 || rcDownDelta > 500);
+      const structuralRelation = Array.isArray(ac.chains) && ac.chains.length > 1;
 
-      if (timeOverlap && (upMatch || downMatch) && (rcUpDelta > 500 || rcDownDelta > 500)) {
+      if (timeOverlap && (upMatch || downMatch) && hasTraffic && structuralRelation) {
         rc.isConfirmedRelay = true;
         rc.pairedAppConnId = ac.id;
         break;
@@ -164,65 +179,56 @@ export async function analyzeSessionAccounting(sessionDir) {
     }
   }
 
-  // 4. 流量汇总与归因
-  let attributedUpload = 0;
-  let attributedDownload = 0;
-  let appUpload = 0;
-  let appDownload = 0;
-  let confirmedRelayUpload = 0;
-  let confirmedRelayDownload = 0;
+  // 4. 分层流量汇总与归因
+  let knownApplicationUpload = 0;
+  let knownApplicationDownload = 0;
+  let confirmedRelayDuplicateUpload = 0;
+  let confirmedRelayDuplicateDownload = 0;
   let unpairedMissingAttributionUpload = 0;
   let unpairedMissingAttributionDownload = 0;
+  let otherObservedUniqueUpload = 0;
+  let otherObservedUniqueDownload = 0;
 
   for (const conn of connectionsMap.values()) {
-    let connUp = 0;
-    let connDown = 0;
-
-    if (conn.isPreExisting) {
-      connUp = conn.finalUp - conn.initialUp;
-      connDown = conn.finalDown - conn.initialDown;
-    } else {
-      connUp = conn.finalUp;
-      connDown = conn.finalDown;
-    }
-
-    attributedUpload += connUp;
-    attributedDownload += connDown;
+    let connUp = conn.isPreExisting ? (conn.finalUp - conn.initialUp) : conn.finalUp;
+    let connDown = conn.isPreExisting ? (conn.finalDown - conn.initialDown) : conn.finalDown;
 
     if (conn.isConfirmedRelay) {
-      confirmedRelayUpload += connUp;
-      confirmedRelayDownload += connDown;
-    } else if (conn.isRelayCandidate && !conn.isConfirmedRelay) {
-      // 未配对成功的缺归因连接：保留，不作为 Relay 剔除
+      confirmedRelayDuplicateUpload += connUp;
+      confirmedRelayDuplicateDownload += connDown;
+    } else if (conn.isMissingAttribution) {
       unpairedMissingAttributionUpload += connUp;
       unpairedMissingAttributionDownload += connDown;
-      appUpload += connUp;
-      appDownload += connDown;
+    } else if (conn.metadata?.process && conn.rule) {
+      knownApplicationUpload += connUp;
+      knownApplicationDownload += connDown;
     } else {
-      appUpload += connUp;
-      appDownload += connDown;
+      otherObservedUniqueUpload += connUp;
+      otherObservedUniqueDownload += connDown;
     }
   }
 
-  // 5. 残差 (Residual) 计算
-  let appResidualUpload = null;
-  let appResidualDownload = null;
-  let appResidualUploadPct = null;
-  let appResidualDownloadPct = null;
+  const uniqueObservedUpload = knownApplicationUpload + unpairedMissingAttributionUpload + otherObservedUniqueUpload;
+  const uniqueObservedDownload = knownApplicationDownload + unpairedMissingAttributionDownload + otherObservedUniqueDownload;
 
-  if (!isCounterReset && globalUploadDelta !== null && globalDownloadDelta !== null) {
-    appResidualUpload = globalUploadDelta - appUpload;
-    appResidualDownload = globalDownloadDelta - appDownload;
-    appResidualUploadPct = globalUploadDelta > 0 ? (appResidualUpload / globalUploadDelta) * 100 : 0;
-    appResidualDownloadPct = globalDownloadDelta > 0 ? (appResidualDownload / globalDownloadDelta) * 100 : 0;
+  // 5. 残差 (Residual) 计算
+  let residualUpload = null;
+  let residualDownload = null;
+  let residualUploadPct = null;
+  let residualDownloadPct = null;
+
+  if (!hasCounterEpochBreak && globalUploadDelta !== null && globalDownloadDelta !== null) {
+    residualUpload = globalUploadDelta - uniqueObservedUpload;
+    residualDownload = globalDownloadDelta - uniqueObservedDownload;
+    residualUploadPct = globalUploadDelta > 0 ? (residualUpload / globalUploadDelta) * 100 : 0;
+    residualDownloadPct = globalDownloadDelta > 0 ? (residualDownload / globalDownloadDelta) * 100 : 0;
   }
 
-  // 6. /traffic 严格时间窗口对齐积分 (Strictly Window-Aligned Integration)
-  let integratedUpload = 0;
-  let integratedDownload = 0;
+  // 6. /traffic 近似速率时间积分 (Approximate Rate Integration)
+  let estimatedUploadBytes = 0;
+  let estimatedDownloadBytes = 0;
   let trafficFramesInWindow = 0;
 
-  // 过滤并排序窗口内的 traffic frames
   const windowedTraffic = trafficFrames
     .map(f => ({
       ts: new Date(f.receivedAt || f.timestamp).getTime(),
@@ -251,64 +257,71 @@ export async function analyzeSessionAccounting(sessionDir) {
       }
     }
 
-    integratedUpload += curr.up * dtSec;
-    integratedDownload += curr.down * dtSec;
+    estimatedUploadBytes += curr.up * dtSec;
+    estimatedDownloadBytes += curr.down * dtSec;
   }
 
-  let trafficDiscrepancyUp = null;
-  let trafficDiscrepancyDown = null;
-  if (!isCounterReset && globalUploadDelta !== null && globalDownloadDelta !== null) {
-    trafficDiscrepancyUp = globalUploadDelta > 0 ? ((integratedUpload - globalUploadDelta) / globalUploadDelta) * 100 : 0;
-    trafficDiscrepancyDown = globalDownloadDelta > 0 ? ((integratedDownload - globalDownloadDelta) / globalDownloadDelta) * 100 : 0;
+  let differenceVsGlobalPctUp = null;
+  let differenceVsGlobalPctDown = null;
+  if (!hasCounterEpochBreak && globalUploadDelta !== null && globalDownloadDelta !== null) {
+    differenceVsGlobalPctUp = globalUploadDelta > 0 ? ((estimatedUploadBytes - globalUploadDelta) / globalUploadDelta) * 100 : 0;
+    differenceVsGlobalPctDown = globalDownloadDelta > 0 ? ((estimatedDownloadBytes - globalDownloadDelta) / globalDownloadDelta) * 100 : 0;
   }
 
   return {
-    sessionDir,
-    durationMs: lastConnTs - firstConnTs,
-    isCounterReset,
-    connectionFramesCount: connFrames.length,
-    trafficFramesCount: trafficFrames.length,
-    trafficFramesInWindow,
-    totalObservedConnections: connectionsMap.size,
-    confirmedRelayCount: relayCandidates.filter(r => r.isConfirmedRelay).length,
-    unpairedMissingAttributionCount: relayCandidates.filter(r => !r.isConfirmedRelay).length,
-    global: {
+    session: path.basename(sessionDir),
+    requestedIntervalMs: manifest?.requestedConnectionsIntervalMs ?? null,
+    totalConnectionsTracked: connectionsMap.size,
+    epochIntegrity: {
+      hasCounterEpochBreak,
+      epochBreaksCount: epochBreaks.length,
+      epochBreaks
+    },
+    globalCounters: {
       firstUploadTotal,
       lastUploadTotal,
       firstDownloadTotal,
       lastDownloadTotal,
-      uploadDelta: globalUploadDelta,
-      downloadDelta: globalDownloadDelta
+      globalUploadDelta,
+      globalDownloadDelta
     },
-    attributed: {
-      totalUpload: attributedUpload,
-      totalDownload: attributedDownload,
-      appUpload,
-      appDownload,
-      confirmedRelayUpload,
-      confirmedRelayDownload,
+    hierarchicalAttribution: {
+      knownApplicationUpload,
+      knownApplicationDownload,
+      confirmedRelayDuplicateUpload,
+      confirmedRelayDuplicateDownload,
       unpairedMissingAttributionUpload,
-      unpairedMissingAttributionDownload
+      unpairedMissingAttributionDownload,
+      otherObservedUniqueUpload,
+      otherObservedUniqueDownload,
+      uniqueObservedUpload,
+      uniqueObservedDownload
     },
     residual: {
-      appResidualUpload,
-      appResidualDownload,
-      appResidualUploadPct,
-      appResidualDownloadPct
+      residualUpload,
+      residualDownload,
+      residualUploadPct,
+      residualDownloadPct
     },
-    trafficIntegration: {
-      integratedUpload: Math.round(integratedUpload),
-      integratedDownload: Math.round(integratedDownload),
-      discrepancyUpPct: trafficDiscrepancyUp,
-      discrepancyDownPct: trafficDiscrepancyDown
+    trafficRateIntegration: {
+      method: "rectangular_interval_approximation",
+      approximate: true,
+      windowStartTs: firstConnTs,
+      windowEndTs: lastConnTs,
+      includedFrames: trafficFramesInWindow,
+      estimatedUploadBytes: Math.round(estimatedUploadBytes),
+      estimatedDownloadBytes: Math.round(estimatedDownloadBytes),
+      differenceVsGlobalPctUp,
+      differenceVsGlobalPctDown
     }
   };
 }
 
 // CLI 执行
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
-  const sessionDir = process.argv[2];
-  const isJson = process.argv.includes('--json');
+  const args = process.argv.slice(2);
+  const jsonMode = args.includes('--json');
+  const sessionDir = args.find(a => !a.startsWith('-'));
 
   if (!sessionDir) {
     console.error('Usage: node tools/discovery/analyze-accounting.mjs <sessionDir> [--json]');
@@ -316,49 +329,39 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   }
 
   analyzeSessionAccounting(path.resolve(sessionDir))
-    .then(result => {
-      if (isJson) {
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        console.log('================================================================');
-        console.log('PROXYLENS GLOBAL ACCOUNTING & TRAFFIC RECONCILIATION REPORT');
-        console.log('================================================================');
-        console.log(`Session Dir               : ${result.sessionDir}`);
-        console.log(`Duration                  : ${(result.durationMs / 1000).toFixed(2)}s`);
-        console.log(`Frames Analyzed           : ${result.connectionFramesCount} Connections, ${result.trafficFramesCount} Traffic`);
-        console.log(`Total Connections Tracked : ${result.totalObservedConnections}`);
-        console.log('----------------------------------------------------------------');
-        console.log('1. GLOBAL COUNTERS (uploadTotal / downloadTotal):');
-        if (result.isCounterReset) {
-          console.log('   [WARN: COUNTER RESET DETECTED - GLOBAL DELTA INVALIDATED]');
-        } else {
-          console.log(`   Global Upload Delta   : ${result.global.uploadDelta.toLocaleString()} Bytes`);
-          console.log(`   Global Download Delta : ${result.global.downloadDelta.toLocaleString()} Bytes`);
-        }
-        console.log('----------------------------------------------------------------');
-        console.log('2. ATTRIBUTED TRAFFIC & RELAY PAIRING:');
-        console.log(`   Application Upload    : ${result.attributed.appUpload.toLocaleString()} Bytes (Includes ${result.attributed.unpairedMissingAttributionUpload}B unpaired)`);
-        console.log(`   Application Download  : ${result.attributed.appDownload.toLocaleString()} Bytes (Includes ${result.attributed.unpairedMissingAttributionDownload}B unpaired)`);
-        console.log(`   Confirmed Relay Dedup : Up ${result.attributed.confirmedRelayUpload.toLocaleString()} Bytes, Down ${result.attributed.confirmedRelayDownload.toLocaleString()} Bytes (${result.confirmedRelayCount} paired conns)`);
-        console.log(`   Unpaired Missing Attrib: Up ${result.attributed.unpairedMissingAttributionUpload.toLocaleString()} Bytes, Down ${result.attributed.unpairedMissingAttributionDownload.toLocaleString()} Bytes (${result.unpairedMissingAttributionCount} conns)`);
-        console.log(`   Total (Raw Sum)       : Up ${result.attributed.totalUpload.toLocaleString()} Bytes, Down ${result.attributed.totalDownload.toLocaleString()} Bytes`);
-        console.log('----------------------------------------------------------------');
-        console.log('3. RESIDUAL & UNATTRIBUTED GAP (Global - Application):');
-        if (result.isCounterReset) {
-          console.log('   Residual unavailable due to counter reset');
-        } else {
-          console.log(`   App Upload Residual   : ${result.residual.appResidualUpload.toLocaleString()} Bytes (${result.residual.appResidualUploadPct.toFixed(2)}%)`);
-          console.log(`   App Download Residual : ${result.residual.appResidualDownload.toLocaleString()} Bytes (${result.residual.appResidualDownloadPct.toFixed(2)}%)`);
-        }
-        console.log('----------------------------------------------------------------');
-        console.log('4. /traffic STRICT WINDOW RECONCILIATION:');
-        console.log(`   Integrated Upload     : ${result.trafficIntegration.integratedUpload.toLocaleString()} Bytes ${result.trafficIntegration.discrepancyUpPct !== null ? '(Diff: ' + result.trafficIntegration.discrepancyUpPct.toFixed(2) + '%)' : ''}`);
-        console.log(`   Integrated Download   : ${result.trafficIntegration.integratedDownload.toLocaleString()} Bytes ${result.trafficIntegration.discrepancyDownPct !== null ? '(Diff: ' + result.trafficIntegration.discrepancyDownPct.toFixed(2) + '%)' : ''}`);
-        console.log('================================================================');
+    .then(r => {
+      if (jsonMode) {
+        console.log(JSON.stringify(r, null, 2));
+        return;
       }
+
+      console.log('================================================================');
+      console.log(`ProxyLens Global Accounting & Reconciliation: ${r.session}`);
+      console.log('================================================================');
+      console.log(`Epoch Status                  : ${r.epochIntegrity.hasCounterEpochBreak ? 'COUNTER EPOCH BREAK DETECTED' : 'CLEAN MONOTONIC EPOCH'}`);
+      console.log('----------------------------------------------------------------');
+      console.log('1. GLOBAL COUNTER DELTAS:');
+      console.log(`   Global Upload Delta        : ${r.globalCounters.globalUploadDelta !== null ? r.globalCounters.globalUploadDelta.toLocaleString() + ' Bytes' : 'INVALID (RESET)'}`);
+      console.log(`   Global Download Delta      : ${r.globalCounters.globalDownloadDelta !== null ? r.globalCounters.globalDownloadDelta.toLocaleString() + ' Bytes' : 'INVALID (RESET)'}`);
+      console.log('----------------------------------------------------------------');
+      console.log('2. HIERARCHICAL ATTRIBUTED TRAFFIC:');
+      console.log(`   Known Application Upload   : ${r.hierarchicalAttribution.knownApplicationUpload.toLocaleString()} Bytes`);
+      console.log(`   Known Application Download : ${r.hierarchicalAttribution.knownApplicationDownload.toLocaleString()} Bytes`);
+      console.log(`   Confirmed Relay Duplicate  : Up ${r.hierarchicalAttribution.confirmedRelayDuplicateUpload.toLocaleString()} B, Down ${r.hierarchicalAttribution.confirmedRelayDuplicateDownload.toLocaleString()} B (Deduped)`);
+      console.log(`   Unpaired Missing Attr      : Up ${r.hierarchicalAttribution.unpairedMissingAttributionUpload.toLocaleString()} B, Down ${r.hierarchicalAttribution.unpairedMissingAttributionDownload.toLocaleString()} B (Preserved)`);
+      console.log(`   Unique Observed Sum        : Up ${r.hierarchicalAttribution.uniqueObservedUpload.toLocaleString()} B, Down ${r.hierarchicalAttribution.uniqueObservedDownload.toLocaleString()} B`);
+      console.log('----------------------------------------------------------------');
+      console.log('3. RESIDUAL (Global Delta - Unique Observed):');
+      console.log(`   Residual Upload            : ${r.residual.residualUpload !== null ? r.residual.residualUpload.toLocaleString() + ' B (' + r.residual.residualUploadPct.toFixed(2) + '%)' : 'N/A'}`);
+      console.log(`   Residual Download          : ${r.residual.residualDownload !== null ? r.residual.residualDownload.toLocaleString() + ' B (' + r.residual.residualDownloadPct.toFixed(2) + '%)' : 'N/A'}`);
+      console.log('----------------------------------------------------------------');
+      console.log('4. APPROXIMATE /traffic RATE INTEGRATION:');
+      console.log(`   Estimated Upload (Rate Int): ${r.trafficRateIntegration.estimatedUploadBytes.toLocaleString()} B (Diff vs Global: ${r.trafficRateIntegration.differenceVsGlobalPctUp !== null ? (r.trafficRateIntegration.differenceVsGlobalPctUp > 0 ? '+' : '') + r.trafficRateIntegration.differenceVsGlobalPctUp.toFixed(2) + '%' : 'N/A'})`);
+      console.log(`   Estimated Download         : ${r.trafficRateIntegration.estimatedDownloadBytes.toLocaleString()} B (Diff vs Global: ${r.trafficRateIntegration.differenceVsGlobalPctDown !== null ? (r.trafficRateIntegration.differenceVsGlobalPctDown > 0 ? '+' : '') + r.trafficRateIntegration.differenceVsGlobalPctDown.toFixed(2) + '%' : 'N/A'})`);
+      console.log('================================================================\n');
     })
     .catch(err => {
-      console.error('[ERROR]', err.message);
+      console.error('[FATAL]', err);
       process.exit(1);
     });
 }

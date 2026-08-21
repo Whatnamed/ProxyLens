@@ -5,19 +5,21 @@
  * 
  * 将 Ground Truth 网络事件与 Mihomo /connections 快照进行确定性关联匹配，
  * 量化分析快照采样盲区 (Snapshot Blind Spot) 与捕获率 (Capture Rate)。
- * 纯事实统计，不修改原始数据。
+ * 
+ * 包含严密的 1-to-1 映射、Probe 窗口越界检测与 Raw chains 路由验证 Gate。
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function printHelp() {
   console.log(`
 Usage:
-  node tools/discovery/analyze-capture-rate.mjs <session-directory> <ground-truth.ndjson> [--json]
+  node tools/discovery/analyze-capture-rate.mjs <session-directory> <ground-truth.ndjson> [--expected-route <direct|proxy>] [--json]
 
 Example:
-  node tools/discovery/analyze-capture-rate.mjs tmp/discovery/work-package-a/capture/direct-500-r1 tmp/gt.ndjson
+  node tools/discovery/analyze-capture-rate.mjs tmp/discovery/work-package-a/capture/direct-500-r1 tmp/gt.ndjson --expected-route direct --json
 `);
 }
 
@@ -26,22 +28,27 @@ function formatPercent(count, total) {
   return ((count / total) * 100).toFixed(1) + '%';
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  const jsonMode = args.includes('--json');
-  const positional = args.filter((a) => !a.startsWith('-'));
-
-  if (positional.length < 2) {
-    printHelp();
-    process.exit(1);
+export function classifyRawRoute(chains) {
+  if (!Array.isArray(chains) || chains.length === 0) {
+    return 'UNKNOWN';
   }
+  if (chains.length === 1 && chains[0] === 'DIRECT') {
+    return 'DIRECT';
+  }
+  if (chains[0] === 'REJECT') {
+    return 'REJECT';
+  }
+  if (chains.length > 0 && chains[0] !== 'DIRECT') {
+    return 'PROXY';
+  }
+  return 'UNKNOWN';
+}
 
-  const sessionDir = path.resolve(positional[0]);
-  const gtFile = path.resolve(positional[1]);
+export async function analyzeCaptureSession(sessionDir, gtFile, options = {}) {
+  const expectedRoute = options.expectedRoute ? options.expectedRoute.toUpperCase() : null;
 
   if (!fs.existsSync(sessionDir) || !fs.existsSync(gtFile)) {
-    console.error(`[ERROR] 指定的文件或目录不存在`);
-    process.exit(1);
+    throw new Error(`Session directory or Ground Truth file not found: ${sessionDir}, ${gtFile}`);
   }
 
   const manifestPath = path.join(sessionDir, 'manifest.json');
@@ -60,8 +67,8 @@ async function main() {
   });
 
   // 2. 解析 Mihomo 快照并按 sourcePort 索引
-  const mihomoSnapshots = []; // list of { frameIndex, receivedAt, conn }
-  const connIdObservations = new Map(); // id -> count of frames
+  const mihomoSnapshots = [];
+  const connIdObservations = new Map();
 
   connLines.forEach((line, frameIndex) => {
     let parsed;
@@ -84,14 +91,15 @@ async function main() {
   const probeStartMs = new Date(firstConnFrame.receivedAt || firstConnFrame.timestamp).getTime();
   const probeEndMs = new Date(lastConnFrame.receivedAt || lastConnFrame.timestamp).getTime();
 
-  // 3. 执行确定性匹配
+  // 3. 执行确定性匹配与互斥映射
   const results = [];
   const matchedMihomoIds = new Set();
-  const mihomoIdToGtIndex = new Map(); // id -> gtIndex (用于 1-to-1 互斥)
+  const mihomoIdToGtIndex = new Map();
 
   let eligibleConnectedCount = 0;
   let completedSuccessCount = 0;
   let windowViolations = 0;
+  let oneToOneConflicts = 0;
 
   groundTruths.forEach((gt, gtIdx) => {
     if (gt.eligibleConnected) eligibleConnectedCount++;
@@ -136,7 +144,6 @@ async function main() {
       return true;
     });
 
-    // 去重为独特的 connection ID 列表
     const uniqueIds = Array.from(new Set(candidates.map((cand) => cand.conn.id)));
 
     let status = 'MISSED';
@@ -145,19 +152,15 @@ async function main() {
 
     if (uniqueIds.length === 1) {
       const targetId = uniqueIds[0];
-      // 检查 1-to-1 唯一性
       if (mihomoIdToGtIndex.has(targetId) && mihomoIdToGtIndex.get(targetId) !== gtIdx) {
-        status = 'AMBIGUOUS'; // 冲突：同一 ID 已被其他 GT request 匹配
+        status = 'AMBIGUOUS';
+        oneToOneConflicts++;
       } else {
         status = 'MATCHED';
         matchedMihomoIds.add(targetId);
         mihomoIdToGtIndex.set(targetId, gtIdx);
         matchedConn = candidates[0].conn;
-
-        // 真实路由分类验证
-        if (matchedConn.chains && matchedConn.chains.length > 0) {
-          actualRoute = (matchedConn.chains[0] === 'DIRECT') ? 'DIRECT' : 'PROXY';
-        }
+        actualRoute = classifyRawRoute(matchedConn.chains);
       }
     } else if (uniqueIds.length > 1) {
       status = 'AMBIGUOUS';
@@ -181,7 +184,25 @@ async function main() {
   const captureRateEligible = eligibleConnectedCount > 0 ? matched / eligibleConnectedCount : 0;
   const captureRateCompleted = completedSuccessCount > 0 ? matched / completedSuccessCount : 0;
 
-  // 4. Snapshot Presence Distribution
+  // 4. 路由验证统计
+  let matchedWithKnownRoute = 0;
+  let routeMismatches = 0;
+  let routeUnknown = 0;
+
+  results.forEach((r) => {
+    if (r.status === 'MATCHED') {
+      if (r.actualRoute === 'UNKNOWN' || r.actualRoute === 'REJECT') {
+        routeUnknown++;
+      } else {
+        matchedWithKnownRoute++;
+        if (expectedRoute && r.actualRoute !== expectedRoute) {
+          routeMismatches++;
+        }
+      }
+    }
+  });
+
+  // 5. Snapshot Presence Distribution
   const presenceDist = {
     oneFrame: 0,
     twoFrames: 0,
@@ -197,7 +218,7 @@ async function main() {
     }
   });
 
-  // 5. Duration Bins
+  // 6. Duration Bins
   const durationBins = [
     { label: '<100ms', min: 0, max: 100, n: 0, matched: 0, missed: 0, ambiguous: 0 },
     { label: '100–250ms', min: 100, max: 250, n: 0, matched: 0, missed: 0, ambiguous: 0 },
@@ -219,60 +240,91 @@ async function main() {
     }
   });
 
-  if (jsonMode) {
-    console.log(
-      JSON.stringify(
-        {
-          session: path.basename(sessionDir),
-          requestedIntervalMs: manifest.requestedConnectionsIntervalMs,
-          eligibleConnectedCount,
-          completedSuccessCount,
-          windowViolations,
-          matched,
-          missed,
-          ambiguous,
-          captureRateEligible,
-          captureRateCompleted,
-          presenceDist,
-          durationBins,
-        },
-        null,
-        2
-      )
-    );
-    return;
-  }
-
-  console.log('===============================================================');
-  console.log(`ProxyLens Capture Rate Analysis: ${path.basename(sessionDir)}`);
-  console.log('===============================================================');
-  console.log(`Requested Connections Interval : ${manifest.requestedConnectionsIntervalMs ? manifest.requestedConnectionsIntervalMs + ' ms' : 'DEFAULT (1000ms)'}`);
-  console.log(`Ground Truth Total Requests    : ${groundTruths.length}`);
-  console.log(`Eligible Connected (Primary N) : ${eligibleConnectedCount}`);
-  console.log(`Completed Success (Secondary N): ${completedSuccessCount}`);
-  console.log(`Window Out-of-Bound Violations : ${windowViolations} ${windowViolations > 0 ? '[WARN: REQUEST OUTSIDE PROBE WINDOW]' : '[VALID]'}`);
-  console.log('---------------------------------------------------------------');
-  console.log(`Matching Classification Results:`);
-  console.log(`  MATCHED                      : ${matched} / ${eligibleConnectedCount} (${formatPercent(matched, eligibleConnectedCount)})`);
-  console.log(`  MISSED (Snapshot Blind Spot) : ${missed} / ${eligibleConnectedCount} (${formatPercent(missed, eligibleConnectedCount)})`);
-  console.log(`  AMBIGUOUS (Multiple Matches) : ${ambiguous} / ${eligibleConnectedCount} (${formatPercent(ambiguous, eligibleConnectedCount)})`);
-  console.log(`  Capture Rate (Eligible)      : ${formatPercent(matched, eligibleConnectedCount)} (Primary)`);
-  console.log(`  Capture Rate (Completed)     : ${formatPercent(matched, completedSuccessCount)} (Secondary)`);
-  console.log('---------------------------------------------------------------');
-  console.log(`Snapshot Presence Distribution (For MATCHED Connections):`);
-  console.log(`  1 Frame Only (Transient)     : ${presenceDist.oneFrame} (${formatPercent(presenceDist.oneFrame, matched)})`);
-  console.log(`  2 Frames                     : ${presenceDist.twoFrames} (${formatPercent(presenceDist.twoFrames, matched)})`);
-  console.log(`  3+ Frames (Sustained)        : ${presenceDist.threePlusFrames} (${formatPercent(presenceDist.threePlusFrames, matched)})`);
-  console.log('---------------------------------------------------------------');
-  console.log(`Capture Rate by Application Request Duration:`);
-  durationBins.forEach((b) => {
-    const rateStr = b.n > 0 ? formatPercent(b.matched, b.n) : 'N/A';
-    console.log(`  ${b.label.padEnd(12)}: N=${String(b.n).padStart(3)} | Matched=${String(b.matched).padStart(3)} | Missed=${String(b.missed).padStart(3)} | Capture Rate: ${rateStr}`);
-  });
-  console.log('===============================================================\n');
+  return {
+    session: path.basename(sessionDir),
+    requestedIntervalMs: manifest.requestedConnectionsIntervalMs,
+    eligibleConnectedCount,
+    completedSuccessCount,
+    windowViolations,
+    matched,
+    missed,
+    ambiguous,
+    oneToOneConflicts,
+    routeVerification: {
+      expectedRoute,
+      matchedWithKnownRoute,
+      routeMismatches,
+      routeUnknown,
+    },
+    captureRateEligible,
+    captureRateCompleted,
+    presenceDist,
+    durationBins,
+  };
 }
 
-main().catch((err) => {
-  console.error('[FATAL]', err);
-  process.exit(1);
-});
+// CLI 执行
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  const args = process.argv.slice(2);
+  const jsonMode = args.includes('--json');
+  let expectedRoute = null;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--expected-route' && args[i + 1]) {
+      expectedRoute = args[++i];
+    }
+  }
+
+  const positional = args.filter((a, idx) => {
+    if (a.startsWith('-')) return false;
+    if (idx > 0 && args[idx - 1] === '--expected-route') return false;
+    return true;
+  });
+
+  if (positional.length < 2) {
+    printHelp();
+    process.exit(1);
+  }
+
+  const sessionDir = path.resolve(positional[0]);
+  const gtFile = path.resolve(positional[1]);
+
+  analyzeCaptureSession(sessionDir, gtFile, { expectedRoute })
+    .then((res) => {
+      if (jsonMode) {
+        console.log(JSON.stringify(res, null, 2));
+        return;
+      }
+
+      console.log('===============================================================');
+      console.log(`ProxyLens Capture Rate Analysis: ${res.session}`);
+      console.log('===============================================================');
+      console.log(`Requested Connections Interval : ${res.requestedIntervalMs ? res.requestedIntervalMs + ' ms' : 'DEFAULT (1000ms)'}`);
+      console.log(`Eligible Connected (Primary N) : ${res.eligibleConnectedCount}`);
+      console.log(`Completed Success (Secondary N): ${res.completedSuccessCount}`);
+      console.log(`Window Out-of-Bound Violations : ${res.windowViolations} ${res.windowViolations > 0 ? '[WARN]' : '[VALID]'}`);
+      console.log(`1-to-1 Mapping Conflicts       : ${res.oneToOneConflicts} ${res.oneToOneConflicts > 0 ? '[CONFLICT]' : '[VALID]'}`);
+      console.log('---------------------------------------------------------------');
+      console.log(`Matching Classification Results:`);
+      console.log(`  MATCHED                      : ${res.matched} / ${res.eligibleConnectedCount} (${formatPercent(res.matched, res.eligibleConnectedCount)})`);
+      console.log(`  MISSED (Snapshot Blind Spot) : ${res.missed} / ${res.eligibleConnectedCount} (${formatPercent(res.missed, res.eligibleConnectedCount)})`);
+      console.log(`  AMBIGUOUS (Multiple Matches) : ${res.ambiguous} / ${res.eligibleConnectedCount} (${formatPercent(res.ambiguous, res.eligibleConnectedCount)})`);
+      console.log(`  Capture Rate (Eligible)      : ${formatPercent(res.matched, res.eligibleConnectedCount)} (Primary)`);
+      console.log('---------------------------------------------------------------');
+      console.log(`Route Verification (Raw chains evidence):`);
+      console.log(`  Expected Route               : ${res.routeVerification.expectedRoute || 'N/A (Not specified)'}`);
+      console.log(`  Matched with Known Route     : ${res.routeVerification.matchedWithKnownRoute}`);
+      console.log(`  Route Mismatches             : ${res.routeVerification.routeMismatches} ${res.routeVerification.routeMismatches > 0 ? '[MISMATCH GATE FAILED]' : '[VALID]'}`);
+      console.log(`  Route Unknown / Reject       : ${res.routeVerification.routeUnknown}`);
+      console.log('---------------------------------------------------------------');
+      console.log(`Snapshot Presence Distribution (For MATCHED Connections):`);
+      console.log(`  1 Frame Only (Transient)     : ${res.presenceDist.oneFrame} (${formatPercent(res.presenceDist.oneFrame, res.matched)})`);
+      console.log(`  2 Frames                     : ${res.presenceDist.twoFrames} (${formatPercent(res.presenceDist.twoFrames, res.matched)})`);
+      console.log(`  3+ Frames (Sustained)        : ${res.presenceDist.threePlusFrames} (${formatPercent(res.presenceDist.threePlusFrames, res.matched)})`);
+      console.log('===============================================================\n');
+    })
+    .catch((err) => {
+      console.error('[FATAL]', err);
+      process.exit(1);
+    });
+}

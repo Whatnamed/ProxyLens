@@ -1,15 +1,20 @@
 /**
- * run-reload-experiment.mjs
+ * run-config-patch-experiment.mjs
  * 
- * Stage B2: Config Reload / Soft Restart & Kernel Lifecycle Experiment
+ * Stage R4: Basic Configuration Runtime PATCH Experiment
  * 
- * 流程:
- * 1. 记录重载前的全局计数器与当前活跃连接列表 (Capture pre-reload baseline)
- * 2. 通过 Controller PUT /configs 接口触发配置重新加载 (Reload)
- * 3. 记录重载后的全局计数器与活跃连接列表
- * 4. 分析：
- *    - uploadTotal / downloadTotal 是否发生回退或归零 (Counter Reset)?
- *    - 已有连接 ID 是否全部失效 / 保持 / 重新建立?
+ * 官方 API 说明 [Documented]:
+ * - PATCH /configs             -> Update basic configuration
+ * - PUT /configs?force=true    -> Reload basic configuration (Default: DO NOT CALL ON LIVE FLCLASH)
+ * - POST /restart              -> Restart kernel (Default: DO NOT CALL ON LIVE FLCLASH)
+ * 
+ * 本脚本通过 PATCH /configs 验证基础配置更新时对活跃连接与全局计数器的影响:
+ * 1. 记录 PATCH 前的全局计数器与当前活跃连接列表
+ * 2. 通过 Controller PATCH /configs 发送当前配置项
+ * 3. 记录 PATCH 后的全局计数器与活跃连接列表
+ * 4. 验证:
+ *    - uploadTotal / downloadTotal 是否单调连续 (未发生 Counter Reset)?
+ *    - 已有长连接 ID 是否保持存活?
  */
 
 import http from 'http';
@@ -50,7 +55,7 @@ function patchConfig(controllerUrl, payload) {
         if (res.statusCode === 204 || res.statusCode === 200) {
           resolve(true);
         } else {
-          reject(new Error(`Reload failed: HTTP ${res.statusCode} ${data}`));
+          reject(new Error(`PATCH failed: HTTP ${res.statusCode} ${data}`));
         }
       });
     });
@@ -64,11 +69,11 @@ async function main() {
   const controllerUrl = 'http://127.0.0.1:9090';
 
   console.log('================================================================');
-  console.log('STAGE B2: CONFIG RELOAD & COUNTER RESET EXPERIMENT');
+  console.log('STAGE R4: BASIC CONFIGURATION RUNTIME PATCH EXPERIMENT');
   console.log('================================================================');
 
   // 1. 获取当前状态
-  console.log('[STEP 1] Fetching pre-reload connections & global counters...');
+  console.log('[STEP 1] Fetching pre-patch connections & global counters...');
   const preConns = await fetchJson(`${controllerUrl}/connections`);
   const preConfigs = await fetchJson(`${controllerUrl}/configs`);
 
@@ -76,24 +81,24 @@ async function main() {
   const preDownloadTotal = preConns.downloadTotal;
   const preConnIds = (preConns.connections || []).map(c => c.id);
 
-  console.log(`Pre-reload Counters : Up ${preUploadTotal.toLocaleString()} B, Down ${preDownloadTotal.toLocaleString()} B`);
-  console.log(`Pre-reload Conns    : ${preConnIds.length} active connections`);
+  console.log(`Pre-patch Counters  : Up ${preUploadTotal.toLocaleString()} B, Down ${preDownloadTotal.toLocaleString()} B`);
+  console.log(`Pre-patch Conns     : ${preConnIds.length} active connections`);
 
-  // 2. 触发配置重新加载 (PATCH /configs)
-  console.log('\n[STEP 2] Triggering config reload via PATCH /configs...');
+  // 2. 触发配置更新 (PATCH /configs)
+  console.log('\n[STEP 2] Triggering config update via PATCH /configs...');
   await patchConfig(controllerUrl, { mode: preConfigs.mode || 'rule' });
-  console.log('[RELOAD TRIGGERED] Waiting 2 seconds for kernel state update...');
+  console.log('[PATCH APPLIED] Waiting 2 seconds for kernel state update...');
   await new Promise(r => setTimeout(r, 2000));
 
-  // 3. 获取重载后状态
-  console.log('\n[STEP 3] Fetching post-reload connections & global counters...');
+  // 3. 获取更新后状态
+  console.log('\n[STEP 3] Fetching post-patch connections & global counters...');
   const postConns = await fetchJson(`${controllerUrl}/connections`);
   const postUploadTotal = postConns.uploadTotal;
   const postDownloadTotal = postConns.downloadTotal;
   const postConnIds = (postConns.connections || []).map(c => c.id);
 
-  console.log(`Post-reload Counters: Up ${postUploadTotal.toLocaleString()} B, Down ${postDownloadTotal.toLocaleString()} B`);
-  console.log(`Post-reload Conns   : ${postConnIds.length} active connections`);
+  console.log(`Post-patch Counters : Up ${postUploadTotal.toLocaleString()} B, Down ${postDownloadTotal.toLocaleString()} B`);
+  console.log(`Post-patch Conns    : ${postConnIds.length} active connections`);
 
   // 4. 分析
   const isUploadCounterReset = postUploadTotal < preUploadTotal;
@@ -105,12 +110,14 @@ async function main() {
   const closedIds = preConnIds.filter(id => !new Set(postConnIds).has(id));
 
   const report = {
-    preReload: {
+    experimentType: 'RUNTIME_CONFIG_PATCH',
+    apiEndpoint: 'PATCH /configs',
+    prePatch: {
       uploadTotal: preUploadTotal,
       downloadTotal: preDownloadTotal,
       activeConnectionsCount: preConnIds.length
     },
-    postReload: {
+    postPatch: {
       uploadTotal: postUploadTotal,
       downloadTotal: postDownloadTotal,
       activeConnectionsCount: postConnIds.length
@@ -128,17 +135,17 @@ async function main() {
     }
   };
 
-  const outPath = path.join(projectRoot, 'tmp/discovery/work-package-b/reload-report.json');
+  const outPath = path.join(projectRoot, 'tmp/discovery/work-package-b1/config-patch-report.json');
   fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
 
   console.log('\n----------------------------------------------------------------');
-  console.log('RELOAD ANALYSIS SUMMARY:');
+  console.log('PATCH ANALYSIS SUMMARY:');
   console.log(`  Counter Reset Occurred? : ${isUploadCounterReset || isDownloadCounterReset ? 'YES [RESET!]' : 'NO [MONOTONIC CONTINUOUS]'}`);
   console.log(`  Upload Total Delta      : +${(postUploadTotal - preUploadTotal).toLocaleString()} Bytes`);
   console.log(`  Download Total Delta    : +${(postDownloadTotal - preDownloadTotal).toLocaleString()} Bytes`);
   console.log(`  Surviving Connections   : ${survivingIds.length} / ${preConnIds.length} retained their ID`);
-  console.log(`  Closed on Reload        : ${closedIds.length} closed`);
-  console.log(`  New after Reload        : ${newIds.length} new`);
+  console.log(`  Closed on Patch         : ${closedIds.length} closed`);
+  console.log(`  New after Patch         : ${newIds.length} new`);
   console.log('================================================================\n');
 }
 

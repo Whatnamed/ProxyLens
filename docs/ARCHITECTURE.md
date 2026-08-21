@@ -180,27 +180,27 @@ ProxyLens 最难的部分不是 UI，而是把持续变化的连接快照转换�
 Phase 0C-3C 与 0C-6 实测确立了快照轮询机制的物理边界：
 
 1. **短连接快照盲区**：
-   - 默认 1000ms 采样下，存活短于 500ms 的短连接有 **84%~91%** 无法被快照捕获；
-   - 提升采样率至 250ms 可将 DIRECT 捕获率提升至 56.0%，PROXY 捕获率提升至 26.0%，但无法完全消除物理盲区；
-2. **残差模型 (Residual Model)**：
+   - 默认 1000ms 采样下，短连接有 **72%~86%** 无法被快照捕获（捕获率 DIRECT 14.0% / PROXY 28.0%）；
+   - 提升采样率至 250ms 可将 DIRECT 捕获率提升至 55.0%，PROXY 捕获率提升至 86.0%，但无法完全消除物理盲区；
+2. **分层流量归因与残差模型 (Residual Model)**：
    - 内核全局计数器 $\Delta(\text{uploadTotal})$ 记录了包含盲区短连接在内的全量物理流量；
-   - 连接层归因流量之和 $\sum \Delta(\text{AppConn})$ 记录了所有被快照捕获的应用连接流量；
-   - 系统必须显式计算并持久化残差：$$\text{Residual} = \Delta(\text{uploadTotal}) - \sum \Delta(\text{AppConn})$$
-   - 在特定短请求测试负载下，250ms 快照时上传残差收敛至 **0.6%**（稳态长连接残差 < 0.1%），下载残差因短连接漏抓为 10.2%（1000ms 下为 51.1%）。
+   - 分层统计连接层归因：$\text{KnownApp}$（已知应用）、$\text{UnpairedMissingAttr}$（未配对缺归因流量）与 $\text{UniqueObserved}$；
+   - 系统必须显式计算并持久化残差：$$\text{Residual} = \Delta(\text{uploadTotal}) - \text{UniqueObserved}$$
+   - 在稳态长连接下残差收敛至 < 0.1%，在突发短连接下残差随采样周期缩短而显著收敛。
 
 ### 4.3 链式代理/多跳底层连接 Relay Candidate 配对规约 (Relay Pairing Model)
 
 Phase 0C-6 实测发现：
-- 在配置链式/中继代理时，`/connections` 会同时列出应用层逻辑连接（`process: agy.exe, host: play.googleapis.com`）与 Mihomo 发往第一跳中继节点的底层连接（`process: "", host: 168.158.196.123`），两者流量完全相同；
-- **规约**：严禁简单按“缺进程+缺规则”普遍过滤。必须将其标记为 `relay_candidate`，只有在会话中找到时间窗口重叠、流量高度吻合且链路包含的配对应用连接时，才被判定为 `CONFIRMED_RELAY_DUPLICATE` 并予以去重；未配对的缺失归因连接必须保留为 `unpaired_missing_attribution`，防止掩盖未识别流量。
+- 在配置链式/中继代理时，`/connections` 会同时列出应用层逻辑连接与 Mihomo 发往第一跳中继节点的底层连接，两者流量高度吻合；
+- **规约**：严禁简单按“缺进程+缺规则”普遍过滤。必须将其标记为 `relay_candidate`，只有在会话中找到时间窗口重叠、流量高度吻合且存在链路结构关系的配对应用连接时，才被判定为 `CONFIRMED_RELAY_DUPLICATE` 并予以去重；未配对的缺失归因连接必须保留为 `unpaired_missing_attribution`，计入待核查流量。
 
 ### 4.4 代理链拓扑因果顺序规约 (Confirmed Hop Order Semantics)
 
-Phase 0C-4 动态切换实测正式证明并确立：
+Phase 0C-4 受控实测正式确立 `[Scoped Observed / Provisional]`：
 - **`chains[0]`**: **最终物理出站节点 (Physical Egress Node)**（或 `DIRECT`）；
 - **`chains[1 .. length - 2]`**: **级联策略选择组 (Intermediate Policy Selectors)**；
 - **`chains[length - 1]`**: **分流规则匹配命中的顶层策略组 (Top-Level Rule Target Group)**；
-- **连接历史不可变性 (Routing Immutability)**：连接建立后其 `chains` 路径在生命周期内不可变，外部节点切换不影响已有存活连接；
+- **连接历史不可变性 (Routing Immutability)**：受控实测显示连接建立后其 `chains` 路径在生命周期内保持稳定（0 突变），外部节点切换不篡改已有存活连接的历史路径；
 - **渲染规范**: UI 呈现统一采用正向因果渲染：`chains.slice().reverse()`（即：分流规则命中组 $\rightarrow$ 级联选择组 $\rightarrow$ 物理出站节点）。
 
 ### 4.5 长连接阶段性持久化 (Sustained Connection Persistence)
@@ -213,14 +213,14 @@ Phase 0C-4 动态切换实测正式证明并确立：
 
 ### 4.6 连接消失与生命周期恢复状态机 (Lifecycle & Gap Recovery Semantics)
 
-基于 Phase 0C-5 实测，确立了四类生命周期恢复规约：
+基于 Phase 0C-5 实测与官方 API 文档，确立了四类生命周期恢复规约：
 1. **正常关闭**: 从快照移除，记录 `last_observed` 字节与 `possible_unobserved_tail` 标记；
-2. **配置热重载 (Hot Reload via PATCH)**: 全局计数器单调连续，绝大多数长连接保持原 ID 存活；
+2. **基础配置运行时更新 (Runtime Config PATCH)**: 全局计数器单调连续，绝大多数长连接保持原 ID 存活；
 3. **监控中断与重连 (Monitoring Gap & Reconnect)**:
-   - 记录 `[gap_start, gap_end]` 区间与物理流量 $\Delta(\text{uploadTotal})$；
+   - 记录 `coverageGap: [lastObserved, firstObserved]` 区间与物理流量 $\Delta(\text{uploadTotal})$；
    - 跨 Gap 存活连接的增量归属为 **Gap 期间累积流量**，杜绝重连当期的虚假流量爆炸；
-4. **内核冷重启检测 (Cold Restart / Counter Reset)**:
-   - 当检测到 $\text{last}.\text{uploadTotal} < \text{first}.\text{uploadTotal}$ 时，判定发生内核冷重启，旧连接全部作废，全量重置状态机并重新执行 Session Bootstrap。
+4. **Counter Reset / Epoch Break 信号检测**:
+   - 逐帧扫描检测相邻帧：当检测到 $\text{current}.\text{uploadTotal} < \text{previous}.\text{uploadTotal}$ 时，触发 `counter_epoch_break` 信号，指示可能发生了内核重启或数据源重置，状态机重置并重新执行 Session Bootstrap。
 
 ---
 

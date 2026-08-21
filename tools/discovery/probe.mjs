@@ -392,7 +392,13 @@ async function main() {
     return shutdownPromise;
   }
 
-  // 捕获系统信号与未捕获异常
+  // 捕获系统信号与父进程控制指令
+  process.stdin.on('data', (data) => {
+    if (data.toString().trim() === 'STOP') {
+      performShutdown('stopped_by_parent');
+    }
+  });
+
   process.once('SIGINT', () => {
     console.log('\n[INFO] 接收到中断信号 (SIGINT/Ctrl+C)，正在安全 flush 并退出...');
     performShutdown('interrupted_by_user');

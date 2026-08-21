@@ -34,9 +34,13 @@ function runProcess(cmd, args) {
   });
 }
 
-function runCaptureAnalyzer(sessionDir, gtFile) {
+function runCaptureAnalyzer(sessionDir, gtFile, expectedRoute) {
   return new Promise((resolve, reject) => {
-    const p = spawn('node', ['tools/discovery/analyze-capture-rate.mjs', sessionDir, gtFile, '--json'], {
+    const args = ['tools/discovery/analyze-capture-rate.mjs', sessionDir, gtFile, '--json'];
+    if (expectedRoute) {
+      args.push('--expected-route', expectedRoute);
+    }
+    const p = spawn('node', args, {
       stdio: ['ignore', 'pipe', 'inherit'],
     });
     let out = '';
@@ -78,18 +82,18 @@ async function main() {
 
         console.log(`\n>>> [TRIAL START] ${trialName} (Interval: ${intv.name}, Route: ${route.name}, Rep: ${rep})`);
 
-        // 1. 启动 Probe 后台执行 (赋予更长超时保护，由 runner 在 burst 后显式退出)
+        // 1. 启动 Probe 后台执行 (60s 上限保护，通过 stdin 发送 STOP 优雅退出)
         const probeArgs = [
           'tools/discovery/probe.mjs',
           '--controller', 'http://127.0.0.1:9090',
           '--output', sessionDir,
-          '--duration', '60', // 充足的上限保护
+          '--duration', '60',
         ];
         if (intv.ms) {
           probeArgs.push('--connections-interval', String(intv.ms));
         }
 
-        const probeProcess = spawn('node', probeArgs, { stdio: 'inherit' });
+        const probeProcess = spawn('node', probeArgs, { stdio: ['pipe', 'inherit', 'inherit'] });
         const probePromise = new Promise((resolve, reject) => {
           probeProcess.on('error', reject);
           probeProcess.on('close', (code) => {
@@ -113,10 +117,10 @@ async function main() {
 
         await runProcess('node', burstArgs);
 
-        // 4. Burst 全部完成后，额外留出 2 秒采样缓冲，然后通知 Probe 优雅关闭
-        console.log('[PROBE] Burst finished, waiting 2s buffer before graceful probe shutdown...');
-        await new Promise((r) => setTimeout(r, 2000));
-        probeProcess.kill('SIGINT');
+        // 4. Burst 全部完成后，等待 2.5 秒采样缓冲，然后通过 stdin 发送 STOP 通知 Probe 优雅退出
+        console.log('[PROBE] Burst finished, waiting 2.5s buffer before graceful probe shutdown...');
+        await new Promise((r) => setTimeout(r, 2500));
+        probeProcess.stdin.write('STOP\n');
 
         await probePromise;
 
@@ -128,10 +132,22 @@ async function main() {
           process.exit(1);
         }
 
-        // 6. 执行分析并检查 windowViolations Gate
-        const res = await runCaptureAnalyzer(sessionDir, gtFile);
+        // 6. 执行分析并检查全量 Integrity Gate
+        const res = await runCaptureAnalyzer(sessionDir, gtFile, route.name);
         if (res.windowViolations > 0) {
           console.error(`[FATAL] Window integrity violation in ${trialName}: ${res.windowViolations} requests outside probe window!`);
+          process.exit(1);
+        }
+        if (res.oneToOneConflicts > 0) {
+          console.error(`[FATAL] 1-to-1 conflict in ${trialName}: ${res.oneToOneConflicts} conflicts!`);
+          process.exit(1);
+        }
+        if (res.ambiguous > 0) {
+          console.error(`[FATAL] Ambiguous matches in ${trialName}: ${res.ambiguous} ambiguous!`);
+          process.exit(1);
+        }
+        if (res.routeVerification.routeMismatches > 0 || res.routeVerification.routeUnknown > 0) {
+          console.error(`[FATAL] Route verification failed in ${trialName}: mismatches=${res.routeVerification.routeMismatches}, unknown=${res.routeVerification.routeUnknown}!`);
           process.exit(1);
         }
 

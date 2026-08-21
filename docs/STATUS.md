@@ -6,8 +6,8 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 0 — Documentation & Discovery (Phase 0 Data Source Validation COMPLETED)`
-- **代码状态**：Phase 0 调研与验证已全量闭环，准备进入 Phase 1（Collector 架构与实现）。
+- **当前阶段**：`Phase 0 — Documentation & Discovery (Phase 0 Core Evidence Closure Complete, Ready for Phase 1)`
+- **代码状态**：Phase 0 核心阻塞性实测已全部闭环（Stage R0~R8 完成），进入 Phase 1 准备就绪。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
@@ -20,15 +20,15 @@
   - `Phase 0C-3A & 3B Connection Counter Semantics: COMPLETED` `[Observed]`：实测证明稳态长连接单调非递减计数与冷启动基线（Bootstrap vs Steady-State）。
   - `Phase 0C-3C Snapshot Cadence & Capture-Rate Matrix: COMPLETED` `[Observed]`：
     - 实测证明 Mihomo 原生支持 `?interval=<ms>`（250ms / 500ms / 1000ms），吞吐量在 236 连接下分别为 577 KB/s / 277 KB/s / 132 KB/s（确立为 Phase 1 基准测试候选间隔）；
-    - 执行 12 轮独立试验矩阵（12 trials, N=600），量化短连接捕获盲区（1000ms 下短连接漏抓 84%~91%；250ms 下 DIRECT 捕获率提升至 56.0%，PROXY 提升至 26.0%），捕获连接单帧占比分布在 47.1%~100.0%。
+    - 执行 12 轮独立试验矩阵（12 trials, N=600），量化短连接捕获盲区（1000ms 下短连接捕获率 DIRECT 14.0% / PROXY 28.0%；250ms 下 DIRECT 提升至 55.0%，PROXY 提升至 86.0%），捕获连接单帧占比分布在 84.9%~100.0%。
   - `Phase 0C-6 Global Accounting & Reconciliation: COMPLETED` `[Observed]`：
-    - 实测证明严格时间窗口对齐下 `/traffic` 速率积分与全局计数器增量高度一致（误差 < 2.7%）；
-    - 发现并实测证明链式代理底层连接双重计数问题，建立基于时间与流量吻合的 Relay Candidate 配对去重规约（杜绝未知流量掩盖）；
-    - 在 250ms 快照下，该短连接 workload 的上传残差收敛至 0.6%（稳态长连接残差仅 0.05%）；下载残差受盲区漏抓影响为 10.2%（1000ms 下为 51.1%）。
-  - `Phase 0C-4 Dynamic Routing & Node Switching: COMPLETED` `[Observed]`：
+    - 建立分层流量归因模型（`knownApplication`, `unpairedMissingAttribution`, `confirmedRelayDuplicate`, `uniqueObserved`）；
+    - 实测证明近似时间积分下 `/traffic` 速率与全局计数器增量高度吻合（偏差在 -1.7% ~ +1.7% 之间）；
+    - 建立基于时间重叠、流量吻合与链路包含的 Relay Candidate 配对去重规约（杜绝未知流量掩盖）。
+  - `Phase 0C-4 Dynamic Routing & Node Switching: COMPLETED` `[Observed / Scoped]`：
     - 实测证明连接建立后 `chains` 具有存活期历史不可变性（0 突变），新连接即时迁移至新物理节点；正式升格 `chains` 动态拓扑因果顺序规约（`chains[0]` 为最终物理出站节点）。
-  - `Phase 0C-5 Lifecycle, Hot Reload & Controller Gap: COMPLETED` `[Observed]`：
-    - 实测 4.01s Monitoring Gap，80 条存活长连接 ID 保持稳定；量化了 Naive 算法在重连时产生的 1450 倍虚假流量爆炸（212MB vs 153KB），确立了 Gap 恢复规约；实测验证配置热重载（PATCH）下全局计数器单调连续。
+  - `Phase 0C-5 Lifecycle, Config Update & Controller Gap: COMPLETED` `[Observed / Documented]`：
+    - 实测 4.46s Monitoring Gap 与 3.02s 同进程 WebSocket 自动重连，跨 Gap 存活长连接 ID 保持稳定；量化了 Naive 算法在重连时产生的 1450 倍虚假流量爆炸，确立了 Gap 恢复规约；实测验证配置更新（PATCH）下全局计数器单调连续；规范内核冷重启为 `counter_epoch_break` 信号。
 - **当前项目级 Skill**：`.agents/skills/mihomo-data-source-validation/SKILL.md`。
 
 ---
