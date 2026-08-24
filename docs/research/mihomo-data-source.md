@@ -418,12 +418,12 @@
   - 真实物理流量为 153KB，Naive “First-Seen” 算法产生 212MB 虚假流量爆炸（虚增 1450 倍）；
   - 确立了 Gap 期间流量归档为区间增量 `attributionInterval: [lastObserved, firstObserved]`。
 
-### 11.2 同进程 WebSocket 断线重连故障注入实测 `[Observed]`
+### 11.2 同进程 WebSocket 断线重连受控实测 `[Observed]`
 - **测试工具**: `tools/discovery/scenarios/run-ws-reconnect-experiment.mjs`
 - **测试报告**: `ws-reconnect-report.json`
 - **实测事实**:
   - 同一 Collector 客户端断线 3.02s 后重新建立 WS，42/42 条活跃连接 ID 保持连续稳定；
-  - 确立了自动重连后的首帧 Baseline 状态机处理。
+  - 验证了客户端 WebSocket 重连后的首帧 Baseline 状态机处理规范（生产环境自动重连与重试退避将在 Phase 1 实现）。
 
 ### 11.3 基础配置运行时更新 (Runtime Config PATCH) 实测 `[Observed]`
 - **测试工具**: `tools/discovery/scenarios/run-config-patch-experiment.mjs`
@@ -454,7 +454,7 @@
 | **Relay Candidate Dedup** | **PASS** | `[Observed/Provisional]` | **YES** | 配对去重与未配对保留 |
 | **Dynamic Routing Hop Order** | **PASS** | `[Observed scoped]` | **YES** | `chains[0]` 出口节点，逆向因果流 |
 | **Collector Offline Gap** | **PASS** | `[Observed]` | **YES** | Coverage Gap 与跨 Gap 存活连接归档 |
-| **Same-Process WS Reconnect** | **PASS** | `[Observed]` | **YES** | 自动重连首帧 Baseline 状态机 |
+| **Same-Process WS Reconnect** | **PASS** | `[Observed]` | **YES** | 验证重连首帧 Baseline 状态机语义 |
 | **Config Update (PATCH)** | **PASS** | `[Observed]` | **NO** | 计数器连续，连接保持 |
 | **True Config Reload (PUT)** | **DOCUMENTED** | `[Documented]` | **NO** | 保守处理：检测 epoch break |
 | **Kernel Cold Restart** | **DOCUMENTED** | `[Documented/Inferred]` | **NO** | `counter_epoch_break` 信号模型 |

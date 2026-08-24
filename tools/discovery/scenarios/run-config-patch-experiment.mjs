@@ -3,18 +3,18 @@
  * 
  * Stage R4: Basic Configuration Runtime PATCH Experiment
  * 
+ * 安全机制:
+ * 1. 默认仅进行 Preflight / Dry-run，绝不直接向 Controller 发起 PATCH
+ * 2. 必须显式传入 --allow-live-mutation 选项才允许发起实际网络变更
+ * 3. 支持参数化 --controller
+ * 
  * 官方 API 说明 [Documented]:
  * - PATCH /configs             -> Update basic configuration
  * - PUT /configs?force=true    -> Reload basic configuration (Default: DO NOT CALL ON LIVE FLCLASH)
  * - POST /restart              -> Restart kernel (Default: DO NOT CALL ON LIVE FLCLASH)
  * 
- * 本脚本通过 PATCH /configs 验证基础配置更新时对活跃连接与全局计数器的影响:
- * 1. 记录 PATCH 前的全局计数器与当前活跃连接列表
- * 2. 通过 Controller PATCH /configs 发送当前配置项
- * 3. 记录 PATCH 后的全局计数器与活跃连接列表
- * 4. 验证:
- *    - uploadTotal / downloadTotal 是否单调连续 (未发生 Counter Reset)?
- *    - 已有长连接 ID 是否保持存活?
+ * 用法:
+ *   node tools/discovery/scenarios/run-config-patch-experiment.mjs [--controller <url>] [--allow-live-mutation]
  */
 
 import http from 'http';
@@ -25,6 +25,21 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '../../..');
+
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const options = {
+    controllerUrl: 'http://127.0.0.1:9090',
+    allowLiveMutation: false
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--controller' && args[i + 1]) options.controllerUrl = args[++i];
+    if (args[i] === '--allow-live-mutation') options.allowLiveMutation = true;
+  }
+
+  return options;
+}
 
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
@@ -66,14 +81,16 @@ function patchConfig(controllerUrl, payload) {
 }
 
 async function main() {
-  const controllerUrl = 'http://127.0.0.1:9090';
+  const { controllerUrl, allowLiveMutation } = parseArgs();
 
   console.log('================================================================');
   console.log('STAGE R4: BASIC CONFIGURATION RUNTIME PATCH EXPERIMENT');
   console.log('================================================================');
+  console.log(`Controller URL    : ${controllerUrl}`);
+  console.log(`Live Mutation     : ${allowLiveMutation ? 'ENABLED (LIVE MUTATION ALLOWED)' : 'DISABLED (SAFE DRY-RUN ONLY)'}`);
 
   // 1. 获取当前状态
-  console.log('[STEP 1] Fetching pre-patch connections & global counters...');
+  console.log('\n[STEP 1] Fetching pre-patch connections & global counters...');
   const preConns = await fetchJson(`${controllerUrl}/connections`);
   const preConfigs = await fetchJson(`${controllerUrl}/configs`);
 
@@ -83,6 +100,15 @@ async function main() {
 
   console.log(`Pre-patch Counters  : Up ${preUploadTotal.toLocaleString()} B, Down ${preDownloadTotal.toLocaleString()} B`);
   console.log(`Pre-patch Conns     : ${preConnIds.length} active connections`);
+  console.log(`Current Mode        : ${preConfigs.mode || 'rule'}`);
+
+  if (!allowLiveMutation) {
+    console.log('\n[DRY-RUN / PREFLIGHT NOTICE]');
+    console.log(`  --allow-live-mutation was NOT specified.`);
+    console.log(`  Dry-run preflight check passed. Controller is responsive at ${controllerUrl}.`);
+    console.log(`  Skipping live PATCH mutation. Exiting safely.\n`);
+    return;
+  }
 
   // 2. 触发配置更新 (PATCH /configs)
   console.log('\n[STEP 2] Triggering config update via PATCH /configs...');
@@ -135,7 +161,9 @@ async function main() {
     }
   };
 
-  const outPath = path.join(projectRoot, 'tmp/discovery/work-package-b1/config-patch-report.json');
+  const outDir = path.join(projectRoot, 'tmp/discovery/work-package-b1');
+  fs.mkdirSync(outDir, { recursive: true });
+  const outPath = path.join(outDir, 'config-patch-report.json');
   fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
 
   console.log('\n----------------------------------------------------------------');

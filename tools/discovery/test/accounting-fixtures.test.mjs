@@ -1,7 +1,7 @@
 /**
  * accounting-fixtures.test.mjs
  * 
- * Stage R2: Accounting, Residual & Relay Pairing Fixture Unit Tests
+ * Stage F1: Accounting, Residual & Hardened Relay Pairing Unit Tests
  * 使用 Node 内置 node:test 模块
  */
 
@@ -29,29 +29,35 @@ function createTempSession(connFrames, trafficFrames = []) {
   return tmpDir;
 }
 
-test('Accounting: Missing attribution connection without structural relation must NOT be deduped as relay', async () => {
+test('F1-A: Simultaneous unrelated lookalike with same bytes must NOT be deduped (Structural False Positive)', async () => {
   const connFrames = [
     {
       receivedAt: '2026-08-21T00:00:00.000Z',
-      frame: {
-        uploadTotal: 1000,
-        downloadTotal: 2000,
-        connections: []
-      }
+      frame: { uploadTotal: 10000, downloadTotal: 20000, connections: [] }
     },
     {
       receivedAt: '2026-08-21T00:00:01.000Z',
       frame: {
-        uploadTotal: 1500,
-        downloadTotal: 3000,
+        uploadTotal: 20000,
+        downloadTotal: 40000,
         connections: [
+          // 逻辑应用连接: 走 Node-A
           {
-            id: 'conn-missing-attr',
-            upload: 500,
-            download: 1000,
-            metadata: { process: '', host: '1.2.3.4' },
+            id: 'app-conn-1',
+            upload: 5000,
+            download: 10000,
+            metadata: { process: 'curl.exe', host: 'example.com' },
+            rule: 'Match',
+            chains: ['Node-A', 'Proxy-Group-A'] // 多跳链路
+          },
+          // 缺失归因连接: 时间重叠、字节完全一样，但走完全无关的节点 Totally-Unrelated-Node
+          {
+            id: 'missing-attr-unrelated',
+            upload: 5000,
+            download: 10000,
+            metadata: { process: '', host: '192.168.1.1' },
             rule: '',
-            chains: ['DIRECT'] // 单跳 DIRECT，无上层代理结构关系
+            chains: ['Totally-Unrelated-Node']
           }
         ]
       }
@@ -61,24 +67,22 @@ test('Accounting: Missing attribution connection without structural relation mus
   const sessionDir = createTempSession(connFrames);
   try {
     const res = await analyzeSessionAccounting(sessionDir);
-    assert.equal(res.hierarchicalAttribution.confirmedRelayDuplicateUpload, 0, 'Must NOT be deduped');
-    assert.equal(res.hierarchicalAttribution.unpairedMissingAttributionUpload, 500, 'Must be kept as unpairedMissingAttribution');
-    assert.equal(res.hierarchicalAttribution.knownApplicationUpload, 0, 'Must NOT masquerade as knownApplication');
-    assert.equal(res.hierarchicalAttribution.uniqueObservedUpload, 500, 'Must be counted into uniqueObserved');
+    assert.equal(res.hierarchicalAttribution.confirmedRelayDuplicateUpload, 0, 'Must NOT be deduped as relay');
+    assert.equal(res.hierarchicalAttribution.confirmedRelayDuplicateDownload, 0, 'Must NOT be deduped as relay');
+    assert.equal(res.hierarchicalAttribution.unpairedMissingAttributionUpload, 5000, 'Must be kept as unpairedMissingAttribution');
+    assert.equal(res.hierarchicalAttribution.knownApplicationUpload, 5000, 'Known App traffic');
+    assert.equal(res.hierarchicalAttribution.uniqueObservedUpload, 10000, 'Both conns preserved in Unique Observed');
+    assert.equal(res.hierarchicalAttribution.confirmedRelayEvidence.length, 0, 'Zero confirmed relay evidence');
   } finally {
     fs.rmSync(sessionDir, { recursive: true, force: true });
   }
 });
 
-test('Accounting: Confirmed Relay Pair with structural chain relation must be deduped', async () => {
+test('F1-B: True structural relay pair with shared structural hops must be deduped with audit evidence', async () => {
   const connFrames = [
     {
       receivedAt: '2026-08-21T00:00:00.000Z',
-      frame: {
-        uploadTotal: 10000,
-        downloadTotal: 20000,
-        connections: []
-      }
+      frame: { uploadTotal: 10000, downloadTotal: 20000, connections: [] }
     },
     {
       receivedAt: '2026-08-21T00:00:01.000Z',
@@ -93,16 +97,16 @@ test('Accounting: Confirmed Relay Pair with structural chain relation must be de
             download: 10000,
             metadata: { process: 'curl.exe', host: 'example.com' },
             rule: 'Match',
-            chains: ['Node-A', 'Proxy-Group-B', 'Top-Rule-Group'] // 多跳链路
+            chains: ['Node-A', 'Proxy-Group-B', 'Top-Rule-Group']
           },
-          // 底层中继连接 (同一时间段、相同流量、无 process/rule)
+          // 底层中继连接 (共享物理出口 Node-A 与中间组 Proxy-Group-B)
           {
             id: 'relay-conn-1',
             upload: 5000,
             download: 10000,
             metadata: { process: '', host: '192.168.1.1' },
             rule: '',
-            chains: ['Node-A']
+            chains: ['Node-A', 'Proxy-Group-B']
           }
         ]
       }
@@ -116,12 +120,62 @@ test('Accounting: Confirmed Relay Pair with structural chain relation must be de
     assert.equal(res.hierarchicalAttribution.confirmedRelayDuplicateUpload, 5000, 'Relay duplicate recognized');
     assert.equal(res.hierarchicalAttribution.uniqueObservedUpload, 5000, 'Deduped Unique Observed matches physical delta');
     assert.equal(res.residual.residualUpload, 0, 'Zero residual with perfect dedup');
+    assert.equal(res.hierarchicalAttribution.confirmedRelayEvidence.length, 1, 'Exactly 1 evidence item generated');
+    const ev = res.hierarchicalAttribution.confirmedRelayEvidence[0].evidence;
+    assert.equal(ev.structuralRelation, true);
+    assert.deepEqual(ev.sharedStructuralHops, ['Node-A', 'Proxy-Group-B']);
   } finally {
     fs.rmSync(sessionDir, { recursive: true, force: true });
   }
 });
 
-test('Accounting: Counter Reset / Epoch Break in the middle of session must be detected', async () => {
+test('F1-C: Coincidental one-direction match with mismatched other direction must NOT be deduped', async () => {
+  const connFrames = [
+    {
+      receivedAt: '2026-08-21T00:00:00.000Z',
+      frame: { uploadTotal: 10000, downloadTotal: 20000, connections: [] }
+    },
+    {
+      receivedAt: '2026-08-21T00:00:01.000Z',
+      frame: {
+        uploadTotal: 20000,
+        downloadTotal: 40000,
+        connections: [
+          // 上层应用连接: Up 5000, Down 10000
+          {
+            id: 'app-conn-1',
+            upload: 5000,
+            download: 10000,
+            metadata: { process: 'curl.exe', host: 'example.com' },
+            rule: 'Match',
+            chains: ['Node-A', 'Group-A']
+          },
+          // 缺失归因连接: 具有相同出口 Node-A，Up 也为 5000，但 Down 仅有 100 字节 (巨大差异)
+          {
+            id: 'missing-attr-mismatch-down',
+            upload: 5000,
+            download: 100,
+            metadata: { process: '', host: '192.168.1.1' },
+            rule: '',
+            chains: ['Node-A']
+          }
+        ]
+      }
+    }
+  ];
+
+  const sessionDir = createTempSession(connFrames);
+  try {
+    const res = await analyzeSessionAccounting(sessionDir);
+    assert.equal(res.hierarchicalAttribution.confirmedRelayDuplicateUpload, 0, 'Must NOT be deduped');
+    assert.equal(res.hierarchicalAttribution.unpairedMissingAttributionUpload, 5000, 'Must be kept as unpaired');
+    assert.equal(res.hierarchicalAttribution.confirmedRelayEvidence.length, 0);
+  } finally {
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test('F1-D: Counter Reset / Epoch Break in the middle of session must be detected', async () => {
   const connFrames = [
     {
       receivedAt: '2026-08-21T00:00:00.000Z',
@@ -131,7 +185,7 @@ test('Accounting: Counter Reset / Epoch Break in the middle of session must be d
       receivedAt: '2026-08-21T00:00:01.000Z',
       frame: { uploadTotal: 60000, downloadTotal: 120000, connections: [] }
     },
-    // 中间发生内核重启，计数器回退为 1000 (尽管最后值可能变大)
+    // 中间发生内核重启，计数器回退为 1000
     {
       receivedAt: '2026-08-21T00:00:02.000Z',
       frame: { uploadTotal: 1000, downloadTotal: 2000, connections: [] }
@@ -153,7 +207,7 @@ test('Accounting: Counter Reset / Epoch Break in the middle of session must be d
   }
 });
 
-test('Accounting: Bootstrap preexisting connection must not count historical bytes into current delta', async () => {
+test('F1-E: Bootstrap preexisting connection must not count historical bytes into current delta', async () => {
   const connFrames = [
     // 首帧冷启动已有连接，自带 1MB 历史下载
     {

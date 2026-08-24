@@ -243,6 +243,7 @@ export async function analyzeCaptureSession(sessionDir, gtFile, options = {}) {
   return {
     session: path.basename(sessionDir),
     requestedIntervalMs: manifest.requestedConnectionsIntervalMs,
+    groundTruthTotal: groundTruths.length,
     eligibleConnectedCount,
     completedSuccessCount,
     windowViolations,

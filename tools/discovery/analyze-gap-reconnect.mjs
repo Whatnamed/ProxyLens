@@ -5,8 +5,13 @@
  * 
  * 核心指标:
  * 1. coverageGap: 基于真实前后帧时间戳的实际数据覆盖盲区
- * 2. 精细化跨 Gap 连接生命周期分类
- * 3. 跨 Gap 存活连接 delta 的时间区间归档
+ * 2. 精细化跨 Gap 连接生命周期分类:
+ *    - survivedAcrossGap: 跨 Gap 存活且保持 ID
+ *    - firstObservedAfterGapInsideGap: start 处于 [gapStart, postGapFirstFrame]
+ *    - firstObservedAfterGapBeforeGap: start 早于 gapStart (但 pre-gap 未被观察到)
+ *    - firstObservedAfterGapStartUnknown: start 缺失或无效
+ *    - disappearedDuringGap: pre-gap 存在但在 post-gap 消失
+ * 3. Gap 跨越处的 Counter Epoch Break 信号检测与物理流量可用性断言
  */
 
 import fs from 'fs';
@@ -54,12 +59,21 @@ export async function analyzeGapExperiment(gapBaseDir) {
   const p2FirstData = p2First.frame || p2First.payload || {};
   const p2LastData = p2Last.frame || p2Last.payload || {};
 
-  // 1. 全局计数器变化
-  const gapUploadDelta = p2FirstData.uploadTotal - p1LastData.uploadTotal;
-  const gapDownloadDelta = p2FirstData.downloadTotal - p1LastData.downloadTotal;
+  const p1LastUp = p1LastData.uploadTotal ?? 0;
+  const p1LastDown = p1LastData.downloadTotal ?? 0;
+  const p2FirstUp = p2FirstData.uploadTotal ?? 0;
+  const p2FirstDown = p2FirstData.downloadTotal ?? 0;
+  const p2LastUp = p2LastData.uploadTotal ?? 0;
+  const p2LastDown = p2LastData.downloadTotal ?? 0;
 
-  const p2ObservedUploadDelta = p2LastData.uploadTotal - p2FirstData.uploadTotal;
-  const p2ObservedDownloadDelta = p2LastData.downloadTotal - p2FirstData.downloadTotal;
+  // 1. Gap 跨越处 Counter Reset / Epoch Break 检测
+  const epochBreakAcrossGap = (p2FirstUp < p1LastUp || p2FirstDown < p1LastDown);
+
+  const gapUploadDelta = epochBreakAcrossGap ? null : (p2FirstUp - p1LastUp);
+  const gapDownloadDelta = epochBreakAcrossGap ? null : (p2FirstDown - p1LastDown);
+
+  const p2ObservedUploadDelta = (p2LastUp >= p2FirstUp) ? (p2LastUp - p2FirstUp) : null;
+  const p2ObservedDownloadDelta = (p2LastDown >= p2FirstDown) ? (p2LastDown - p2FirstDown) : null;
 
   // 2. 连接 ID 连续性与精细化跨 Gap 分类
   const p1ConnMap = new Map();
@@ -71,10 +85,12 @@ export async function analyzeGapExperiment(gapBaseDir) {
   let survivedAcrossGap = 0;
   let firstObservedAfterGapInsideGap = 0;
   let firstObservedAfterGapBeforeGap = 0;
+  let firstObservedAfterGapStartUnknown = 0;
   let disappearedDuringGap = 0;
 
   const survivingDeltas = [];
   const gapStartMs = new Date(p1LastTs).getTime();
+  const gapEndMs = new Date(p2FirstTs).getTime();
 
   for (const [id, c2] of p2FirstConnMap.entries()) {
     if (p1ConnMap.has(id)) {
@@ -93,11 +109,19 @@ export async function analyzeGapExperiment(gapBaseDir) {
         });
       }
     } else {
-      const connStartMs = c2.start ? new Date(c2.start).getTime() : 0;
-      if (connStartMs >= gapStartMs) {
-        firstObservedAfterGapInsideGap++;
+      if (!c2.start) {
+        firstObservedAfterGapStartUnknown++;
       } else {
-        firstObservedAfterGapBeforeGap++;
+        const connStartMs = new Date(c2.start).getTime();
+        if (isNaN(connStartMs)) {
+          firstObservedAfterGapStartUnknown++;
+        } else if (connStartMs >= gapStartMs && connStartMs <= gapEndMs + 1000) {
+          firstObservedAfterGapInsideGap++;
+        } else if (connStartMs < gapStartMs) {
+          firstObservedAfterGapBeforeGap++;
+        } else {
+          firstObservedAfterGapInsideGap++;
+        }
       }
     }
   }
@@ -125,6 +149,9 @@ export async function analyzeGapExperiment(gapBaseDir) {
       actualObservationGapMs,
       actualObservationGapSec: (actualObservationGapMs / 1000).toFixed(2)
     },
+    epochIntegrity: {
+      epochBreakAcrossGap
+    },
     globalGap: {
       gapUploadDelta,
       gapDownloadDelta,
@@ -137,6 +164,7 @@ export async function analyzeGapExperiment(gapBaseDir) {
       survivedAcrossGap,
       firstObservedAfterGapInsideGap,
       firstObservedAfterGapBeforeGap,
+      firstObservedAfterGapStartUnknown,
       disappearedDuringGap,
       survivingWithTrafficCount: survivingDeltas.length,
       sampleSurvivingDeltas: survivingDeltas.slice(0, 5)
@@ -170,10 +198,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
       console.log('================================================================');
       console.log(`Coverage Gap Window             : ${r.coverageGap.lastObservedAt} -> ${r.coverageGap.firstObservedAfterRecoveryAt}`);
       console.log(`Actual Observation Gap Duration : ${r.coverageGap.actualObservationGapSec}s (${r.coverageGap.actualObservationGapMs} ms)`);
+      console.log(`Epoch Status across Gap         : ${r.epochIntegrity.epochBreakAcrossGap ? 'COUNTER EPOCH BREAK DETECTED (PHYSICAL DELTA INVALID)' : 'MONOTONIC CONTINUOUS'}`);
       console.log('----------------------------------------------------------------');
       console.log('1. UNMONITORED GAP PHYSICAL TRAFFIC:');
-      console.log(`   Physical Upload during Gap   : ${r.globalGap.gapUploadDelta.toLocaleString()} Bytes`);
-      console.log(`   Physical Download during Gap : ${r.globalGap.gapDownloadDelta.toLocaleString()} Bytes`);
+      console.log(`   Physical Upload during Gap   : ${r.globalGap.gapUploadDelta !== null ? r.globalGap.gapUploadDelta.toLocaleString() + ' Bytes' : 'N/A (EPOCH BREAK)'}`);
+      console.log(`   Physical Download during Gap : ${r.globalGap.gapDownloadDelta !== null ? r.globalGap.gapDownloadDelta.toLocaleString() + ' Bytes' : 'N/A (EPOCH BREAK)'}`);
       console.log('----------------------------------------------------------------');
       console.log('2. FINE-GRAINED CONNECTION CLASSIFICATION:');
       console.log(`   Pre-Gap Active Conns (P1)    : ${r.connectionContinuity.p1LastConnsCount}`);
@@ -181,11 +210,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
       console.log(`   Survived Across Gap          : ${r.connectionContinuity.survivedAcrossGap} conns (ID remains stable!)`);
       console.log(`   Started Inside Gap           : ${r.connectionContinuity.firstObservedAfterGapInsideGap} conns`);
       console.log(`   Started Pre-Gap (Late Seen)  : ${r.connectionContinuity.firstObservedAfterGapBeforeGap} conns`);
+      console.log(`   Start Time Unknown           : ${r.connectionContinuity.firstObservedAfterGapStartUnknown} conns`);
       console.log(`   Disappeared during Gap       : ${r.connectionContinuity.disappearedDuringGap} conns`);
       console.log(`   Survived with Traffic Delta  : ${r.connectionContinuity.survivingWithTrafficCount} conns`);
       console.log('----------------------------------------------------------------');
       console.log('3. NAIVE BOOTSTRAP FAKE EXPLOSION COMPARISON:');
-      console.log(`   Actual Gap Download          : ${r.globalGap.gapDownloadDelta.toLocaleString()} Bytes`);
+      console.log(`   Actual Gap Download          : ${r.globalGap.gapDownloadDelta !== null ? r.globalGap.gapDownloadDelta.toLocaleString() + ' Bytes' : 'N/A'}`);
       console.log(`   Naive "First-Seen" Explosion : ${r.naiveBootstrapError.fakeDownloadExplosion.toLocaleString()} Bytes (FAKELY INFLATED!)`);
       console.log('================================================================\n');
     })

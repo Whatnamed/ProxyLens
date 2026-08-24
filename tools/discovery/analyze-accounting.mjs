@@ -141,7 +141,7 @@ export async function analyzeSessionAccounting(sessionDir) {
     }
   }
 
-  // 3. Relay 配对与结构关系验证
+  // 3. Relay 配对与 pair-specific 结构关系验证
   const appConns = [];
   const relayCandidates = [];
 
@@ -153,6 +153,8 @@ export async function analyzeSessionAccounting(sessionDir) {
     }
   }
 
+  const confirmedRelayEvidence = [];
+
   for (const rc of relayCandidates) {
     const rcUpDelta = rc.isPreExisting ? (rc.finalUp - rc.initialUp) : rc.finalUp;
     const rcDownDelta = rc.isPreExisting ? (rc.finalDown - rc.initialDown) : rc.finalDown;
@@ -161,19 +163,53 @@ export async function analyzeSessionAccounting(sessionDir) {
       const acUpDelta = ac.isPreExisting ? (ac.finalUp - ac.initialUp) : ac.finalUp;
       const acDownDelta = ac.isPreExisting ? (ac.finalDown - ac.initialDown) : ac.finalDown;
 
-      // 配对条件:
       // a. 时间窗口重叠
       const timeOverlap = (rc.firstSeen <= ac.lastSeen + 2000 && rc.lastSeen >= ac.firstSeen - 2000);
-      // b. 流量高度吻合 (Up 吻合且 Down 吻合，或主要方向吻合)
-      const upMatch = Math.abs(rcUpDelta - acUpDelta) < 2000 || (acUpDelta > 0 && Math.abs(rcUpDelta - acUpDelta) / acUpDelta < 0.05);
-      const downMatch = Math.abs(rcDownDelta - acDownDelta) < 2000 || (acDownDelta > 0 && Math.abs(rcDownDelta - acDownDelta) / acDownDelta < 0.05);
-      // c. 结构关系 (链路存在代理策略且有流量)
-      const hasTraffic = (rcUpDelta > 500 || rcDownDelta > 500);
-      const structuralRelation = Array.isArray(ac.chains) && ac.chains.length > 1;
 
-      if (timeOverlap && (upMatch || downMatch) && hasTraffic && structuralRelation) {
+      // b. pair-specific 结构关系验证 (rc 的出站 hop 必须存在于 ac 的 chains 中且出口物理节点一致)
+      const rcChains = Array.isArray(rc.chains) ? rc.chains : [];
+      const acChains = Array.isArray(ac.chains) ? ac.chains : [];
+      const sharedStructuralHops = rcChains.filter(hop => acChains.includes(hop));
+      const structuralRelation = (rcChains.length > 0 && acChains.length > 1 && sharedStructuralHops.length > 0 && rcChains[0] === acChains[0]);
+
+      // c. 保守流量匹配
+      const upDiff = Math.abs(rcUpDelta - acUpDelta);
+      const downDiff = Math.abs(rcDownDelta - acDownDelta);
+      const upMatch = upDiff < 2000 || (acUpDelta > 0 && upDiff / acUpDelta < 0.05);
+      const downMatch = downDiff < 2000 || (acDownDelta > 0 && downDiff / acDownDelta < 0.05);
+
+      const hasTraffic = (rcUpDelta > 500 || rcDownDelta > 500 || acUpDelta > 500 || acDownDelta > 500);
+      let trafficMatch = false;
+
+      if (hasTraffic) {
+        if (acUpDelta > 500 && acDownDelta > 500) {
+          trafficMatch = upMatch && downMatch;
+        } else if (acDownDelta > 2000 && acUpDelta <= 500) {
+          trafficMatch = downMatch && (upDiff < 2000);
+        } else if (acUpDelta > 2000 && acDownDelta <= 500) {
+          trafficMatch = upMatch && (downDiff < 2000);
+        } else {
+          trafficMatch = upMatch && downMatch;
+        }
+      }
+
+      if (timeOverlap && structuralRelation && trafficMatch) {
         rc.isConfirmedRelay = true;
         rc.pairedAppConnId = ac.id;
+        confirmedRelayEvidence.push({
+          candidateConnectionId: rc.id,
+          logicalConnectionId: ac.id,
+          evidence: {
+            timeOverlap,
+            uploadMatch: upMatch,
+            downloadMatch: downMatch,
+            trafficMatch,
+            candidateChains: rcChains,
+            logicalChains: acChains,
+            sharedStructuralHops,
+            structuralRelation
+          }
+        });
         break;
       }
     }
@@ -295,7 +331,8 @@ export async function analyzeSessionAccounting(sessionDir) {
       otherObservedUniqueUpload,
       otherObservedUniqueDownload,
       uniqueObservedUpload,
-      uniqueObservedDownload
+      uniqueObservedDownload,
+      confirmedRelayEvidence
     },
     residual: {
       residualUpload,
