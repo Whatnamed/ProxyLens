@@ -10,6 +10,7 @@ ProxyLens 作为一个面向 Windows + Mihomo 的本地旁路流量审计工具�
 
 ## Benchmark Evidence
 
+### 1. 离线状态机 Spike 对照实测 (Offline Spike Benchmark):
 基于 `tmp/phase1-language-spike/benchmark-report.json` 的实测数据：
 
 | 指标 | Go (v1.24.11) | Rust (v1.96.0) | 比较与结论 |
@@ -19,6 +20,12 @@ ProxyLens 作为一个面向 Windows + Mihomo 的本地旁路流量审计工具�
 | **8x (4000 帧) 吞吐量** | 4,505.9 帧/秒 (32.6万 obs/s) | 15,086.1 帧/秒 (109.3万 obs/s) | Rust 3.35x |
 | **单帧状态机处理耗时** | ~0.22 ms | ~0.06 ms | 在 250ms 快照间隔下，单帧开销占比均 < 0.1% |
 | **GC / 内存稳定性** | 4次 GC / ~39MB alloc (500帧) | 0 GC / 极致内存受控 | 均能满足 Windows 后台轻量驻留需求 |
+
+### 2. 生产路径实际 Windows 进程基准测试 (Measured Windows Process Benchmark):
+详见脱敏凭证 `docs/benchmarks/phase1-collector-benchmark.json`：
+- **250ms 快照周期**: 生产进程平均单帧 CPU 仅需 **0.297ms**（单核 CPU 占比仅 ~0.3%）；
+- **内存驻留 (Working Set / RSS)**: 平均 **13.60 MB**，峰值 **14.68 MB**，无内存泄漏；
+- **队列与延迟**: 有界队列零丢帧、零无标记丢弃，完全满足产品轻量常驻目标。
 
 ---
 

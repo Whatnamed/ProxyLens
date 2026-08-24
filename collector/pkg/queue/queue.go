@@ -1,12 +1,17 @@
 package queue
 
 import (
+	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
+	"time"
 )
 
-var ErrQueueFull = errors.New("bounded queue capacity reached (collector overload)")
+var (
+	ErrQueueFull    = errors.New("bounded queue capacity reached (collector overload)")
+	ErrQueueTimeout = errors.New("bounded queue push timed out (consumer stalled)")
+	ErrQueueClosed  = errors.New("bounded queue is closed")
+)
 
 // Metrics 记录队列统计信息
 type Metrics struct {
@@ -26,24 +31,26 @@ type BoundedQueue[T any] struct {
 	dequeuedCount  atomic.Int64
 	overloadsCount atomic.Int64
 	peakDepth      atomic.Int64
-	mu             sync.Mutex
-	onOverload     func()
+	isClosed       atomic.Bool
 }
 
 // NewBoundedQueue 创建指定容量的有界队列
-func NewBoundedQueue[T any](capacity int, onOverload func()) *BoundedQueue[T] {
+func NewBoundedQueue[T any](capacity int) *BoundedQueue[T] {
 	if capacity <= 0 {
-		capacity = 100
+		capacity = 200
 	}
 	return &BoundedQueue[T]{
-		ch:         make(chan T, capacity),
-		capacity:   capacity,
-		onOverload: onOverload,
+		ch:       make(chan T, capacity),
+		capacity: capacity,
 	}
 }
 
-// Push 尝试将元素放入队列，若满则触发过载保护并不静默丢弃
+// Push 尝试非阻塞入队，若满则返回 ErrQueueFull
 func (q *BoundedQueue[T]) Push(item T) error {
+	if q.isClosed.Load() {
+		return ErrQueueClosed
+	}
+
 	select {
 	case q.ch <- item:
 		q.enqueuedCount.Add(1)
@@ -57,30 +64,78 @@ func (q *BoundedQueue[T]) Push(item T) error {
 		return nil
 	default:
 		q.overloadsCount.Add(1)
-		if q.onOverload != nil {
-			q.onOverload()
-		}
 		return ErrQueueFull
 	}
 }
 
-// Pop 从队列取出元素
-func (q *BoundedQueue[T]) Pop() (T, bool) {
-	item, ok := <-q.ch
-	if ok {
-		q.dequeuedCount.Add(1)
+// PushWithContext 带 context 与超时的阻塞入队，防止静默丢弃
+func (q *BoundedQueue[T]) PushWithContext(ctx context.Context, item T, timeout time.Duration) error {
+	if q.isClosed.Load() {
+		return ErrQueueClosed
 	}
-	return item, ok
+
+	// 先尝试无等待入队
+	select {
+	case q.ch <- item:
+		q.enqueuedCount.Add(1)
+		cur := int64(len(q.ch))
+		for {
+			peak := q.peakDepth.Load()
+			if cur <= peak || q.peakDepth.CompareAndSwap(peak, cur) {
+				break
+			}
+		}
+		return nil
+	default:
+	}
+
+	// 队列已满，进入超时等待
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		q.overloadsCount.Add(1)
+		return ErrQueueTimeout
+	case q.ch <- item:
+		q.enqueuedCount.Add(1)
+		cur := int64(len(q.ch))
+		for {
+			peak := q.peakDepth.Load()
+			if cur <= peak || q.peakDepth.CompareAndSwap(peak, cur) {
+				break
+			}
+		}
+		return nil
+	}
 }
 
-// Channel 返回底层只读 channel
+// Pop 从队列取出元素并计入统计
+func (q *BoundedQueue[T]) Pop(ctx context.Context) (T, bool) {
+	var zero T
+	select {
+	case <-ctx.Done():
+		return zero, false
+	case item, ok := <-q.ch:
+		if ok {
+			q.dequeuedCount.Add(1)
+		}
+		return item, ok
+	}
+}
+
+// Channel 返回底层 channel
 func (q *BoundedQueue[T]) Channel() <-chan T {
 	return q.ch
 }
 
 // Close 关闭队列
 func (q *BoundedQueue[T]) Close() {
-	close(q.ch)
+	if q.isClosed.CompareAndSwap(false, true) {
+		close(q.ch)
+	}
 }
 
 // GetMetrics 获取当前队列指标

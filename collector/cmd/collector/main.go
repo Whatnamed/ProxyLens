@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -30,6 +31,7 @@ func printUsage() {
 	fmt.Println("  --controller <url>           Mihomo External Controller URL (default: http://127.0.0.1:9090)")
 	fmt.Println("  --connections-interval <ms>  Snapshot interval in ms (250, 500, 1000, default: 250)")
 	fmt.Println("  --secret <secret>            Controller Secret (prefers MIHOMO_SECRET env var)")
+	fmt.Println("  --validation-jsonl <path>    Optional path to emit validation JSONL events (for shadow verification)")
 }
 
 func main() {
@@ -58,69 +60,112 @@ func main() {
 }
 
 func runCollector(args []string) {
-	cfg, err := config.ParseFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing configuration: %v\n", err)
+	fs := flag.NewFlagSet("collector run", flag.ContinueOnError)
+	controllerURL := fs.String("controller", "http://127.0.0.1:9090", "Mihomo external controller URL")
+	interval := fs.Int("connections-interval", 250, "Snapshot interval in ms")
+	secret := fs.String("secret", os.Getenv("MIHOMO_SECRET"), "Controller secret")
+	queueCapacity := fs.Int("queue-capacity", 200, "Bounded queue capacity")
+	validationJSONL := fs.String("validation-jsonl", "", "Optional validation JSONL output path")
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
 		os.Exit(1)
+	}
+
+	cfg := &config.Config{
+		ControllerURL:       *controllerURL,
+		ConnectionsInterval: *interval,
+		Secret:              *secret,
+		QueueCapacity:       *queueCapacity,
+		InitialBackoffMs:    500,
+		MaxBackoffMs:        10000,
 	}
 
 	fmt.Println("================================================================")
 	fmt.Println("ProxyLens Production Collector (Phase 1 Prototype)")
 	fmt.Println("================================================================")
 	fmt.Println(cfg.String())
-	fmt.Println("Status: Starting read-only ingestion loop...")
+	if *validationJSONL != "" {
+		fmt.Printf("Validation JSONL Output : %s\n", *validationJSONL)
+	} else {
+		fmt.Println("Sink Mode               : Safe ProductionStatsSink (Bounded Memory)")
+	}
+	fmt.Println("Status: Starting unified read-only ingestion loop...")
 	fmt.Println("----------------------------------------------------------------")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 捕获 SIGINT / SIGTERM 优雅退出
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		fmt.Println("\n[SHUTDOWN] Received signal, flushing state engine...")
+		select {
+		case <-sigCh:
+			fmt.Println("\n[SHUTDOWN] Received signal, flushing state engine...")
+		case <-ctx.Done():
+			return
+		}
 		cancel()
 	}()
 
-	memSink := sink.NewMemorySink()
-	engine := state.NewStateEngine(state.EngineOptions{Sink: memSink})
+	// 监听 Stdin 优雅停止 (跨平台子进程通信)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			fmt.Println("\n[SHUTDOWN] Received stdin STOP, flushing state engine...")
+			cancel()
+		}
+	}()
 
-	q := queue.NewBoundedQueue[*types.ConnectionSnapshotFrame](cfg.QueueCapacity, func() {
-		fmt.Fprintf(os.Stderr, "[ALERT] Collector queue overload: consumer slow!\n")
-	})
+	var eventSink sink.EventSink
+	if *validationJSONL != "" {
+		vSink, err := sink.NewValidationJSONLSink(*validationJSONL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create validation sink: %v\n", err)
+			os.Exit(1)
+		}
+		defer vSink.Close()
+		eventSink = vSink
+	} else {
+		eventSink = sink.NewProductionStatsSink()
+	}
 
+	engine := state.NewStateEngine(state.EngineOptions{Sink: eventSink})
+	q := queue.NewBoundedQueue[*types.IngestItem](cfg.QueueCapacity)
 	c := client.NewControllerClient(cfg)
 
-	// 启动后台事件消费 Worker
+	// 单 Worker 串行消费统一有序队列
+	workerDone := make(chan struct{})
 	go func() {
+		defer close(workerDone)
 		for {
-			select {
-			case <-ctx.Done():
+			item, ok := q.Pop(ctx)
+			if !ok {
 				return
-			case frame, ok := <-q.Channel():
-				if !ok {
-					return
-				}
-				if err := engine.ProcessFrame(frame); err != nil {
-					fmt.Fprintf(os.Stderr, "[ERROR] State engine error: %v\n", err)
-				}
+			}
+			if err := engine.ProcessIngestItem(item); err != nil {
+				fmt.Fprintf(os.Stderr, "[ERROR] State engine processing error: %v\n", err)
 			}
 		}
 	}()
 
-	// 启动 Controller 客户端数据拉取
-	err = c.RunStreamLoop(ctx, q, func(gapStart time.Time) {
-		fmt.Printf("[GAP DETECTED] Controller disconnected at %s. Backoff reconnecting...\n", gapStart.Format("15:04:05.000"))
-		engine.MarkGapOpened(gapStart)
-	})
-
+	// 启动 Controller 监听循环
+	err := c.RunStreamLoop(ctx, q)
 	if err != nil && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "[FATAL] Stream loop error: %v\n", err)
-		os.Exit(1)
 	}
 
-	summary := memSink.GetSummary()
+	q.Close()
+	<-workerDone
+
+	var summary map[string]any
+	if ps, ok := eventSink.(*sink.ProductionStatsSink); ok {
+		summary = ps.GetSummary()
+	} else if vs, ok := eventSink.(*sink.ValidationJSONLSink); ok {
+		summary = vs.GetSummary()
+	}
+
+	summary["queueMetrics"] = q.GetMetrics()
 	summaryBytes, _ := json.MarshalIndent(summary, "", "  ")
 	fmt.Println("----------------------------------------------------------------")
 	fmt.Println("Session Summary:")
@@ -143,7 +188,10 @@ func runReplay(args []string) {
 	defer file.Close()
 
 	memSink := sink.NewMemorySink()
-	engine := state.NewStateEngine(state.EngineOptions{Sink: memSink})
+	engine := state.NewStateEngine(state.EngineOptions{
+		Sink:      memSink,
+		SessionID: "replay-canonical-session",
+	})
 
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, 1024*1024)
@@ -202,8 +250,11 @@ func runBenchmark(args []string) {
 		lines = append(lines, cpy)
 	}
 
-	memSink := sink.NewMemorySink()
-	engine := state.NewStateEngine(state.EngineOptions{Sink: memSink})
+	statsSink := sink.NewProductionStatsSink()
+	engine := state.NewStateEngine(state.EngineOptions{
+		Sink:      statsSink,
+		SessionID: "benchmark-session",
+	})
 
 	start := time.Now()
 	for it := 0; it < iterations; it++ {
@@ -217,7 +268,7 @@ func runBenchmark(args []string) {
 	}
 	elapsed := time.Since(start)
 
-	summary := memSink.GetSummary()
+	summary := statsSink.GetSummary()
 	summary["iterations"] = iterations
 	summary["wallTimeMs"] = elapsed.Milliseconds()
 	totalFrames := summary["totalFrames"].(int64)

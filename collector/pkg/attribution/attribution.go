@@ -22,7 +22,7 @@ func ClassifyRoute(chains []string) types.RouteType {
 	return types.RouteProxy
 }
 
-// ClassifyInitialAttribution 进行初阶归因分类
+// ClassifyInitialAttribution 进行初阶归因分类 (严格遵守 Phase 0 边界)
 func ClassifyInitialAttribution(conn *types.ConnectionSnapshot) types.AttributionClass {
 	hasProcess := strings.TrimSpace(conn.Metadata.Process) != ""
 	hasRule := strings.TrimSpace(conn.Rule) != ""
@@ -31,7 +31,8 @@ func ClassifyInitialAttribution(conn *types.ConnectionSnapshot) types.Attributio
 		return types.ClassKnownApplication
 	}
 
-	if len(conn.Chains) > 0 {
+	// 仅在进程与规则均缺失且具有代理链路时标记为 relay_candidate
+	if !hasProcess && !hasRule && len(conn.Chains) > 0 {
 		return types.ClassRelayCandidate
 	}
 
@@ -100,19 +101,59 @@ func CheckStructuralRelayPair(
 	}
 
 	evidence := map[string]any{
-		"candidateId":         candidate.ID,
-		"logicalId":           logical.ID,
-		"candidateChains":     candChains,
-		"logicalChains":       logChains,
-		"sharedHops":          sharedHops,
-		"structuralRelation":  true,
-		"uploadMatch":         upMatch,
-		"downloadMatch":       downMatch,
-		"candidateUploadDelta": candUpDelta,
-		"logicalUploadDelta":   logUpDelta,
+		"candidateId":            candidate.ID,
+		"logicalId":              logical.ID,
+		"candidateChains":        candChains,
+		"logicalChains":          logChains,
+		"sharedHops":             sharedHops,
+		"structuralRelation":     true,
+		"uploadMatch":            upMatch,
+		"downloadMatch":          downMatch,
+		"candidateUploadDelta":   candUpDelta,
+		"logicalUploadDelta":     logUpDelta,
 		"candidateDownloadDelta": candDownDelta,
 		"logicalDownloadDelta":   logDownDelta,
 	}
 
 	return true, evidence
+}
+
+// PerformFrameRelayDeduplication 在当前帧的增量中自动执行 Relay Candidate 结构去重配对
+func PerformFrameRelayDeduplication(
+	connections []types.ConnectionSnapshot,
+	deltas map[string][2]int64,
+) map[string]map[string]any {
+	confirmedRelays := make(map[string]map[string]any)
+
+	var candidates []*types.ConnectionSnapshot
+	var logicals []*types.ConnectionSnapshot
+
+	for i := range connections {
+		c := &connections[i]
+		initialClass := ClassifyInitialAttribution(c)
+		if initialClass == types.ClassRelayCandidate {
+			candidates = append(candidates, c)
+		} else if initialClass == types.ClassKnownApplication {
+			logicals = append(logicals, c)
+		}
+	}
+
+	if len(candidates) == 0 || len(logicals) == 0 {
+		return confirmedRelays
+	}
+
+	// 贪心匹配具有确凿结构证据与流量证据的 Pair
+	for _, cand := range candidates {
+		candDelta := deltas[cand.ID]
+		for _, log := range logicals {
+			logDelta := deltas[log.ID]
+			matched, evidence := CheckStructuralRelayPair(cand, log, candDelta[0], candDelta[1], logDelta[0], logDelta[1])
+			if matched {
+				confirmedRelays[cand.ID] = evidence
+				break // 已确认为 confirmed duplicate，避免重复匹配
+			}
+		}
+	}
+
+	return confirmedRelays
 }

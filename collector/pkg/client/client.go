@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/config"
@@ -30,6 +32,7 @@ type VersionInfo struct {
 type ControllerClient struct {
 	config     *config.Config
 	httpClient *http.Client
+	hasConnectedBefore atomic.Bool
 }
 
 // NewControllerClient 创建只读客户端
@@ -76,16 +79,20 @@ func (c *ControllerClient) CheckVersion(ctx context.Context) (*VersionInfo, erro
 	return &info, nil
 }
 
-// ReadWebSocketFrames 从底层 TCP 连接读取 WebSocket Text 帧 (RFC 6455)
-func ReadWebSocketFrames(r *bufio.Reader) ([]byte, error) {
+// ReadWebSocketMessage 从连接读取完整的 WebSocket Text 消息 (支持 Ping/Pong、分片帧、超时与 Close)
+func ReadWebSocketMessage(conn net.Conn, r *bufio.Reader) ([]byte, error) {
+	var assembledPayload []byte
+
 	for {
 		header, err := r.ReadByte()
 		if err != nil {
 			return nil, err
 		}
 
+		fin := (header & 0x80) != 0
 		opcode := header & 0x0F
-		// Opcode 1: Text, Opcode 8: Close, Opcode 9: Ping, Opcode 10: Pong
+
+		// Opcode 8: Close
 		if opcode == 0x08 {
 			return nil, io.EOF
 		}
@@ -136,14 +143,31 @@ func ReadWebSocketFrames(r *bufio.Reader) ([]byte, error) {
 			}
 		}
 
-		if opcode == 0x01 { // Text Frame
-			return payload, nil
+		// Opcode 9: Ping -> 自动回复 Pong (Opcode 10)
+		if opcode == 0x09 {
+			pongFrame := []byte{0x8A, byte(len(payload))}
+			pongFrame = append(pongFrame, payload...)
+			_, _ = conn.Write(pongFrame)
+			continue
 		}
-		// 忽略 ping/pong 等控制帧，继续读下一帧
+
+		// Opcode 10: Pong (忽略)
+		if opcode == 0x0A {
+			continue
+		}
+
+		// Opcode 1: Text, Opcode 0: Continuation
+		if opcode == 0x01 || opcode == 0x00 {
+			assembledPayload = append(assembledPayload, payload...)
+			if fin {
+				return assembledPayload, nil
+			}
+			continue
+		}
 	}
 }
 
-// ConnectWebSocket 建立与 /connections 的 WebSocket 流
+// ConnectWebSocket 建立与 /connections 的 WebSocket 流 (支持 TLS/WSS)
 func (c *ControllerClient) ConnectWebSocket(ctx context.Context) (net.Conn, *bufio.Reader, error) {
 	u, err := url.Parse(c.config.ControllerURL)
 	if err != nil {
@@ -151,8 +175,9 @@ func (c *ControllerClient) ConnectWebSocket(ctx context.Context) (net.Conn, *buf
 	}
 
 	host := u.Host
+	isTLS := u.Scheme == "https" || u.Scheme == "wss"
 	if !strings.Contains(host, ":") {
-		if u.Scheme == "https" {
+		if isTLS {
 			host += ":443"
 		} else {
 			host += ":80"
@@ -160,9 +185,22 @@ func (c *ControllerClient) ConnectWebSocket(ctx context.Context) (net.Conn, *buf
 	}
 
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", host)
+	rawConn, err := dialer.DialContext(ctx, "tcp", host)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	var conn net.Conn = rawConn
+	if isTLS {
+		serverName := u.Hostname()
+		tlsConn := tls.Client(rawConn, &tls.Config{
+			ServerName: serverName,
+		})
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			rawConn.Close()
+			return nil, nil, fmt.Errorf("TLS handshake failed: %w", err)
+		}
+		conn = tlsConn
 	}
 
 	// 生成随机 Sec-WebSocket-Key
@@ -212,11 +250,10 @@ func (c *ControllerClient) ConnectWebSocket(ctx context.Context) (net.Conn, *buf
 	return conn, reader, nil
 }
 
-// RunStreamLoop 执行 WebSocket 监听循环与指数退避重连
+// RunStreamLoop 执行 WebSocket 监听循环并将有序项推入有界队列
 func (c *ControllerClient) RunStreamLoop(
 	ctx context.Context,
-	q *queue.BoundedQueue[*types.ConnectionSnapshotFrame],
-	onGapOpened func(time.Time),
+	q *queue.BoundedQueue[*types.IngestItem],
 ) error {
 	backoff := time.Duration(c.config.InitialBackoffMs) * time.Millisecond
 	maxBackoff := time.Duration(c.config.MaxBackoffMs) * time.Millisecond
@@ -237,16 +274,24 @@ func (c *ControllerClient) RunStreamLoop(
 		// 1. Preflight 检查
 		_, err := c.CheckVersion(ctx)
 		if err != nil {
-			if onGapOpened != nil {
-				onGapOpened(time.Now())
+			if !c.hasConnectedBefore.Load() {
+				// 启动时尚未连上：仅记录 Health，不生成虚假 Gap
+				_ = q.Push(&types.IngestItem{
+					Kind:        types.ItemCollectorHealth,
+					Timestamp:   time.Now(),
+					HealthIssue: "controller_unavailable_before_first_coverage",
+					Details: map[string]any{
+						"controller": c.config.RedactedControllerURL(),
+						"error":      err.Error(),
+					},
+				})
 			}
-			// 增加 Jitter
+			// 增加 Jitter 避免惊群
 			jitter := time.Duration(getRandomJitterMs(100)) * time.Millisecond
-			sleepDur := backoff + jitter
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-time.After(sleepDur):
+			case <-time.After(backoff + jitter):
 			}
 			backoff *= 2
 			if backoff > maxBackoff {
@@ -258,9 +303,6 @@ func (c *ControllerClient) RunStreamLoop(
 		// 2. 建立 WebSocket 连接
 		conn, reader, err := c.ConnectWebSocket(ctx)
 		if err != nil {
-			if onGapOpened != nil {
-				onGapOpened(time.Now())
-			}
 			select {
 			case <-ctx.Done():
 				return nil
@@ -273,29 +315,48 @@ func (c *ControllerClient) RunStreamLoop(
 			continue
 		}
 
-		// 成功建立连接，重置退避
+		// 标记曾经成功建立连接
+		c.hasConnectedBefore.Store(true)
 		backoff = time.Duration(c.config.InitialBackoffMs) * time.Millisecond
 
-		// 3. 读取快照帧
-		for {
+		// 启动异步 Context 监控以支持快速退出
+		doneCh := make(chan struct{})
+		go func() {
 			select {
 			case <-ctx.Done():
 				conn.Close()
-				return nil
-			default:
+			case <-doneCh:
 			}
+		}()
 
-			payloadBytes, err := ReadWebSocketFrames(reader)
+		// 3. 读取快照帧并推入有序队列
+		for {
+			payloadBytes, err := ReadWebSocketMessage(conn, reader)
 			if err != nil {
+				close(doneCh)
 				conn.Close()
-				if onGapOpened != nil {
-					onGapOpened(time.Now())
-				}
-				break // 连接中断，进入重连循环
+
+				// 连接断开：向有序队列推入 ItemGapOpened 标记（仅在已健康断开后）
+				gapOpenedTime := time.Now()
+				_ = q.PushWithContext(ctx, &types.IngestItem{
+					Kind:      types.ItemGapOpened,
+					Timestamp: gapOpenedTime,
+				}, 1*time.Second)
+
+				break // 进入重连循环
 			}
 
 			var payload types.ConnectionSnapshotPayload
 			if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+				// JSON 反序列化错误：不静默忽略，发出 Health 降级
+				_ = q.Push(&types.IngestItem{
+					Kind:        types.ItemCollectorHealth,
+					Timestamp:   time.Now(),
+					HealthIssue: "frame_json_decode_error",
+					Details: map[string]any{
+						"error": err.Error(),
+					},
+				})
 				continue
 			}
 
@@ -304,9 +365,22 @@ func (c *ControllerClient) RunStreamLoop(
 				Frame:      payload,
 			}
 
-			// 放入有界队列
-			if err := q.Push(frame); err != nil {
-				// 队列过载告警
+			// 带超时推入有界队列，防止静默丢帧
+			item := &types.IngestItem{
+				Kind:      types.ItemFrame,
+				Timestamp: time.Now(),
+				Frame:     frame,
+			}
+
+			pushErr := q.PushWithContext(ctx, item, 500*time.Millisecond)
+			if pushErr != nil {
+				if pushErr == queue.ErrQueueTimeout {
+					_ = q.Push(&types.IngestItem{
+						Kind:        types.ItemQueueOverload,
+						Timestamp:   time.Now(),
+						HealthIssue: "queue_push_timeout_degradation",
+					})
+				}
 			}
 		}
 	}
