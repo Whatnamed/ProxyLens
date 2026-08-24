@@ -155,3 +155,50 @@ test('F2-4: runControlledSwitch happy path must verify switch, execute callback,
     await mock.close();
   }
 });
+
+test('F2-5: runConfigPatchExperiment without allowLiveMutation must do dry-run and send 0 PATCH requests', async () => {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, path: req.url });
+    if (req.method === 'GET' && req.url === '/connections') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ uploadTotal: 1000, downloadTotal: 2000, connections: [] }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/configs') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ mode: 'rule' }));
+      return;
+    }
+    if (req.method === 'PATCH' && req.url === '/configs') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  const mock = await new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        url: `http://127.0.0.1:${server.address().port}`,
+        close: () => new Promise(r => server.close(r))
+      });
+    });
+  });
+
+  try {
+    const { runConfigPatchExperiment } = await import('../scenarios/run-config-patch-experiment.mjs');
+    const res = await runConfigPatchExperiment({
+      controllerUrl: mock.url,
+      allowLiveMutation: false
+    });
+
+    assert.equal(res.dryRun, true);
+    const patchRequests = requests.filter(r => r.method === 'PATCH');
+    assert.equal(patchRequests.length, 0, 'Zero PATCH requests must be sent in dry-run');
+  } finally {
+    await mock.close();
+  }
+});

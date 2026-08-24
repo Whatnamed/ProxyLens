@@ -94,16 +94,22 @@ export async function runControlledSwitch({
 
   let rollbackDone = false;
   let rollbackVerified = false;
+  let switchRequestedAt = null;
+  let switchVerifiedAt = null;
+  let rollbackRequestedAt = null;
+  let rollbackVerifiedAt = null;
 
   const performRollback = async () => {
     if (rollbackDone) return;
     rollbackDone = true;
+    rollbackRequestedAt = new Date().toISOString();
     try {
       console.log(`\n[SWITCH-GUARD] Performing best-effort rollback: switching [${groupName}] back to [${originalNode}]...`);
       await setProxyGroupNode(controllerUrl, groupName, originalNode);
       
       // 二次 GET 验证回滚结果
       const postRollbackInfo = await getProxyGroup(controllerUrl, groupName);
+      rollbackVerifiedAt = new Date().toISOString();
       if (postRollbackInfo.now === originalNode) {
         rollbackVerified = true;
         console.log(`[SWITCH-GUARD] Rollback successfully verified: [${groupName}] is restored to [${originalNode}].`);
@@ -112,6 +118,7 @@ export async function runControlledSwitch({
         console.error(`[FATAL ROLLBACK MISMATCH] Group [${groupName}] expected [${originalNode}], but GET returned [${postRollbackInfo.now}]!`);
       }
     } catch (err) {
+      rollbackVerifiedAt = new Date().toISOString();
       rollbackVerified = false;
       console.error(`[FATAL ROLLBACK ERROR] Failed to restore node for ${groupName}:`, err.message);
     }
@@ -138,11 +145,13 @@ export async function runControlledSwitch({
   });
 
   try {
+    switchRequestedAt = new Date().toISOString();
     console.log(`[SWITCH-GUARD] Switching [${groupName}] from [${originalNode}] -> [${targetNode}]...`);
     await setProxyGroupNode(controllerUrl, groupName, targetNode);
 
     // 二次 GET 验证切换生效
     const verifyInfo = await getProxyGroup(controllerUrl, groupName);
+    switchVerifiedAt = new Date().toISOString();
     if (verifyInfo.now !== targetNode) {
       throw new Error(`Switch verification failed: Expected [${targetNode}], but GET returned [${verifyInfo.now}]`);
     }
@@ -162,7 +171,15 @@ export async function runControlledSwitch({
     throw new Error(`Rollback verification failed: Group [${groupName}] was not verified restored to [${originalNode}]`);
   }
 
-  return { originalNode, switchedNode: targetNode, rollbackVerified: true };
+  return {
+    originalNode,
+    switchedNode: targetNode,
+    rollbackVerified: true,
+    switchRequestedAt,
+    switchVerifiedAt,
+    rollbackRequestedAt,
+    rollbackVerifiedAt
+  };
 }
 
 // CLI 执行

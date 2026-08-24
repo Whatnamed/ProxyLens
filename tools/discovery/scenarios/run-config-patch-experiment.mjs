@@ -80,8 +80,9 @@ function patchConfig(controllerUrl, payload) {
   });
 }
 
-async function main() {
-  const { controllerUrl, allowLiveMutation } = parseArgs();
+export async function runConfigPatchExperiment(options = {}) {
+  const controllerUrl = options.controllerUrl || 'http://127.0.0.1:9090';
+  const allowLiveMutation = options.allowLiveMutation || false;
 
   console.log('================================================================');
   console.log('STAGE R4: BASIC CONFIGURATION RUNTIME PATCH EXPERIMENT');
@@ -107,7 +108,13 @@ async function main() {
     console.log(`  --allow-live-mutation was NOT specified.`);
     console.log(`  Dry-run preflight check passed. Controller is responsive at ${controllerUrl}.`);
     console.log(`  Skipping live PATCH mutation. Exiting safely.\n`);
-    return;
+    return {
+      dryRun: true,
+      preConfigs,
+      preUploadTotal,
+      preDownloadTotal,
+      activeConnectionsCount: preConnIds.length
+    };
   }
 
   // 2. 触发配置更新 (PATCH /configs)
@@ -175,9 +182,14 @@ async function main() {
   console.log(`  Closed on Patch         : ${closedIds.length} closed`);
   console.log(`  New after Patch         : ${newIds.length} new`);
   console.log('================================================================\n');
+
+  return report;
 }
 
-main().catch(err => {
-  console.error('[FATAL]', err);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  const options = parseArgs();
+  runConfigPatchExperiment(options).catch(err => {
+    console.error('[FATAL]', err);
+    process.exit(1);
+  });
+}

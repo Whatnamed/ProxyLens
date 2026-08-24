@@ -445,7 +445,7 @@
 
 | 核心课题 | 验证状态 | 证据类型 | 阻塞 Phase 1? | 结论 |
 | :--- | :---: | :---: | :---: | :--- |
-| **Live Controller Correlation** | **PASS** | `[Observed]` | **YES** | 100% 确认接入承载 TUN 的 live Mihomo |
+| **Live Controller Correlation** | **PASS** | `[Observed]` | **YES** | 确认接入承载测试流量的 live FlClashCore |
 | **Core Fields Coverage** | **PASS** | `[Observed]` | **YES** | 字段语义与缺失分类完全清晰 |
 | **Connection Counter Monotonicity** | **PASS** | `[Observed]` | **YES** | 稳态单调非递减确立 |
 | **Bootstrap Baseline** | **PASS** | `[Observed]` | **YES** | 区分冷启动与稳态增量 |

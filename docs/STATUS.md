@@ -14,7 +14,7 @@
   - TUN 状态: 启用 (`device: FlClash`, `find-process-mode: always`, `enhanced-mode: fake-ip`, `mode: rule`)
   - Live 运行时内核: `Mihomo Meta v1.10.0` (GET `/version` 返回)
 - **Controller 验证状态 (Controller Validation Status)**：
-  - `Phase 0C-0 Gate: PASS` `[Observed]`：通过受控网络请求与进程相关性比对（curl.exe / 日常连接），100% 证明 Probe 成功接入正在承载 TUN 日常流量的 live FlClashCore (127.0.0.1:9090)。
+  - `Phase 0C-0 Gate: PASS` `[Observed]`：通过受控网络请求与进程相关性实证比对（curl.exe / 日常连接），确认当前 Probe 接入承载测试流量的 live FlClashCore (127.0.0.1:9090)。
   - `Phase 0C-1 DIRECT / PROXY Baseline: COMPLETED` `[Observed]`：成功捕获典型 DIRECT 样本 (`chains: ["DIRECT"]`) 与 PROXY 样本 (`chains: [出站节点, 策略组...]`)。
   - `Phase 0C-2 UDP / NTP / QUIC: COMPLETED` `[Observed]`：验证了 Windows TUN 下 UDP 进程归因完整性、受控 NTP 48B/48B 流量精确性与 UDP Pseudo-connection 留存现象（6秒以上）。
   - `Phase 0C-3A & 3B Connection Counter Semantics: COMPLETED` `[Observed]`：实测证明稳态长连接单调非递减计数与冷启动基线（Bootstrap vs Steady-State）。
@@ -98,7 +98,6 @@
 - **Stage B2 (Phase 0C-5 Lifecycle, Config Update & Controller Gaps)**：
   - 实测 4.46s Monitoring Gap，证明存活连接稳定性与 Naive 算法 1450 倍虚假爆炸缺陷；
   - 实测运行时配置更新（PATCH）下计数器连续性与连接保持；
-  - 确立生命周期恢复与内核冷重启检测状态机。
   - 确立生命周期恢复与内核冷重启检测状态机。
 - **Stage B3 (Phase 0 Synthesis & Collector RFC)**：
   - 汇总量化指标矩阵，输出完整的 Collector 状态机转移图与数学模型。
