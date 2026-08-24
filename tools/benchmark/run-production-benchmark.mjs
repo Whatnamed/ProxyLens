@@ -188,14 +188,15 @@ async function runCadenceSanity(fixtureFrames, cadenceMs, durationSec = 10) {
   const pushedCount = mock.getPushedCount();
   const observedFps = elapsedSec > 0 ? pushedCount / elapsedSec : 0;
 
-  // 从 collector stdout 中解析 processedFrames
-  let collectorProcessedFrames = pushedCount;
-  try {
-    const summaryMatch = stdoutData.match(/"totalFrames":\s*(\d+)/);
-    if (summaryMatch) {
-      collectorProcessedFrames = parseInt(summaryMatch[1], 10);
-    }
-  } catch {}
+  // 从 collector stdout 中严格解析 processedFrames
+  const summaryMatch = stdoutData.match(/"totalFrames":\s*(\d+)/);
+  if (!summaryMatch) {
+    throw new Error(`[FATAL BENCHMARK ERROR] Could not parse totalFrames from collector stdout!`);
+  }
+  const collectorProcessedFrames = parseInt(summaryMatch[1], 10);
+  if (collectorProcessedFrames !== pushedCount) {
+    throw new Error(`[FATAL BENCHMARK ERROR] Processed frames (${collectorProcessedFrames}) != Pushed frames (${pushedCount})`);
+  }
 
   console.log(`  Pushed Frames         : ${pushedCount}`);
   console.log(`  Processed Frames      : ${collectorProcessedFrames}`);

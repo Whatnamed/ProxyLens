@@ -116,24 +116,25 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 
 ---
 
-## Phase 2 — Persistence & Correctness
+## Phase 2 — Local Storage & Aggregations [IN PROGRESS]
 
 ### Goal
 
 把已经验证可靠的连接状态转换为长期可查询的本地历史，并建立正确性对账和 Monitoring Gap 模型。
 
-### Deliverables
+### Phase 2A — Storage Foundation & Event Journal [COMPLETED]
+- [x] 选定 SQLite + WAL 驱动（纯 Go `modernc.org/sqlite`，ADR 0002）；
+- [x] 实现不可变权威事件日志 `event_journal` 与单调游标 `storage_cursors`；
+- [x] 实现 `connections`、`connection_traffic`、`monitoring_gaps`（支持流中断与进程级离线 Gap）、`residual_intervals` 与 `collector_health` 实时投影；
+- [x] 实现 `RebuildProjections` 支持从 Journal 100% 完整重建；
+- [x] 实现轻量 `QueryService` 并提供 `collector storage inspect / gaps / rebuild` CLI 命令；
+- [x] 端到端实测验证通过（NTP、短请求、持续下载持久化与离线 Gap 推导 100% PASS）。
 
-1. 本地持久化层；
-2. 正式历史连接数据模型；
-3. Monitoring Gap 数据模型；
-4. 长连接阶段性持久化机制；
-5. 批量写入与崩溃恢复策略；
-6. 必要索引；
-7. 流量一致性验证工具 / 测试；
-8. 第二轮存储与查询 benchmark。
-
-SQLite + WAL 是当前首选候选，但应在这一阶段通过真实负载正式确认，而不是因为文档提前写过就不可修改。
+### Phase 2B — Aggregations, Authoritative Accounting & Full-Stack Benchmark [NEXT]
+- [ ] 多维分时聚合表（按 Process、Host、Outbound Node 聚合分时用量）；
+- [ ] 全局时序下的权威 Relay 重新对账与 Residual 校验；
+- [ ] 数据保留与清理策略 (Retention & Periodic WAL Checkpoint)；
+- [ ] 全栈端到端写入性能与长效 Soak 基准测试。
 
 ### Acceptance
 
