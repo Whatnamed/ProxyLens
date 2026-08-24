@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -75,7 +76,7 @@ func NewStateEngine(opts EngineOptions) *StateEngine {
 	}
 }
 
-// emitEvent 统一通过 Sink 输出事件并生成唯一序列和确定性 ID
+// emitEvent 统一通过 Sink 输出事件并生成唯一序列和确定性 ID，任何错误必须向上返回
 func (e *StateEngine) emitEvent(event *types.CollectorEvent) error {
 	e.eventSequence++
 	event.SessionID = e.sessionID
@@ -160,7 +161,7 @@ func (e *StateEngine) ProcessFrame(frame *types.ConnectionSnapshotFrame) error {
 	return e.processFrameInternal(frame)
 }
 
-// processFrameInternal 串行执行核心状态机计算
+// processFrameInternal 串行执行确定性状态机计算
 func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame) error {
 	e.frameSequence++
 	e.eventSequence = 0
@@ -206,9 +207,9 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				Timestamp:           frameTs,
 				AttributionInterval: []string{gapStartStr, frameTsStr},
 				Details: map[string]any{
-					"actualGapMs":                   frameTs.Sub(e.gapStartTime).Milliseconds(),
-					"gapPhysicalDeltaUnavailable":   true,
-					"reason":                        "epoch_reset_across_gap",
+					"actualGapMs":                 frameTs.Sub(e.gapStartTime).Milliseconds(),
+					"gapPhysicalDeltaUnavailable": true,
+					"reason":                      "epoch_reset_across_gap",
 				},
 			}); err != nil {
 				return err
@@ -237,12 +238,17 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		} else {
 			// 正常 Gap 恢复（Epoch 连续）
 			e.sessionState = types.SessionRecovering
+			globalGapUp := payload.UploadTotal - e.prevUploadTotal
+			globalGapDown := payload.DownloadTotal - e.prevDownloadTotal
+
 			if err := e.emitEvent(&types.CollectorEvent{
 				Type:                types.EventMonitoringGapClosed,
 				Timestamp:           frameTs,
 				AttributionInterval: []string{gapStartStr, frameTsStr},
 				Details: map[string]any{
-					"actualGapMs": frameTs.Sub(e.gapStartTime).Milliseconds(),
+					"actualGapMs":           frameTs.Sub(e.gapStartTime).Milliseconds(),
+					"globalGapUploadDelta":   globalGapUp,
+					"globalGapDownloadDelta": globalGapDown,
 				},
 			}); err != nil {
 				return err
@@ -253,21 +259,24 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				currMap[c.ID] = c
 			}
 
-			// a. 跨 Gap 存活连接
-			for id, c := range currMap {
+			// a. 跨 Gap 存活连接与新增连接（严格按切片原始顺序）
+			for _, c := range payload.Connections {
+				id := c.ID
 				if prev, exists := e.activeMap[id]; exists {
 					deltaUp := c.Upload - prev.LastUploadCounter
 					deltaDown := c.Download - prev.LastDownloadCounter
 
 					if deltaUp < 0 || deltaDown < 0 {
-						_ = e.emitEvent(&types.CollectorEvent{
+						if err := e.emitEvent(&types.CollectorEvent{
 							Type:         types.EventCollectorHealth,
 							Timestamp:    frameTs,
 							ConnectionID: id,
 							Details: map[string]any{
 								"issue": "connection_counter_regression_across_gap",
 							},
-						})
+						}); err != nil {
+							return err
+						}
 						deltaUp = 0
 						deltaDown = 0
 					}
@@ -304,24 +313,41 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 						return err
 					}
 				} else {
-					// b. 恢复后首次出现的连接 (Baseline 归属，杜绝瞬时爆炸)
+					// b. 恢复后首次出现的连接 (确定性分类与 Baseline 归属)
 					route := attribution.ClassifyRoute(c.Chains)
 					attrClass := attribution.ClassifyInitialAttribution(&c)
 					quality := c.Metadata.DeriveQualityFlags(c.Rule, c.Chains)
 
+					startClass := "start_unknown"
+					if c.Start != "" {
+						if st, err := time.Parse(time.RFC3339Nano, c.Start); err == nil {
+							if st.After(e.gapStartTime) || st.Equal(e.gapStartTime) {
+								startClass = "started_inside_gap"
+							} else {
+								startClass = "started_before_gap_but_not_previously_visible"
+							}
+						} else if st, err := time.Parse(time.RFC3339, c.Start); err == nil {
+							if st.After(e.gapStartTime) || st.Equal(e.gapStartTime) {
+								startClass = "started_inside_gap"
+							} else {
+								startClass = "started_before_gap_but_not_previously_visible"
+							}
+						}
+					}
+
 					e.activeMap[id] = &ActiveConnectionState{
-						Snapshot:                  c,
-						FirstObservedAt:           frameTs,
-						LastObservedAt:            frameTs,
-						LastUploadCounter:         c.Upload,
-						LastDownloadCounter:       c.Download,
-						BaselineUploadCounter:     c.Upload,
-						BaselineDownloadCounter:   c.Download,
-						MonitoredCumulativeUpload: 0,
+						Snapshot:                    c,
+						FirstObservedAt:             frameTs,
+						LastObservedAt:              frameTs,
+						LastUploadCounter:           c.Upload,
+						LastDownloadCounter:         c.Download,
+						BaselineUploadCounter:       c.Upload,
+						BaselineDownloadCounter:     c.Download,
+						MonitoredCumulativeUpload:   0,
 						MonitoredCumulativeDownload: 0,
-						Route:                     route,
-						AttributionClass:          attrClass,
-						QualityFlags:              quality,
+						Route:                       route,
+						AttributionClass:            attrClass,
+						QualityFlags:                quality,
 					}
 
 					if err := e.emitEvent(&types.CollectorEvent{
@@ -346,30 +372,40 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 						BaselineUploadCounter:       c.Upload,
 						BaselineDownloadCounter:     c.Download,
 						Precision:                   "gap_post_baseline",
+						Details: map[string]any{
+							"startClassification": startClass,
+						},
 					}); err != nil {
 						return err
 					}
 				}
 			}
 
-			// c. 在 Gap 期间消失的连接
-			for id, prev := range e.activeMap {
+			// c. 在 Gap 期间消失的连接 (ID 排序保证确定性)
+			var disappearedIDs []string
+			for id := range e.activeMap {
 				if _, exists := currMap[id]; !exists {
-					if err := e.emitEvent(&types.CollectorEvent{
-						Type:                   types.EventConnectionDisappeared,
-						Timestamp:              frameTs,
-						ConnectionID:           id,
-						Metadata:               prev.Snapshot.Metadata,
-						QualityFlags:           prev.QualityFlags,
-						PossibleUnobservedTail: true,
-						Details: map[string]any{
-							"disappearedDuringGap": true,
-						},
-					}); err != nil {
-						return err
-					}
-					delete(e.activeMap, id)
+					disappearedIDs = append(disappearedIDs, id)
 				}
+			}
+			sort.Strings(disappearedIDs)
+
+			for _, id := range disappearedIDs {
+				prev := e.activeMap[id]
+				if err := e.emitEvent(&types.CollectorEvent{
+					Type:                   types.EventConnectionDisappeared,
+					Timestamp:              frameTs,
+					ConnectionID:           id,
+					Metadata:               prev.Snapshot.Metadata,
+					QualityFlags:           prev.QualityFlags,
+					PossibleUnobservedTail: true,
+					Details: map[string]any{
+						"disappearedDuringGap": true,
+					},
+				}); err != nil {
+					return err
+				}
+				delete(e.activeMap, id)
 			}
 
 			e.prevUploadTotal = payload.UploadTotal
@@ -419,19 +455,19 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			quality := c.Metadata.DeriveQualityFlags(c.Rule, c.Chains)
 
 			state := &ActiveConnectionState{
-				Snapshot:                  c,
-				FirstObservedAt:           frameTs,
-				LastObservedAt:            frameTs,
-				LastUploadCounter:         c.Upload,
-				LastDownloadCounter:       c.Download,
-				BaselineUploadCounter:     c.Upload,
-				BaselineDownloadCounter:   c.Download,
-				MonitoredCumulativeUpload: 0,
+				Snapshot:                    c,
+				FirstObservedAt:             frameTs,
+				LastObservedAt:              frameTs,
+				LastUploadCounter:           c.Upload,
+				LastDownloadCounter:         c.Download,
+				BaselineUploadCounter:       c.Upload,
+				BaselineDownloadCounter:     c.Download,
+				MonitoredCumulativeUpload:   0,
 				MonitoredCumulativeDownload: 0,
-				PreexistingAtStart:        true,
-				Route:                     route,
-				AttributionClass:          attrClass,
-				QualityFlags:              quality,
+				PreexistingAtStart:          true,
+				Route:                       route,
+				AttributionClass:            attrClass,
+				QualityFlags:                quality,
 			}
 			e.activeMap[c.ID] = state
 
@@ -496,23 +532,50 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		}
 	}
 
-	// 执行生产级 Relay 结构去重匹配
+	// 执行生产级 Relay 结构去重匹配 (无歧义 1-to-1)
 	confirmedRelays := attribution.PerformFrameRelayDeduplication(payload.Connections, deltas)
 
 	var uniqueObservedUpload int64
 	var uniqueObservedDownload int64
 
-	// a. 更新存活连接与新增连接
-	for id, c := range currMap {
+	// a. 更新存活连接与新增连接 (严格按 Connections 原始顺序处理)
+	for _, c := range payload.Connections {
+		id := c.ID
 		delta := deltas[id]
 		deltaUp := delta[0]
 		deltaDown := delta[1]
 		quality := c.Metadata.DeriveQualityFlags(c.Rule, c.Chains)
 
 		if prev, exists := e.activeMap[id]; exists {
-			// Per-connection 计数器回退防护
+			// 1. 元数据演化检测 (Metadata Evolution)
+			metaChanged := prev.Snapshot.Metadata.Process != c.Metadata.Process ||
+				prev.Snapshot.Metadata.Host != c.Metadata.Host ||
+				prev.Snapshot.Metadata.SniffHost != c.Metadata.SniffHost ||
+				prev.Snapshot.Rule != c.Rule ||
+				prev.Snapshot.RulePayload != c.RulePayload ||
+				prev.QualityFlags != quality
+
+			if metaChanged {
+				prev.Snapshot = c
+				prev.QualityFlags = quality
+				if err := e.emitEvent(&types.CollectorEvent{
+					Type:           types.EventConnectionMetadataUpdated,
+					Timestamp:      frameTs,
+					ConnectionID:   id,
+					Metadata:       c.Metadata,
+					QualityFlags:   quality,
+					Rule:           c.Rule,
+					RulePayload:    c.RulePayload,
+					Chains:         c.Chains,
+					ProviderChains: c.ProviderChains,
+				}); err != nil {
+					return err
+				}
+			}
+
+			// 2. Per-connection 计数器回退防护
 			if c.Upload < prev.LastUploadCounter || c.Download < prev.LastDownloadCounter {
-				_ = e.emitEvent(&types.CollectorEvent{
+				if err := e.emitEvent(&types.CollectorEvent{
 					Type:         types.EventCollectorHealth,
 					Timestamp:    frameTs,
 					ConnectionID: id,
@@ -523,13 +586,15 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 						"prevDownload": prev.LastDownloadCounter,
 						"currDownload": c.Download,
 					},
-				})
+				}); err != nil {
+					return err
+				}
 				prev.LastUploadCounter = c.Upload
 				prev.LastDownloadCounter = c.Download
 				continue
 			}
 
-			// 更新归因类别（若确认为 relay duplicate）
+			// 3. 归因类别变更检测 (Relay Duplicate Confirmed)
 			targetClass := prev.AttributionClass
 			var relayEvidence map[string]any
 			if ev, isConfirmed := confirmedRelays[id]; isConfirmed {
@@ -539,13 +604,15 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 
 			if targetClass != prev.AttributionClass {
 				prev.AttributionClass = targetClass
-				_ = e.emitEvent(&types.CollectorEvent{
+				if err := e.emitEvent(&types.CollectorEvent{
 					Type:             types.EventRelayClassificationChanged,
 					Timestamp:        frameTs,
 					ConnectionID:     id,
 					AttributionClass: targetClass,
 					Details:          relayEvidence,
-				})
+				}); err != nil {
+					return err
+				}
 			}
 
 			prev.LastUploadCounter = c.Upload
@@ -594,18 +661,18 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			}
 
 			state := &ActiveConnectionState{
-				Snapshot:                  c,
-				FirstObservedAt:           frameTs,
-				LastObservedAt:            frameTs,
-				LastUploadCounter:         c.Upload,
-				LastDownloadCounter:       c.Download,
-				BaselineUploadCounter:     0,
-				BaselineDownloadCounter:   0,
-				MonitoredCumulativeUpload: deltaUp,
+				Snapshot:                    c,
+				FirstObservedAt:             frameTs,
+				LastObservedAt:              frameTs,
+				LastUploadCounter:           c.Upload,
+				LastDownloadCounter:         c.Download,
+				BaselineUploadCounter:       0,
+				BaselineDownloadCounter:     0,
+				MonitoredCumulativeUpload:   deltaUp,
 				MonitoredCumulativeDownload: deltaDown,
-				Route:                     route,
-				AttributionClass:          initialClass,
-				QualityFlags:              quality,
+				Route:                       route,
+				AttributionClass:            initialClass,
+				QualityFlags:                quality,
 			}
 			e.activeMap[id] = state
 
@@ -642,21 +709,28 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		}
 	}
 
-	// b. 消失连接检测
-	for id, prev := range e.activeMap {
+	// b. 消失连接检测 (通过排序保证确定性)
+	var disappearedIDs []string
+	for id := range e.activeMap {
 		if _, exists := currMap[id]; !exists {
-			if err := e.emitEvent(&types.CollectorEvent{
-				Type:                   types.EventConnectionDisappeared,
-				Timestamp:              frameTs,
-				ConnectionID:           id,
-				Metadata:               prev.Snapshot.Metadata,
-				QualityFlags:           prev.QualityFlags,
-				PossibleUnobservedTail: true,
-			}); err != nil {
-				return err
-			}
-			delete(e.activeMap, id)
+			disappearedIDs = append(disappearedIDs, id)
 		}
+	}
+	sort.Strings(disappearedIDs)
+
+	for _, id := range disappearedIDs {
+		prev := e.activeMap[id]
+		if err := e.emitEvent(&types.CollectorEvent{
+			Type:                   types.EventConnectionDisappeared,
+			Timestamp:              frameTs,
+			ConnectionID:           id,
+			Metadata:               prev.Snapshot.Metadata,
+			QualityFlags:           prev.QualityFlags,
+			PossibleUnobservedTail: true,
+		}); err != nil {
+			return err
+		}
+		delete(e.activeMap, id)
 	}
 
 	// c. 全局残差计算 (Residual = GlobalDelta - UniqueObserved)

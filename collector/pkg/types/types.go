@@ -35,10 +35,10 @@ const (
 type AttributionClass string
 
 const (
-	ClassKnownApplication         AttributionClass = "known_application"
-	ClassUnpairedMissingAttr      AttributionClass = "unpaired_missing_attribution"
-	ClassRelayCandidate           AttributionClass = "relay_candidate"
-	ClassConfirmedRelayDuplicate  AttributionClass = "confirmed_relay_duplicate"
+	ClassKnownApplication        AttributionClass = "known_application"
+	ClassUnpairedMissingAttr     AttributionClass = "unpaired_missing_attribution"
+	ClassRelayCandidate          AttributionClass = "relay_candidate"
+	ClassConfirmedRelayDuplicate AttributionClass = "confirmed_relay_duplicate"
 )
 
 // EventType 表示 Collector 输出的标准事件类型
@@ -89,13 +89,13 @@ type RawMetadata struct {
 	InboundPort       string `json:"inboundPort"`
 }
 
-// DeriveQualityFlags 提取元数据质量标记
+// DeriveQualityFlags 提取元数据质量标记 (Host 为空且 SniffHost 也为空时才视为 IPOnly)
 func (m *RawMetadata) DeriveQualityFlags(rule string, chains []string) QualityFlags {
 	return QualityFlags{
 		MissingProcess:     m.Process == "",
 		MissingProcessPath: m.ProcessPath == "",
 		MissingHost:        m.Host == "",
-		IPOnly:             m.Host == "" && m.DestinationIP != "",
+		IPOnly:             m.Host == "" && m.SniffHost == "" && m.DestinationIP != "",
 		MissingRule:        rule == "",
 		MissingChain:       len(chains) == 0,
 	}
@@ -133,12 +133,6 @@ func (f *ConnectionSnapshotFrame) GetPayload() ConnectionSnapshotPayload {
 	return f.Frame
 }
 
-// TrafficPayload 映射 /traffic 根 JSON 载荷
-type TrafficPayload struct {
-	Up   int64 `json:"up"`
-	Down int64 `json:"down"`
-}
-
 // IngestItemKind 定义有序摄取通道中项的类型
 type IngestItemKind string
 
@@ -151,46 +145,45 @@ const (
 
 // IngestItem 是输入给 StateEngine 的单一有序摄取项
 type IngestItem struct {
-	Kind         IngestItemKind
-	Timestamp    time.Time
-	Frame        *ConnectionSnapshotFrame
-	HealthIssue  string
-	Details      map[string]any
-	SequenceNum  int64
+	Kind        IngestItemKind
+	Timestamp   time.Time
+	Frame       *ConnectionSnapshotFrame
+	HealthIssue string
+	Details     map[string]any
 }
 
 // CollectorEvent 是 Collector 输出到 Storage / Sink 的标准化强类型事件
 type CollectorEvent struct {
-	EventID                    string                 `json:"eventId"`
-	SessionID                  string                 `json:"sessionId"`
-	EpochID                    int                    `json:"epochId"`
-	FrameSequence              int64                  `json:"frameSequence"`
-	EventSequence              int64                  `json:"eventSequence"`
-	Timestamp                  time.Time              `json:"timestamp"`
-	Type                       EventType              `json:"type"`
-	ConnectionID               string                 `json:"connectionId,omitempty"`
-	Metadata                   RawMetadata            `json:"metadata,omitempty"`
-	QualityFlags               QualityFlags           `json:"qualityFlags"`
-	MihomoStart                string                 `json:"mihomoStart,omitempty"`
-	Rule                       string                 `json:"rule,omitempty"`
-	RulePayload                string                 `json:"rulePayload,omitempty"`
-	Chains                     []string               `json:"chains,omitempty"`
-	ProviderChains             []string               `json:"providerChains,omitempty"`
-	Route                      RouteType              `json:"route,omitempty"`
-	AttributionClass           AttributionClass       `json:"attributionClass,omitempty"`
-	ObservedUploadCounter      int64                  `json:"observedUploadCounter"`
-	ObservedDownloadCounter    int64                  `json:"observedDownloadCounter"`
-	DeltaUpload                int64                  `json:"deltaUpload"`
-	DeltaDownload              int64                  `json:"deltaDownload"`
-	MonitoredCumulativeUpload  int64                  `json:"monitoredCumulativeUpload"`
-	MonitoredCumulativeDownload int64                 `json:"monitoredCumulativeDownload"`
-	BaselineUploadCounter      int64                  `json:"baselineUploadCounter"`
-	BaselineDownloadCounter    int64                  `json:"baselineDownloadCounter"`
-	PreexistingAtStart         bool                   `json:"preexistingAtStart,omitempty"`
-	PossibleUnobservedTail     bool                   `json:"possibleUnobservedTail,omitempty"`
-	AttributionInterval        []string               `json:"attributionInterval,omitempty"`
-	Precision                  string                 `json:"precision,omitempty"`
-	Details                    map[string]any         `json:"details,omitempty"`
+	EventID                     string           `json:"eventId"`
+	SessionID                   string           `json:"sessionId"`
+	EpochID                     int              `json:"epochId"`
+	FrameSequence               int64            `json:"frameSequence"`
+	EventSequence               int64            `json:"eventSequence"`
+	Timestamp                   time.Time        `json:"timestamp"`
+	Type                        EventType        `json:"type"`
+	ConnectionID                string           `json:"connectionId,omitempty"`
+	Metadata                    RawMetadata      `json:"metadata,omitempty"`
+	QualityFlags                QualityFlags     `json:"qualityFlags"`
+	MihomoStart                 string           `json:"mihomoStart,omitempty"`
+	Rule                        string           `json:"rule,omitempty"`
+	RulePayload                 string           `json:"rulePayload,omitempty"`
+	Chains                      []string         `json:"chains,omitempty"`
+	ProviderChains              []string         `json:"providerChains,omitempty"`
+	Route                       RouteType        `json:"route,omitempty"`
+	AttributionClass            AttributionClass `json:"attributionClass,omitempty"`
+	ObservedUploadCounter       int64            `json:"observedUploadCounter"`
+	ObservedDownloadCounter     int64            `json:"observedDownloadCounter"`
+	DeltaUpload                 int64            `json:"deltaUpload"`
+	DeltaDownload               int64            `json:"deltaDownload"`
+	MonitoredCumulativeUpload   int64            `json:"monitoredCumulativeUpload"`
+	MonitoredCumulativeDownload int64            `json:"monitoredCumulativeDownload"`
+	BaselineUploadCounter       int64            `json:"baselineUploadCounter"`
+	BaselineDownloadCounter     int64            `json:"baselineDownloadCounter"`
+	PreexistingAtStart          bool             `json:"preexistingAtStart,omitempty"`
+	PossibleUnobservedTail      bool             `json:"possibleUnobservedTail,omitempty"`
+	AttributionInterval         []string         `json:"attributionInterval,omitempty"`
+	Precision                   string           `json:"precision,omitempty"`
+	Details                     map[string]any   `json:"details,omitempty"`
 }
 
 // GenerateDeterministicEventID 计算事件的确定性哈希 ID

@@ -118,7 +118,7 @@ func CheckStructuralRelayPair(
 	return true, evidence
 }
 
-// PerformFrameRelayDeduplication 在当前帧的增量中自动执行 Relay Candidate 结构去重配对
+// PerformFrameRelayDeduplication 在当前帧的增量中执行保守 Relay 配对（处理 1-to-1 确凿匹配，排除歧义）
 func PerformFrameRelayDeduplication(
 	connections []types.ConnectionSnapshot,
 	deltas map[string][2]int64,
@@ -142,15 +142,38 @@ func PerformFrameRelayDeduplication(
 		return confirmedRelays
 	}
 
-	// 贪心匹配具有确凿结构证据与流量证据的 Pair
+	// 记录每个 candidate 匹配到的 logicals 列表
+	candidateMatches := make(map[string][]struct {
+		logicalID string
+		evidence  map[string]any
+	})
+	// 记录每个 logical 匹配到的 candidate IDs
+	logicalMatches := make(map[string][]string)
+
 	for _, cand := range candidates {
 		candDelta := deltas[cand.ID]
 		for _, log := range logicals {
 			logDelta := deltas[log.ID]
 			matched, evidence := CheckStructuralRelayPair(cand, log, candDelta[0], candDelta[1], logDelta[0], logDelta[1])
 			if matched {
-				confirmedRelays[cand.ID] = evidence
-				break // 已确认为 confirmed duplicate，避免重复匹配
+				candidateMatches[cand.ID] = append(candidateMatches[cand.ID], struct {
+					logicalID string
+					evidence  map[string]any
+				}{
+					logicalID: log.ID,
+					evidence:  evidence,
+				})
+				logicalMatches[log.ID] = append(logicalMatches[log.ID], cand.ID)
+			}
+		}
+	}
+
+	// 严格 1-to-1 判定：只有当 candidate 仅匹配唯一 1 个 logical，且该 logical 仅匹配唯一 1 个 candidate 时才确认为 confirmed duplicate
+	for candID, matches := range candidateMatches {
+		if len(matches) == 1 {
+			targetLogicalID := matches[0].logicalID
+			if len(logicalMatches[targetLogicalID]) == 1 {
+				confirmedRelays[candID] = matches[0].evidence
 			}
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,6 +33,7 @@ func printUsage() {
 	fmt.Println("  --connections-interval <ms>  Snapshot interval in ms (250, 500, 1000, default: 250)")
 	fmt.Println("  --secret <secret>            Controller Secret (prefers MIHOMO_SECRET env var)")
 	fmt.Println("  --validation-jsonl <path>    Optional path to emit validation JSONL events (for shadow verification)")
+	fmt.Println("  --validation-force-disconnect-after-frames <N> Optional fault injection frame trigger")
 }
 
 func main() {
@@ -66,6 +68,7 @@ func runCollector(args []string) {
 	secret := fs.String("secret", os.Getenv("MIHOMO_SECRET"), "Controller secret")
 	queueCapacity := fs.Int("queue-capacity", 200, "Bounded queue capacity")
 	validationJSONL := fs.String("validation-jsonl", "", "Optional validation JSONL output path")
+	forceDisconnectAfterFrames := fs.Int("validation-force-disconnect-after-frames", 0, "Optional validation fault injection trigger")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
@@ -133,9 +136,12 @@ func runCollector(args []string) {
 	engine := state.NewStateEngine(state.EngineOptions{Sink: eventSink})
 	q := queue.NewBoundedQueue[*types.IngestItem](cfg.QueueCapacity)
 	c := client.NewControllerClient(cfg)
+	c.ValidationForceDisconnectAfterFrames = *forceDisconnectAfterFrames
 
-	// 单 Worker 串行消费统一有序队列
+	var fatalWorkerErr atomic.Value
 	workerDone := make(chan struct{})
+
+	// 单 Worker 串行消费统一有序队列 (带 Fail-Stop 机制)
 	go func() {
 		defer close(workerDone)
 		for {
@@ -144,7 +150,10 @@ func runCollector(args []string) {
 				return
 			}
 			if err := engine.ProcessIngestItem(item); err != nil {
-				fmt.Fprintf(os.Stderr, "[ERROR] State engine processing error: %v\n", err)
+				fmt.Fprintf(os.Stderr, "[FATAL SINK/STATE ERROR] %v\n", err)
+				fatalWorkerErr.Store(err)
+				cancel() // 立即通知所有生产者停止
+				return
 			}
 		}
 	}()
@@ -157,6 +166,11 @@ func runCollector(args []string) {
 
 	q.Close()
 	<-workerDone
+
+	if fatalErr := fatalWorkerErr.Load(); fatalErr != nil {
+		fmt.Fprintf(os.Stderr, "\n[FATAL EXIT] Collector stopped due to engine error: %v\n", fatalErr)
+		os.Exit(1)
+	}
 
 	var summary map[string]any
 	if ps, ok := eventSink.(*sink.ProductionStatsSink); ok {

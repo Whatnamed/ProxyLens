@@ -30,9 +30,10 @@ type VersionInfo struct {
 
 // ControllerClient 提供只读的 Mihomo Controller API 访问与 WebSocket 监听
 type ControllerClient struct {
-	config     *config.Config
-	httpClient *http.Client
-	hasConnectedBefore atomic.Bool
+	config                              *config.Config
+	httpClient                          *http.Client
+	hasConnectedBefore                  atomic.Bool
+	ValidationForceDisconnectAfterFrames int
 }
 
 // NewControllerClient 创建只读客户端
@@ -79,7 +80,7 @@ func (c *ControllerClient) CheckVersion(ctx context.Context) (*VersionInfo, erro
 	return &info, nil
 }
 
-// ReadWebSocketMessage 从连接读取完整的 WebSocket Text 消息 (支持 Ping/Pong、分片帧、超时与 Close)
+// ReadWebSocketMessage 从连接读取完整的 WebSocket Text 消息 (支持 masked client Pong, 分片帧, 超时与 Close)
 func ReadWebSocketMessage(conn net.Conn, r *bufio.Reader) ([]byte, error) {
 	var assembledPayload []byte
 
@@ -143,11 +144,18 @@ func ReadWebSocketMessage(conn net.Conn, r *bufio.Reader) ([]byte, error) {
 			}
 		}
 
-		// Opcode 9: Ping -> 自动回复 Pong (Opcode 10)
+		// Opcode 9: Ping -> 自动回复 Masked Pong (Opcode 10) 符合 RFC 6455
 		if opcode == 0x09 {
-			pongFrame := []byte{0x8A, byte(len(payload))}
-			pongFrame = append(pongFrame, payload...)
-			_, _ = conn.Write(pongFrame)
+			pongMask := make([]byte, 4)
+			rand.Read(pongMask)
+			maskedPayload := make([]byte, len(payload))
+			for i := range payload {
+				maskedPayload[i] = payload[i] ^ pongMask[i%4]
+			}
+			pongHeader := []byte{0x8A, byte(0x80 | len(payload))}
+			pongHeader = append(pongHeader, pongMask...)
+			pongHeader = append(pongHeader, maskedPayload...)
+			_, _ = conn.Write(pongHeader)
 			continue
 		}
 
@@ -250,7 +258,7 @@ func (c *ControllerClient) ConnectWebSocket(ctx context.Context) (net.Conn, *buf
 	return conn, reader, nil
 }
 
-// RunStreamLoop 执行 WebSocket 监听循环并将有序项推入有界队列
+// RunStreamLoop 执行 WebSocket 监听循环与看门狗重连
 func (c *ControllerClient) RunStreamLoop(
 	ctx context.Context,
 	q *queue.BoundedQueue[*types.IngestItem],
@@ -264,6 +272,16 @@ func (c *ControllerClient) RunStreamLoop(
 		maxBackoff = 10 * time.Second
 	}
 
+	watchdogTimeout := 5 * time.Second
+	if c.config.ConnectionsInterval > 0 {
+		calcTimeout := time.Duration(c.config.ConnectionsInterval*8) * time.Millisecond
+		if calcTimeout > watchdogTimeout {
+			watchdogTimeout = calcTimeout
+		}
+	}
+
+	var sessionFrameCount int
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -276,7 +294,7 @@ func (c *ControllerClient) RunStreamLoop(
 		if err != nil {
 			if !c.hasConnectedBefore.Load() {
 				// 启动时尚未连上：仅记录 Health，不生成虚假 Gap
-				_ = q.Push(&types.IngestItem{
+				_ = q.Push(ctx, &types.IngestItem{
 					Kind:        types.ItemCollectorHealth,
 					Timestamp:   time.Now(),
 					HealthIssue: "controller_unavailable_before_first_coverage",
@@ -286,7 +304,6 @@ func (c *ControllerClient) RunStreamLoop(
 					},
 				})
 			}
-			// 增加 Jitter 避免惊群
 			jitter := time.Duration(getRandomJitterMs(100)) * time.Millisecond
 			select {
 			case <-ctx.Done():
@@ -315,17 +332,40 @@ func (c *ControllerClient) RunStreamLoop(
 			continue
 		}
 
-		// 标记曾经成功建立连接
 		c.hasConnectedBefore.Store(true)
 		backoff = time.Duration(c.config.InitialBackoffMs) * time.Millisecond
 
-		// 启动异步 Context 监控以支持快速退出
 		doneCh := make(chan struct{})
+		lastFrameTime := atomic.Int64{}
+		lastFrameTime.Store(time.Now().UnixNano())
+
+		// 启动 Stream Idle 看门狗协程
 		go func() {
-			select {
-			case <-ctx.Done():
-				conn.Close()
-			case <-doneCh:
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					conn.Close()
+					return
+				case <-doneCh:
+					return
+				case <-ticker.C:
+					lastTs := time.Unix(0, lastFrameTime.Load())
+					if time.Since(lastTs) > watchdogTimeout {
+						// 看门狗超时：half-open 连接判定，强制关闭
+						_ = q.Push(ctx, &types.IngestItem{
+							Kind:        types.ItemCollectorHealth,
+							Timestamp:   time.Now(),
+							HealthIssue: "stream_stalled_watchdog_timeout",
+							Details: map[string]any{
+								"watchdogTimeoutMs": watchdogTimeout.Milliseconds(),
+							},
+						})
+						conn.Close()
+						return
+					}
+				}
 			}
 		}()
 
@@ -336,20 +376,21 @@ func (c *ControllerClient) RunStreamLoop(
 				close(doneCh)
 				conn.Close()
 
-				// 连接断开：向有序队列推入 ItemGapOpened 标记（仅在已健康断开后）
 				gapOpenedTime := time.Now()
-				_ = q.PushWithContext(ctx, &types.IngestItem{
+				_ = q.Push(ctx, &types.IngestItem{
 					Kind:      types.ItemGapOpened,
 					Timestamp: gapOpenedTime,
-				}, 1*time.Second)
+				})
 
-				break // 进入重连循环
+				break
 			}
+
+			lastFrameTime.Store(time.Now().UnixNano())
+			sessionFrameCount++
 
 			var payload types.ConnectionSnapshotPayload
 			if err := json.Unmarshal(payloadBytes, &payload); err != nil {
-				// JSON 反序列化错误：不静默忽略，发出 Health 降级
-				_ = q.Push(&types.IngestItem{
+				_ = q.Push(ctx, &types.IngestItem{
 					Kind:        types.ItemCollectorHealth,
 					Timestamp:   time.Now(),
 					HealthIssue: "frame_json_decode_error",
@@ -365,22 +406,31 @@ func (c *ControllerClient) RunStreamLoop(
 				Frame:      payload,
 			}
 
-			// 带超时推入有界队列，防止静默丢帧
 			item := &types.IngestItem{
 				Kind:      types.ItemFrame,
 				Timestamp: time.Now(),
 				Frame:     frame,
 			}
 
-			pushErr := q.PushWithContext(ctx, item, 500*time.Millisecond)
-			if pushErr != nil {
-				if pushErr == queue.ErrQueueTimeout {
-					_ = q.Push(&types.IngestItem{
-						Kind:        types.ItemQueueOverload,
-						Timestamp:   time.Now(),
-						HealthIssue: "queue_push_timeout_degradation",
-					})
-				}
+			// 保证入队，天然 Backpressure
+			if err := q.Push(ctx, item); err != nil {
+				// context canceled
+				break
+			}
+
+			// 支持验证模式下的故障重连注入
+			if c.ValidationForceDisconnectAfterFrames > 0 && sessionFrameCount >= c.ValidationForceDisconnectAfterFrames {
+				c.ValidationForceDisconnectAfterFrames = 0 // 仅触发一次
+				close(doneCh)
+				conn.Close()
+				_ = q.Push(ctx, &types.IngestItem{
+					Kind:      types.ItemGapOpened,
+					Timestamp: time.Now(),
+					Details: map[string]any{
+						"injected": true,
+					},
+				})
+				break
 			}
 		}
 	}

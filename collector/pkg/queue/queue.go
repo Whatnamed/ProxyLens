@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
-	"time"
 )
 
 var (
-	ErrQueueFull    = errors.New("bounded queue capacity reached (collector overload)")
-	ErrQueueTimeout = errors.New("bounded queue push timed out (consumer stalled)")
-	ErrQueueClosed  = errors.New("bounded queue is closed")
+	ErrQueueClosed = errors.New("bounded queue is closed")
 )
 
 // Metrics 记录队列统计信息
@@ -45,60 +42,15 @@ func NewBoundedQueue[T any](capacity int) *BoundedQueue[T] {
 	}
 }
 
-// Push 尝试非阻塞入队，若满则返回 ErrQueueFull
-func (q *BoundedQueue[T]) Push(item T) error {
+// Push 阻塞式入队（直到入队成功或 context 取消），天然向上游施加 Backpressure
+func (q *BoundedQueue[T]) Push(ctx context.Context, item T) error {
 	if q.isClosed.Load() {
 		return ErrQueueClosed
 	}
-
-	select {
-	case q.ch <- item:
-		q.enqueuedCount.Add(1)
-		cur := int64(len(q.ch))
-		for {
-			peak := q.peakDepth.Load()
-			if cur <= peak || q.peakDepth.CompareAndSwap(peak, cur) {
-				break
-			}
-		}
-		return nil
-	default:
-		q.overloadsCount.Add(1)
-		return ErrQueueFull
-	}
-}
-
-// PushWithContext 带 context 与超时的阻塞入队，防止静默丢弃
-func (q *BoundedQueue[T]) PushWithContext(ctx context.Context, item T, timeout time.Duration) error {
-	if q.isClosed.Load() {
-		return ErrQueueClosed
-	}
-
-	// 先尝试无等待入队
-	select {
-	case q.ch <- item:
-		q.enqueuedCount.Add(1)
-		cur := int64(len(q.ch))
-		for {
-			peak := q.peakDepth.Load()
-			if cur <= peak || q.peakDepth.CompareAndSwap(peak, cur) {
-				break
-			}
-		}
-		return nil
-	default:
-	}
-
-	// 队列已满，进入超时等待
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-timer.C:
-		q.overloadsCount.Add(1)
-		return ErrQueueTimeout
 	case q.ch <- item:
 		q.enqueuedCount.Add(1)
 		cur := int64(len(q.ch))
@@ -112,23 +64,50 @@ func (q *BoundedQueue[T]) PushWithContext(ctx context.Context, item T, timeout t
 	}
 }
 
-// Pop 从队列取出元素并计入统计
+// TryPush 非阻塞入队尝试
+func (q *BoundedQueue[T]) TryPush(item T) bool {
+	if q.isClosed.Load() {
+		return false
+	}
+
+	select {
+	case q.ch <- item:
+		q.enqueuedCount.Add(1)
+		cur := int64(len(q.ch))
+		for {
+			peak := q.peakDepth.Load()
+			if cur <= peak || q.peakDepth.CompareAndSwap(peak, cur) {
+				break
+			}
+		}
+		return true
+	default:
+		q.overloadsCount.Add(1)
+		return false
+	}
+}
+
+// Pop 从队列取出元素并计入统计（支持通道关闭后的 drain）
 func (q *BoundedQueue[T]) Pop(ctx context.Context) (T, bool) {
 	var zero T
 	select {
 	case <-ctx.Done():
-		return zero, false
+		// ctx 取消后，若 channel 中还有剩余元素，优先尝试 drain 非阻塞消费
+		select {
+		case item, ok := <-q.ch:
+			if ok {
+				q.dequeuedCount.Add(1)
+			}
+			return item, ok
+		default:
+			return zero, false
+		}
 	case item, ok := <-q.ch:
 		if ok {
 			q.dequeuedCount.Add(1)
 		}
 		return item, ok
 	}
-}
-
-// Channel 返回底层 channel
-func (q *BoundedQueue[T]) Channel() <-chan T {
-	return q.ch
 }
 
 // Close 关闭队列

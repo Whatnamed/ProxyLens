@@ -44,36 +44,3 @@ func BenchmarkCollectorStateEngine(b *testing.B) {
 		}
 	}
 }
-
-func TestActiveMapMemoryReclaimSoak(t *testing.T) {
-	memSink := sink.NewMemorySink()
-	engine := state.NewStateEngine(state.EngineOptions{Sink: memSink})
-
-	// Frame 0: Bootstrap 100 conns
-	conns := make([]types.ConnectionSnapshot, 100)
-	for i := 0; i < 100; i++ {
-		conns[i] = types.ConnectionSnapshot{
-			ID:     string(rune('A'+i/26)) + string(rune('a'+i%26)),
-			Upload: 100, Download: 200,
-			Metadata: types.RawMetadata{Process: "chrome.exe"}, Rule: "Match", Chains: []string{"DIRECT"},
-		}
-	}
-	_ = engine.ProcessFrame(&types.ConnectionSnapshotFrame{
-		ReceivedAt: "2026-08-21T00:00:00.000Z",
-		Frame:      types.ConnectionSnapshotPayload{UploadTotal: 1000, DownloadTotal: 2000, Connections: conns},
-	})
-	if engine.GetActiveConnectionsCount() != 100 {
-		t.Fatalf("Expected 100 active connections")
-	}
-
-	// Frame 1: All 100 connections disappear
-	_ = engine.ProcessFrame(&types.ConnectionSnapshotFrame{
-		ReceivedAt: "2026-08-21T00:00:01.000Z",
-		Frame:      types.ConnectionSnapshotPayload{UploadTotal: 1000, DownloadTotal: 2000, Connections: []types.ConnectionSnapshot{}},
-	})
-
-	// 断言 activeMap 必须完全释放回收，cardinality = 0 (无内存泄漏)
-	if engine.GetActiveConnectionsCount() != 0 {
-		t.Errorf("Active connections must be reclaimed to 0, got %d", engine.GetActiveConnectionsCount())
-	}
-}

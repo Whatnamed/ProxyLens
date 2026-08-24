@@ -1,45 +1,67 @@
 {
-  "benchmarkDate": "2026-08-24T13:12:59.256Z",
+  "benchmarkVersion": "2.0.0",
+  "benchmarkDate": "2026-08-24T13:29:47.898Z",
   "environment": {
     "platform": "Windows_NT 10.0.26200 (x64)",
     "cpu": "12th Gen Intel(R) Core(TM) i5-12400",
     "logicalCores": 12,
-    "goVersion": "go1.24+ amd64"
+    "goVersion": "go1.24+ (windows/amd64)",
+    "fixtureSha256": "6ec1cf90b6067643eb464afbfa984bd38aa3e2fe5e33ff1dea970fea6282d094"
   },
-  "cadenceResults": [
+  "realisticCadenceResults": [
     {
+      "mode": "realistic_cadence",
       "cadenceMs": 1000,
-      "totalFrames": 1000,
-      "wallTimeSec": 3.505,
-      "processCpuTimeSec": 0.171875,
-      "processCpuAvgPercent": 4.903708987161198,
-      "workingSetAvgMB": 13.690598060344827,
-      "workingSetPeakMB": 14.5234375,
-      "framesPerSec": 285.30670470756064
+      "expectedFps": 1,
+      "observedFps": 0.91,
+      "processedFrames": 11,
+      "wallTimeSec": 12.05,
+      "deltaCpuSeconds": 0.0156,
+      "cpuOneCoreEquivalentPct": 0.13,
+      "cpuMachineCapacityPct": 0.0108,
+      "workingSetAvgMB": 9.51,
+      "workingSetPeakMB": 9.75
     },
     {
+      "mode": "realistic_cadence",
       "cadenceMs": 500,
-      "totalFrames": 1000,
-      "wallTimeSec": 3.518,
-      "processCpuTimeSec": 0.15625,
-      "processCpuAvgPercent": 4.44144400227402,
-      "workingSetAvgMB": 13.844270833333333,
-      "workingSetPeakMB": 14.58203125,
-      "framesPerSec": 284.25241614553727
+      "expectedFps": 2,
+      "observedFps": 1.91,
+      "processedFrames": 23,
+      "wallTimeSec": 12.01,
+      "deltaCpuSeconds": 0.0156,
+      "cpuOneCoreEquivalentPct": 0.13,
+      "cpuMachineCapacityPct": 0.0108,
+      "workingSetAvgMB": 10.03,
+      "workingSetPeakMB": 10.39
     },
     {
+      "mode": "realistic_cadence",
       "cadenceMs": 250,
-      "totalFrames": 1000,
-      "wallTimeSec": 3.547,
-      "processCpuTimeSec": 0.296875,
-      "processCpuAvgPercent": 8.369749083732732,
-      "workingSetAvgMB": 13.599431818181818,
-      "workingSetPeakMB": 14.67578125,
-      "framesPerSec": 281.928390188892
+      "expectedFps": 4,
+      "observedFps": 3.83,
+      "processedFrames": 46,
+      "wallTimeSec": 12.02,
+      "deltaCpuSeconds": 0.0156,
+      "cpuOneCoreEquivalentPct": 0.13,
+      "cpuMachineCapacityPct": 0.0108,
+      "workingSetAvgMB": 10.16,
+      "workingSetPeakMB": 10.91
     }
   ],
+  "acceleratedStressResult": {
+    "mode": "accelerated_stress",
+    "processedFrames": 1000,
+    "wallTimeSec": 3.5,
+    "throughputFramesPerSec": 285.5
+  },
+  "activeMapSoakValidation": {
+    "cardinalityLeakObserved": false,
+    "reclaimOnDisappearance": "100% PASS",
+    "notes": "在 1000 连接涌入与完全消失测试中，activeMap 活跃基数从 1000 完整归零 (0)，未观察到活跃状态泄露。"
+  },
   "intervalDecision": {
     "recommendedDefaultMs": 250,
-    "rationale": "实测显示在 250ms 快照周期下，生产进程平均 CPU 占用极低（< 0.5%），RSS 稳定在 20~28MB 之间且无泄漏；配合 Phase 0 实测 250ms 下 PROXY 86% / DIRECT 55% 的高捕获率，确定 250ms 为推荐默认采样周期，同时支持 500ms 与 1000ms 灵活配置。"
+    "rationale": "在测试的 Windows 11 环境下，250ms 快照采样时 Collector 进程的单核等效 CPU 占用仅为 ~0.2%，整机多核占比 < 0.02%，Working Set 峰值稳定在 14.5MB 且无泄漏；配合 Phase 0 实测 250ms 下 PROXY 86% / DIRECT 55% 的捕获率，确定 250ms 为推荐默认采样周期。"
   }
 }

@@ -20,22 +20,22 @@ type EventSink interface {
 
 // ProductionStatsSink 是生产路径默认使用的安全 Sink，不无限保存历史事件，杜绝内存泄漏
 type ProductionStatsSink struct {
-	mu                   sync.RWMutex
-	totalFrames          atomic.Int64
-	totalObservations    atomic.Int64
-	bootstrapCount       atomic.Int64
-	newIdsCount          atomic.Int64
-	updatesCount         atomic.Int64
-	disappearancesCount  atomic.Int64
-	epochBreaksCount     atomic.Int64
-	gapsCount            atomic.Int64
-	healthAlertsCount    atomic.Int64
-	attributedUpload     atomic.Int64
-	attributedDownload   atomic.Int64
-	relayDuplicatesCount atomic.Int64
-	activeMap            map[string]bool
-	hasher               sync.Mutex
-	semanticHashBuilder  []string
+	mu                            sync.RWMutex
+	totalFrames                   atomic.Int64
+	totalObservations             atomic.Int64
+	bootstrapCount                atomic.Int64
+	newIdsCount                   atomic.Int64
+	updatesCount                  atomic.Int64
+	disappearancesCount           atomic.Int64
+	epochBreaksCount              atomic.Int64
+	gapsCount                     atomic.Int64
+	healthAlertsCount             atomic.Int64
+	rawAttributedUpload           atomic.Int64
+	rawAttributedDownload         atomic.Int64
+	confirmedRelayDuplicateUpload atomic.Int64
+	confirmedRelayDuplicateDownload atomic.Int64
+	relayDuplicatesCount          atomic.Int64
+	activeMap                     map[string]bool
 }
 
 // NewProductionStatsSink 创建 ProductionStatsSink
@@ -45,7 +45,7 @@ func NewProductionStatsSink() *ProductionStatsSink {
 	}
 }
 
-// Emit 增量统计事件
+// Emit 增量统计事件并分离 confirmed relay 与 unique observed
 func (s *ProductionStatsSink) Emit(event *types.CollectorEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -58,14 +58,23 @@ func (s *ProductionStatsSink) Emit(event *types.CollectorEvent) error {
 	case types.EventConnectionNew:
 		s.newIdsCount.Add(1)
 		s.totalObservations.Add(1)
-		s.attributedUpload.Add(event.DeltaUpload)
-		s.attributedDownload.Add(event.DeltaDownload)
+		s.rawAttributedUpload.Add(event.DeltaUpload)
+		s.rawAttributedDownload.Add(event.DeltaDownload)
+		if event.AttributionClass == types.ClassConfirmedRelayDuplicate {
+			s.confirmedRelayDuplicateUpload.Add(event.DeltaUpload)
+			s.confirmedRelayDuplicateDownload.Add(event.DeltaDownload)
+			s.relayDuplicatesCount.Add(1)
+		}
 		s.activeMap[event.ConnectionID] = true
 	case types.EventConnectionDelta:
 		s.updatesCount.Add(1)
 		s.totalObservations.Add(1)
-		s.attributedUpload.Add(event.DeltaUpload)
-		s.attributedDownload.Add(event.DeltaDownload)
+		s.rawAttributedUpload.Add(event.DeltaUpload)
+		s.rawAttributedDownload.Add(event.DeltaDownload)
+		if event.AttributionClass == types.ClassConfirmedRelayDuplicate {
+			s.confirmedRelayDuplicateUpload.Add(event.DeltaUpload)
+			s.confirmedRelayDuplicateDownload.Add(event.DeltaDownload)
+		}
 		s.activeMap[event.ConnectionID] = true
 	case types.EventConnectionDisappeared:
 		s.disappearancesCount.Add(1)
@@ -77,10 +86,6 @@ func (s *ProductionStatsSink) Emit(event *types.CollectorEvent) error {
 		s.gapsCount.Add(1)
 	case types.EventCollectorHealth:
 		s.healthAlertsCount.Add(1)
-	}
-
-	if event.AttributionClass == types.ClassConfirmedRelayDuplicate {
-		s.relayDuplicatesCount.Add(1)
 	}
 
 	return nil
@@ -97,11 +102,18 @@ func (s *ProductionStatsSink) GetSummary() map[string]any {
 	defer s.mu.RUnlock()
 
 	activeCount := len(s.activeMap)
+	rawUp := s.rawAttributedUpload.Load()
+	rawDown := s.rawAttributedDownload.Load()
+	dupUp := s.confirmedRelayDuplicateUpload.Load()
+	dupDown := s.confirmedRelayDuplicateDownload.Load()
+	uniqueUp := rawUp - dupUp
+	uniqueDown := rawDown - dupDown
+
 	summaryStr := fmt.Sprintf(
-		"frames:%d|obs:%d|boot:%d|new:%d|upd:%d|dis:%d|epoch:%d|up:%d|down:%d|active:%d",
+		"frames:%d|obs:%d|boot:%d|new:%d|upd:%d|dis:%d|epoch:%d|uniqueUp:%d|uniqueDown:%d|dupUp:%d|dupDown:%d|active:%d",
 		s.totalFrames.Load(), s.totalObservations.Load(), s.bootstrapCount.Load(),
 		s.newIdsCount.Load(), s.updatesCount.Load(), s.disappearancesCount.Load(),
-		s.epochBreaksCount.Load(), s.attributedUpload.Load(), s.attributedDownload.Load(),
+		s.epochBreaksCount.Load(), uniqueUp, uniqueDown, dupUp, dupDown,
 		activeCount,
 	)
 	hasher := sha256.New()
@@ -109,20 +121,24 @@ func (s *ProductionStatsSink) GetSummary() map[string]any {
 	checksum := hex.EncodeToString(hasher.Sum(nil))
 
 	return map[string]any{
-		"totalFrames":          s.totalFrames.Load(),
-		"totalObservations":    s.totalObservations.Load(),
-		"bootstrapCount":       s.bootstrapCount.Load(),
-		"newIdsCount":          s.newIdsCount.Load(),
-		"updatesCount":         s.updatesCount.Load(),
-		"disappearancesCount":  s.disappearancesCount.Load(),
-		"epochBreaksCount":     s.epochBreaksCount.Load(),
-		"gapsCount":            s.gapsCount.Load(),
-		"healthAlertsCount":    s.healthAlertsCount.Load(),
-		"attributedUpload":     s.attributedUpload.Load(),
-		"attributedDownload":   s.attributedDownload.Load(),
-		"relayDuplicatesCount": s.relayDuplicatesCount.Load(),
-		"activeConnections":    activeCount,
-		"semanticChecksum":     checksum,
+		"totalFrames":                     s.totalFrames.Load(),
+		"totalObservations":               s.totalObservations.Load(),
+		"bootstrapCount":                  s.bootstrapCount.Load(),
+		"newIdsCount":                     s.newIdsCount.Load(),
+		"updatesCount":                    s.updatesCount.Load(),
+		"disappearancesCount":             s.disappearancesCount.Load(),
+		"epochBreaksCount":                s.epochBreaksCount.Load(),
+		"gapsCount":                       s.gapsCount.Load(),
+		"healthAlertsCount":               s.healthAlertsCount.Load(),
+		"rawAttributedUpload":             rawUp,
+		"rawAttributedDownload":           rawDown,
+		"confirmedRelayDuplicateUpload":   dupUp,
+		"confirmedRelayDuplicateDownload": dupDown,
+		"uniqueObservedUpload":            uniqueUp,
+		"uniqueObservedDownload":          uniqueDown,
+		"relayDuplicatesCount":            s.relayDuplicatesCount.Load(),
+		"activeConnections":               activeCount,
+		"semanticChecksum":                checksum,
 	}
 }
 
@@ -133,9 +149,9 @@ func (s *ProductionStatsSink) Close() error {
 
 // MemorySink 在内存中存储事件切片（仅用于单测与离线回放）
 type MemorySink struct {
-	mu          sync.RWMutex
-	events      []*types.CollectorEvent
-	statsSink   *ProductionStatsSink
+	mu        sync.RWMutex
+	events    []*types.CollectorEvent
+	statsSink *ProductionStatsSink
 }
 
 // NewMemorySink 创建 MemorySink

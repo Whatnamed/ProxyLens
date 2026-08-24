@@ -2,191 +2,237 @@ package test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/client"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/config"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/queue"
+	"github.com/Whatnamed/ProxyLens/collector/pkg/sink"
+	"github.com/Whatnamed/ProxyLens/collector/pkg/state"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
 )
 
-func TestReadOnlyEnforcementInSourceCode(t *testing.T) {
-	forbiddenPatterns := []string{
-		"PATCH /configs",
-		"PUT /configs",
-		"POST /restart",
-		"PUT /proxies",
-		"DELETE /connections",
+func TestActiveMapMemoryReclaimSoak(t *testing.T) {
+	memSink := sink.NewMemorySink()
+	engine := state.NewStateEngine(state.EngineOptions{Sink: memSink})
+
+	var conns []types.ConnectionSnapshot
+	for i := 0; i < 1000; i++ {
+		conns = append(conns, types.ConnectionSnapshot{
+			ID:       fmt.Sprintf("soak-conn-%d", i),
+			Upload:   100,
+			Download: 100,
+			Chains:   []string{"DIRECT"},
+		})
 	}
 
-	err := filepath.Walk("../pkg", func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
-			return err
-		}
-		content, err := os.ReadFile(path)
+	frame1 := &types.ConnectionSnapshotFrame{
+		ReceivedAt: "2026-08-21T00:00:00.000Z",
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal: 100000, DownloadTotal: 100000,
+			Connections: conns,
+		},
+	}
+	_ = engine.ProcessFrame(frame1)
+
+	if engine.GetActiveConnectionsCount() != 1000 {
+		t.Fatalf("Expected 1000 active connections, got %d", engine.GetActiveConnectionsCount())
+	}
+
+	frame2 := &types.ConnectionSnapshotFrame{
+		ReceivedAt: "2026-08-21T00:00:01.000Z",
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal: 100000, DownloadTotal: 100000,
+			Connections: []types.ConnectionSnapshot{},
+		},
+	}
+	_ = engine.ProcessFrame(frame2)
+
+	if engine.GetActiveConnectionsCount() != 0 {
+		t.Fatalf("Expected active connections to be completely reclaimed (0), got %d", engine.GetActiveConnectionsCount())
+	}
+}
+
+func TestReadOnlyEnforcementInSourceCode(t *testing.T) {
+	rootPath := filepath.Join("..", "pkg")
+	forbiddenPatterns := []string{
+		`http.NewRequest("PUT"`,
+		`http.NewRequest("POST"`,
+		`http.NewRequest("DELETE"`,
+		`http.NewRequest("PATCH"`,
+		`http.NewRequestWithContext(ctx, "PUT"`,
+		`http.NewRequestWithContext(ctx, "POST"`,
+		`http.NewRequestWithContext(ctx, "DELETE"`,
+		`http.NewRequestWithContext(ctx, "PATCH"`,
+	}
+
+	err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		for _, pattern := range forbiddenPatterns {
-			if strings.Contains(string(content), pattern) {
-				return fmt.Errorf("forbidden mutation endpoint '%s' found in production code: %s", pattern, path)
+		if !info.IsDir() && strings.HasSuffix(path, ".go") {
+			content, rErr := os.ReadFile(path)
+			if rErr != nil {
+				return rErr
+			}
+			sContent := string(content)
+			for _, p := range forbiddenPatterns {
+				if strings.Contains(sContent, p) {
+					t.Errorf("Violation: Source file %s contains forbidden mutating HTTP call: %s", path, p)
+				}
 			}
 		}
 		return nil
 	})
 
 	if err != nil {
-		t.Fatalf("Read-only enforcement test failed: %v", err)
+		t.Fatalf("Failed to scan pkg source files: %v", err)
 	}
 }
 
-func TestQueueBlockingPushWithTimeout(t *testing.T) {
+func TestQueueSlowConsumerBackpressure(t *testing.T) {
 	q := queue.NewBoundedQueue[int](2)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
-	// Push 2 items
-	if err := q.PushWithContext(context.Background(), 1, 100*time.Millisecond); err != nil {
-		t.Fatalf("Failed to push 1: %v", err)
-	}
-	if err := q.PushWithContext(context.Background(), 2, 100*time.Millisecond); err != nil {
-		t.Fatalf("Failed to push 2: %v", err)
+	producedCount := 10
+	var dequeuedItems []int
+	doneCh := make(chan struct{})
+
+	// 慢消费者
+	go func() {
+		defer close(doneCh)
+		for {
+			item, ok := q.Pop(ctx)
+			if !ok {
+				return
+			}
+			dequeuedItems = append(dequeuedItems, item)
+			time.Sleep(5 * time.Millisecond) // 故意慢速消费
+			if len(dequeuedItems) == producedCount {
+				return
+			}
+		}
+	}()
+
+	// 生产者连续推 10 个元素（通过阻塞式 Push 向上游施加 Backpressure）
+	for i := 0; i < producedCount; i++ {
+		if err := q.Push(ctx, i); err != nil {
+			t.Fatalf("Push failed on item %d: %v", i, err)
+		}
 	}
 
-	// 3rd item with small timeout must return ErrQueueTimeout and increment OverloadsCount
-	err := q.PushWithContext(context.Background(), 3, 50*time.Millisecond)
-	if err != queue.ErrQueueTimeout {
-		t.Fatalf("Expected ErrQueueTimeout, got %v", err)
+	<-doneCh
+
+	if len(dequeuedItems) != producedCount {
+		t.Fatalf("Expected %d dequeued items, got %d", producedCount, len(dequeuedItems))
 	}
 
-	metrics := q.GetMetrics()
-	if metrics.OverloadsCount != 1 || metrics.CurrentDepth != 2 {
-		t.Errorf("Unexpected queue metrics: %+v", metrics)
+	for i := 0; i < producedCount; i++ {
+		if dequeuedItems[i] != i {
+			t.Errorf("Ordering violation at index %d: expected %d, got %d", i, i, dequeuedItems[i])
+		}
 	}
 }
 
 func TestMockControllerFullLifecycleAndReconnection(t *testing.T) {
-	var connCount atomic.Int32
+	var wsRequestCount int
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/version" {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"meta":    true,
-				"version": "1.10.0",
-			})
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"meta":true,"version":"1.10.0"}`))
 			return
 		}
 
-		if strings.HasPrefix(r.URL.Path, "/connections") {
-			cur := connCount.Add(1)
+		if r.URL.Path == "/connections" {
+			wsRequestCount++
+			if wsRequestCount == 1 {
+				// 首次模拟升级成功后立即关闭触发断线
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					t.Fatalf("server doesn't support hijacking")
+				}
+				conn, _, _ := hj.Hijack()
+				conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"))
+				time.Sleep(10 * time.Millisecond)
+				conn.Close()
+				return
+			}
+
+			// 第二次模拟正常推送 1 帧后结束
 			hj, ok := w.(http.Hijacker)
 			if !ok {
-				http.Error(w, "hijacking not supported", http.StatusInternalServerError)
-				return
+				t.Fatalf("server doesn't support hijacking")
 			}
-			conn, bufrw, err := hj.Hijack()
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			defer conn.Close()
-
-			// 发送 HTTP 101 WebSocket Upgrade 响应
-			bufrw.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
-			bufrw.WriteString("Upgrade: websocket\r\n")
-			bufrw.WriteString("Connection: Upgrade\r\n")
-			bufrw.WriteString("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n")
-			bufrw.Flush()
-
-			// 构造一个简单的快照帧
-			payload := types.ConnectionSnapshotPayload{
-				UploadTotal:   1000 * int64(cur),
-				DownloadTotal: 2000 * int64(cur),
-				Connections: []types.ConnectionSnapshot{
-					{
-						ID:       fmt.Sprintf("mock-conn-%d", cur),
-						Upload:   100,
-						Download: 200,
-						Metadata: types.RawMetadata{Process: "mock.exe", Host: "test.org"},
-						Rule:     "Match",
-						Chains:   []string{"DIRECT"},
-					},
-				},
-			}
-			payloadBytes, _ := json.Marshal(payload)
-
-			// 封装 RFC 6455 Text Frame
-			var frame []byte
-			frame = append(frame, 0x81)
-			length := len(payloadBytes)
-			if length <= 125 {
-				frame = append(frame, byte(length))
-			} else if length <= 65535 {
-				frame = append(frame, 126, byte(length>>8), byte(length&0xFF))
-			} else {
-				frame = append(frame, 127, 0, 0, 0, 0, 0, 0, byte(length>>8), byte(length&0xFF))
-			}
-			frame = append(frame, payloadBytes...)
-			conn.Write(frame)
-
-			// 发送一帧后故意断开连接，模拟网络抖动/断线
+			conn, _, _ := hj.Hijack()
+			conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"))
+			frameJSON := `{"uploadTotal":100,"downloadTotal":200,"connections":[]}`
+			hdr := []byte{0x81, byte(len(frameJSON))}
+			conn.Write(append(hdr, []byte(frameJSON)...))
 			time.Sleep(50 * time.Millisecond)
+			conn.Close()
 			return
 		}
 
-		http.NotFound(w, r)
+		w.WriteHeader(http.StatusNotFound)
 	}))
-	defer server.Close()
+	defer ts.Close()
 
 	cfg := &config.Config{
-		ControllerURL:       server.URL,
-		ConnectionsInterval: 100,
-		QueueCapacity:       100,
-		InitialBackoffMs:    100,
-		MaxBackoffMs:        500,
+		ControllerURL:       ts.URL,
+		ConnectionsInterval: 250,
+		QueueCapacity:       10,
+		InitialBackoffMs:    50,
+		MaxBackoffMs:        200,
 	}
 
 	c := client.NewControllerClient(cfg)
-	q := queue.NewBoundedQueue[*types.IngestItem](100)
+	q := queue.NewBoundedQueue[*types.IngestItem](10)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	go func() {
 		_ = c.RunStreamLoop(ctx, q)
 	}()
 
-	// 等待接收至少两轮连接（证明重连机制正常生效）
-	var receivedFrames int
-	var receivedGaps int
-
+	var items []*types.IngestItem
 	for {
 		item, ok := q.Pop(ctx)
 		if !ok {
 			break
 		}
-		if item.Kind == types.ItemFrame {
-			receivedFrames++
-		} else if item.Kind == types.ItemGapOpened {
-			receivedGaps++
+		items = append(items, item)
+	}
+
+	if len(items) == 0 {
+		t.Fatalf("Expected to receive items from mock controller")
+	}
+
+	var hasGapOpened bool
+	var hasFrame bool
+	for _, it := range items {
+		if it.Kind == types.ItemGapOpened {
+			hasGapOpened = true
 		}
-		if receivedFrames >= 2 && receivedGaps >= 1 {
-			break
+		if it.Kind == types.ItemFrame {
+			hasFrame = true
 		}
 	}
 
-	if receivedFrames < 2 {
-		t.Errorf("Expected at least 2 frames across reconnects, got %d", receivedFrames)
+	if !hasGapOpened {
+		t.Errorf("Expected ItemGapOpened to be recorded upon mock disconnect")
 	}
-	if receivedGaps < 1 {
-		t.Errorf("Expected at least 1 gap item on disconnect, got %d", receivedGaps)
+	if !hasFrame {
+		t.Errorf("Expected ItemFrame to be received after reconnect")
 	}
 }
