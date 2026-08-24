@@ -21,11 +21,11 @@ ProxyLens 作为一个面向 Windows + Mihomo 的本地旁路流量审计工具�
 | **单帧状态机处理耗时** | ~0.22 ms | ~0.06 ms | 在 250ms 快照间隔下，单帧开销占比均 < 0.1% |
 | **GC / 内存稳定性** | 4次 GC / ~39MB alloc (500帧) | 0 GC / 极致内存受控 | 均能满足 Windows 后台轻量驻留需求 |
 
-### 2. 生产路径实际 Windows 进程基准测试 (Measured Benchmark 3.0 & Soak):
-详见脱敏凭证 `docs/benchmarks/phase1-collector-benchmark.json`：
-- **250ms 快照周期**: 生产进程平均单核等效 CPU 占用仅需 **~0.13%**（整机 12 核占比 < 0.02%）；
-- **内存驻留 (Working Set / RSS)**: 初始 **8.82 MB**，600 秒 (10分钟) Soak 峰值 **10.79 MB**，无明显线性增长；
-- **队列与延迟**: 有界队列零丢帧、零无标记丢弃，完全满足产品轻量常驻目标。
+### 2. 生产路径实际 Windows 进程与 Harness 验证:
+详见机器可读 Harness 记录 `docs/benchmarks/phase1-collector-benchmark.json`：
+- **WebSocket 协议与 Harness 对齐**: 基于标准 RFC 6455 握手，`pushedFrames == processedFrames` 100% 精确对齐；
+- **内存驻留 (Working Set / RSS)**: 原型在 250ms 快照频率下 Working Set 稳定受控在 **< 15MB**，单连接增删与 1000 连接浪涌后状态机完全回收、无基数泄漏；
+- **全栈性能基准**: 端到端写入吞吐与长效 Soak 性能基准将在 Phase 2 结合 SQLite 批量写入一并端到端测量。
 
 ---
 

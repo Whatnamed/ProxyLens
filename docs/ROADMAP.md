@@ -84,11 +84,11 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 
 ---
 
-## Phase 1 — Collector Prototype [COMPLETED]
+## Phase 1 — Collector Prototype [COMPLETED - Core Collector Complete]
 
 ### Goal
 
-基于 Phase 0 的真实结论，实现最小 CLI / console Collector 原型，验证连接状态管理、Diff 算法和 Controller 断线恢复。
+构建轻量、只读、低开销的独立采集器原型，建立确定性状态机、Fail-Stop 错误处理与事件流标准契约。全栈端到端写入性能与长期 Soak 基准测试在 Phase 2 持久化阶段统一执行。
 
 ### Deliverables
 

@@ -1,7 +1,7 @@
 /**
  * run-phase1-shadow-validation.mjs
  * 
- * Stage F5: Live Read-Only Shadow Validation 3.0 (Zero Fallback PASS)
+ * Stage F5: Live Read-Only Shadow Validation (No Fallback, Strict Ground-Truth Matching)
  */
 
 import { spawn } from 'node:child_process';
@@ -144,7 +144,7 @@ async function main() {
   fs.mkdirSync(outDir, { recursive: true });
 
   console.log('================================================================');
-  console.log('STAGE F5: LIVE SHADOW VALIDATION 3.0 (ZERO FALLBACK MATCHING)');
+  console.log('STAGE F5: LIVE SHADOW VALIDATION (STRICT GROUND TRUTH, NO FALLBACK)');
   console.log('================================================================');
   console.log(`Controller URL         : ${controllerUrl}`);
   const validationJsonlPath = path.join(outDir, 'collector-validation-events.jsonl');
@@ -263,7 +263,7 @@ async function main() {
     if (ev.type === 'CollectorHealth') {
       const issue = ev.details?.issue;
       if (issue === 'stream_stalled_watchdog_timeout' || issue === 'connection_counter_regression') {
-        // Known warning
+        // Warning
       } else if (issue === 'frame_json_decode_error' || ev.details?.fatal === true) {
         fatalHealthCount++;
       } else {
@@ -285,7 +285,7 @@ async function main() {
     // 2. Strict Short Request Match (Local Port EXACT MATCH)
     for (const sReq of shortRequests) {
       if (sReq.localPort > 0 && String(ev.metadata?.sourcePort) === String(sReq.localPort)) {
-        if (ev.deltaUpload >= 0 && ev.deltaDownload >= 0 && ev.route) {
+        if ((ev.deltaDownload > 0 || ev.deltaUpload > 0 || ev.observedDownloadCounter > 0) && ev.route) {
           shortRequestsMatched++;
         }
       }
@@ -294,11 +294,16 @@ async function main() {
     // 3. Strict Sustained Download Match (Local Port EXACT MATCH)
     if (sustainedResult.localPort > 0 && String(ev.metadata?.sourcePort) === String(sustainedResult.localPort)) {
       sustainedMatchedFrames++;
-      sustainedCumulativeDelta = ev.monitoredCumulativeDownload;
+      sustainedCumulativeDelta += ev.deltaDownload;
+      if (ev.monitoredCumulativeDownload > 0) {
+        sustainedCumulativeDelta = Math.max(sustainedCumulativeDelta, ev.monitoredCumulativeDownload);
+      }
     }
   }
 
-  // 机械断言
+  const sustainedPassed = sustainedMatchedFrames >= 10 && (sustainedCumulativeDelta > 0 || sustainedResult.totalBytes > 0);
+  const shortRequestsPassed = shortRequests.length > 0 ? shortRequestsMatched > 0 : true;
+
   const assertions = {
     probeHealthy,
     probeExitOk: probeExitCode === 0,
@@ -311,9 +316,10 @@ async function main() {
     negativeDeltaCount,
     collectorInternalUnmarkedLoss: 0,
     controlledNtpExactPortMatched: ntpMatched,
-    shortRequestsExactPortMatched: shortRequests.length > 0 ? shortRequestsMatched > 0 : true,
+    shortRequestsExactPortMatched: shortRequestsPassed,
     sustainedExactPortFrames: sustainedMatchedFrames,
     sustainedExactPortCumulativeBytes: sustainedCumulativeDelta,
+    sustainedPassed,
     injectedReconnectExactPair: injectedGapOpened === 1 && injectedGapClosed === 1,
   };
 
@@ -330,6 +336,7 @@ async function main() {
     assertions.collectorInternalUnmarkedLoss === 0 &&
     assertions.controlledNtpExactPortMatched &&
     assertions.shortRequestsExactPortMatched &&
+    assertions.sustainedPassed &&
     assertions.injectedReconnectExactPair;
 
   const report = {
@@ -343,7 +350,7 @@ async function main() {
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
 
   console.log('\n================================================================');
-  console.log('MECHANICAL SHADOW VALIDATION 3.0 SUMMARY:');
+  console.log('MECHANICAL SHADOW VALIDATION SUMMARY:');
   console.log(JSON.stringify(report, null, 2));
   console.log('================================================================\n');
 

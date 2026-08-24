@@ -589,7 +589,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				prev.QualityFlags != quality
 
 			if chainsChanged {
-				_ = e.emitEvent(&types.CollectorEvent{
+				if err := e.emitEvent(&types.CollectorEvent{
 					Type:         types.EventCollectorHealth,
 					Timestamp:    frameTs,
 					ConnectionID: id,
@@ -598,7 +598,9 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 						"prevChains": prev.Snapshot.Chains,
 						"currChains": c.Chains,
 					},
-				})
+				}); err != nil {
+					return err
+				}
 				prev.Route = attribution.ClassifyRoute(c.Chains)
 			}
 

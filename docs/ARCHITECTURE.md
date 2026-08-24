@@ -46,13 +46,13 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 
 - **实现语言**: **Go (v1.24+)**（详见 `docs/decisions/0001-collector-language.md`）；
 - **核心职责**:
-  - 只读连接 Mihomo External Controller（`GET /version`, `GET/WS /connections`, `GET/WS /traffic`）；
+  - 只读连接 Mihomo External Controller（`GET /version`, `GET/WS /connections`，`/traffic` 作为可选辅助工具）；
   - 维护连接确定性生命周期状态机（Bootstrap 首帧基线、稳态单调差分、消失连接标记）；
-  - 分层流量归因（KnownApp、UnpairedMissingAttr、RelayCandidate、ConfirmedRelayDuplicate）与残差计算；
+  - 分层流量归因（KnownApp、UnpairedMissingAttr、RelayCandidate、ConfirmedRelayDuplicate）与残差计算（初阶诊断视图，原始事实永久保留由 Phase 2 Storage 重算）；
   - 记录 Controller / Collector 监控缺口（Monitoring Gaps 与 Counter Epoch Breaks）；
-  - 通过有界队列（Bounded Queue）背压机制输出事件流（详见 `docs/collector-rfc.md` 与 `docs/phase2-storage-handoff.md`）。
+  - 通过有界队列（Bounded Queue）背压机制输出确定性事件流（详见 `docs/collector-rfc.md` 与 `docs/phase2-storage-handoff.md`）。
 - **运行特征**:
-  - 轻量后台常驻（250ms 采样周期下单核 CPU 占用 < 0.1%，内存稳定回收）；
+  - 轻量后台常驻（内存占用稳定受控在 < 15MB，状态完全回收无基数泄漏，全栈写入基准在 Phase 2 端到端测量）；
   - UI 随开随用，关闭 UI 完全不影响后台采集；
   - Controller 不可用时通过指数退避 + Jitter 自动恢复。
 

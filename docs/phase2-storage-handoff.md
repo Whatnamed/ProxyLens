@@ -88,7 +88,8 @@ Collector 通过解耦的 `sink.EventSink` 接口输出强类型事件。事件�
 - **关键字段**:
   - `ConnectionID`, `AttributionClass`: `confirmed_relay_duplicate`
   - `Details`: 包含配对证据对象（`candidateId`, `logicalId`, `sharedHops`, `structuralRelation`, `uploadMatch`, `downloadMatch` 等）
-- **持久化语义**: 更新连接的归因状态，从 `UniqueObserved` 统计视图中剔除。
+- **持久化语义**: 记录连接的实时中继标记与匹配证据。
+- **Relay 职责与 Phase 2 重算定位**: Collector 实时输出的 Relay 分类属于初阶诊断视图（Diagnostic Derived View）。由于原始连接事实（Raw Counters、Deltas、Chains）永久保留，Phase 2 Storage / Aggregator 将其视为可重算的派生核算（Derived Accounting），允许在后续对账中按需重算或调整。
 
 ---
 
@@ -120,7 +121,7 @@ Collector 通过解耦的 `sink.EventSink` 接口输出强类型事件。事件�
   - `Details.globalUploadDelta`, `Details.globalDownloadDelta`
   - `Details.uniqueObservedUpload`, `Details.uniqueObservedDownload`
   - `Details.residualUpload`, `Details.residualDownload` ($\text{Residual} = \Delta\text{global} - \text{UniqueObserved}$)
-- **持久化语义**: 记入分时残差汇总表，供 UI 展现未捕获物理流量缺口。
+- **持久化语义**: 记入分时残差汇总表，供 UI 展现未捕获物理流量缺口。Phase 2 拥有全局时间序列，可根据需要结合更精密的重算规则修正全局残差。
 
 ---
 
