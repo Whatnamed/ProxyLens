@@ -1,9 +1,14 @@
 package storage
 
 import (
+	"errors"
 	"time"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
+)
+
+var (
+	ErrProjectionContractViolation = errors.New("projection contract violation")
 )
 
 // SessionStatus 表示 Collector 运行会话状态
@@ -68,6 +73,8 @@ type ConnectionTrafficRecord struct {
 	EventID string `json:"eventId"`
 	SessionID string `json:"sessionId"`
 	EpochID int `json:"epochId"`
+	FrameSequence int64 `json:"frameSequence"`
+	EventSequence int64 `json:"eventSequence"`
 	ConnectionID string `json:"connectionId"`
 
 	ObservedAt time.Time `json:"observedAt"`

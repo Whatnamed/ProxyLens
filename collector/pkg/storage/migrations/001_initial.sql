@@ -115,6 +115,8 @@ CREATE TABLE IF NOT EXISTS connection_traffic (
     event_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     epoch_id INTEGER NOT NULL,
+    frame_sequence INTEGER NOT NULL,
+    event_sequence INTEGER NOT NULL,
     connection_id TEXT NOT NULL,
     
     observed_at TEXT NOT NULL,
@@ -133,7 +135,7 @@ CREATE TABLE IF NOT EXISTS connection_traffic (
     created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_traffic_conn_time ON connection_traffic(session_id, epoch_id, connection_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_traffic_conn_seq ON connection_traffic(session_id, epoch_id, connection_id, frame_sequence, event_sequence);
 CREATE INDEX IF NOT EXISTS idx_traffic_obs_at ON connection_traffic(observed_at);
 
 -- 7. Monitoring Gaps Table (Projection)

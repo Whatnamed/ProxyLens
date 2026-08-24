@@ -194,22 +194,29 @@ func runCollector(args []string) {
 	err := c.RunStreamLoop(ctx, q)
 	if err != nil && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "[FATAL] Stream loop error: %v\n", err)
+		fatalWorkerErr.Store(err)
 	}
 
 	q.Close()
 	<-workerDone
 
 	if sqliteSink != nil {
+		var finalStatus = storage.SessionStatusClosedClean
 		if fatalWorkerErr.Load() != nil {
-			_ = sqliteSink.EndSession(context.Background(), sessionID, storage.SessionStatusInterrupted)
-		} else {
-			_ = sqliteSink.EndSession(context.Background(), sessionID, storage.SessionStatusClosedClean)
+			finalStatus = storage.SessionStatusInterrupted
 		}
-		_ = sqliteSink.Close()
+		if err := sqliteSink.EndSession(context.Background(), sessionID, finalStatus); err != nil {
+			fmt.Fprintf(os.Stderr, "[FATAL] Failed to end session: %v\n", err)
+			os.Exit(1)
+		}
+		if err := sqliteSink.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "[FATAL] Failed to close sqlite sink: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if fatalErr := fatalWorkerErr.Load(); fatalErr != nil {
-		fmt.Fprintf(os.Stderr, "\n[FATAL EXIT] Collector stopped due to engine error: %v\n", fatalErr)
+		fmt.Fprintf(os.Stderr, "\n[FATAL EXIT] Collector stopped due to fatal error: %v\n", fatalErr)
 		os.Exit(1)
 	}
 

@@ -208,17 +208,17 @@ func (q *QueryService) ListConnections(ctx context.Context, filter ConnectionFil
 	return records, nil
 }
 
-// ListConnectionTraffic 按权威时间序查询单个连接的流量增量时间轴
+// ListConnectionTraffic 按权威时间序与四元组序列查询单个连接的流量增量时间轴
 func (q *QueryService) ListConnectionTraffic(ctx context.Context, sessionID string, epochID int, connectionID string) ([]*ConnectionTrafficRecord, error) {
 	rows, err := q.db.QueryContext(ctx, `
 		SELECT
-			event_id, session_id, epoch_id, connection_id, observed_at,
+			event_id, session_id, epoch_id, frame_sequence, event_sequence, connection_id, observed_at,
 			interval_start, interval_end, precision,
 			delta_upload, delta_download, observed_upload_counter, observed_download_counter,
 			monitored_upload_total, monitored_download_total
 		FROM connection_traffic
 		WHERE session_id = ? AND epoch_id = ? AND connection_id = ?
-		ORDER BY observed_at ASC;
+		ORDER BY frame_sequence ASC, event_sequence ASC, observed_at ASC;
 	`, sessionID, epochID, connectionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query connection traffic: %w", err)
@@ -232,7 +232,7 @@ func (q *QueryService) ListConnectionTraffic(ctx context.Context, sessionID stri
 		var intStart, intEnd sql.NullString
 
 		if err := rows.Scan(
-			&tr.EventID, &tr.SessionID, &tr.EpochID, &tr.ConnectionID, &obsAtStr,
+			&tr.EventID, &tr.SessionID, &tr.EpochID, &tr.FrameSequence, &tr.EventSequence, &tr.ConnectionID, &obsAtStr,
 			&intStart, &intEnd, &tr.Precision,
 			&tr.DeltaUpload, &tr.DeltaDownload, &tr.ObservedUploadCounter, &tr.ObservedDownloadCounter,
 			&tr.MonitoredUploadTotal, &tr.MonitoredDownloadTotal,

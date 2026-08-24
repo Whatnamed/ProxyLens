@@ -20,7 +20,7 @@ type migrationFile struct {
 	sql     string
 }
 
-// RunMigrations 自动应用所有未执行的 SQL 迁移
+// RunMigrations 自动应用所有未执行的 SQL 迁移并对未知更高版本 fail closed
 func RunMigrations(ctx context.Context, db *sql.DB) error {
 	// 确保 schema_migrations 表存在
 	initSQL := `
@@ -40,6 +40,7 @@ func RunMigrations(ctx context.Context, db *sql.DB) error {
 	}
 
 	var files []migrationFile
+	maxBinaryVersion := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
@@ -61,6 +62,9 @@ func RunMigrations(ctx context.Context, db *sql.DB) error {
 			name:    entry.Name(),
 			sql:     string(content),
 		})
+		if version > maxBinaryVersion {
+			maxBinaryVersion = version
+		}
 	}
 
 	sort.Slice(files, func(i, j int) bool {
@@ -84,6 +88,11 @@ func RunMigrations(ctx context.Context, db *sql.DB) error {
 		if v > maxAppliedVersion {
 			maxAppliedVersion = v
 		}
+	}
+
+	// 5. 校验未知更高 schema version (Fail Closed)
+	if maxAppliedVersion > maxBinaryVersion {
+		return fmt.Errorf("database schema version (%d) is newer than maximum supported version by binary (%d): refusing to run on newer schema", maxAppliedVersion, maxBinaryVersion)
 	}
 
 	for _, m := range files {

@@ -155,14 +155,17 @@ func (s *SQLiteEventSink) Emit(ev *types.CollectorEvent) error {
 		return fmt.Errorf("journal ingestion failure: %w", err)
 	}
 
-	// 2. 若非重复事件，应用投影
-	if !isDuplicate {
-		if err := ApplyEventProjection(ctx, tx, ev); err != nil {
-			return fmt.Errorf("projection failure: %w", err)
-		}
+	// 2. 若是重复事件，整个事务直接 commit 退出 (No-op，不推进 session progress 与 last_event_at)
+	if isDuplicate {
+		return tx.Commit()
 	}
 
-	// 3. 更新 session 的 last_event_at 与 last_frame_sequence
+	// 3. 应用投影
+	if err := ApplyEventProjection(ctx, tx, ev); err != nil {
+		return fmt.Errorf("projection failure: %w", err)
+	}
+
+	// 4. 更新 session 的 last_event_at 与 last_frame_sequence
 	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
 	obsAtStr := ev.Timestamp.UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `
