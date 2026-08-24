@@ -6,8 +6,8 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 0 — Documentation & Discovery (Phase 0 Core Evidence Closure Complete, Ready for Phase 1)`
-- **代码状态**：Phase 0 核心阻塞性实测已全部闭环（Stage R0~R8 完成），进入 Phase 1 准备就绪。
+- **当前阶段**：`Phase 1 — Collector Architecture, Prototype & Benchmark (Phase 1 Gate: PASS)`
+- **代码状态**：Phase 1 生产原型已完成（Go 1.24+），包含确定性状态机、只读客户端、指数退避重连、有界队列背压保护、分层归因与残差计算；单元与集成测试全部通过，Phase 2 Handoff 契约已确立。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
@@ -19,7 +19,7 @@
   - `Phase 0C-2 UDP / NTP / QUIC: COMPLETED` `[Observed]`：验证了 Windows TUN 下 UDP 进程归因完整性、受控 NTP 48B/48B 流量精确性与 UDP Pseudo-connection 留存现象（6秒以上）。
   - `Phase 0C-3A & 3B Connection Counter Semantics: COMPLETED` `[Observed]`：实测证明稳态长连接单调非递减计数与冷启动基线（Bootstrap vs Steady-State）。
   - `Phase 0C-3C Snapshot Cadence & Capture-Rate Matrix: COMPLETED` `[Observed]`：
-    - 实测证明 Mihomo 原生支持 `?interval=<ms>`（250ms / 500ms / 1000ms），吞吐量在 236 连接下分别为 577 KB/s / 277 KB/s / 132 KB/s（确立为 Phase 1 基准测试候选间隔）；
+    - 实测证明 Mihomo 原生支持 `?interval=<ms>`（250ms / 500ms / 1000ms），吞吐量在 236 连接下分别为 577 KB/s / 277 KB/s / 132 KB/s；
     - 执行 12 轮独立试验矩阵（12 trials, N=600），量化短连接捕获盲区（1000ms 下短连接捕获率 DIRECT 14.0% / PROXY 28.0%；250ms 下 DIRECT 提升至 55.0%，PROXY 提升至 86.0%），捕获连接单帧占比分布在 84.9%~100.0%。
   - `Phase 0C-6 Global Accounting & Reconciliation: COMPLETED` `[Observed]`：
     - 建立分层流量归因模型（`knownApplication`, `unpairedMissingAttribution`, `confirmedRelayDuplicate`, `uniqueObserved`）；
@@ -44,65 +44,55 @@
 7. **本地优先**：不上传网络历史，不保存 HTTP 正文、Cookie、Token、密码、TLS 明文或其他 Payload。
 8. **Mihomo First**：第一阶段先使用 Mihomo External Controller；只有实测证明存在不可接受盲区时，才评估第二观测数据源。
 9. **正确性优先于 UI**：先解决字段语义、connection diff、double counting、重启与缺口，再推进完整 UI。
-10. **不提前锁死技术栈**：Go / Rust、SQLite、Tauri / Web UI 等均需要由前序验证推动决定。
+10. **Collector 语言选型 (ADR 0001)**：选定 **Go (v1.24+)** 作为生产 Collector 开发语言（兼顾 4,500+ 帧/秒极高算力余量、Goroutine/Channel 并发模型与 Windows 纯 Go SQLite 零 CGO 单二进制分发）。
 11. **Relay 配对去重规约 (Relay Candidate & Pairing Model)** `[Scoped Observed / Provisional]`：仅在存在确凿配对应用连接（时间重叠、流量高度吻合、链路结构包含关系）时才判定为底层中继去重，严禁简单按“缺进程+缺规则”过滤，杜绝掩盖未归因流量。
 12. **快照轮询盲区与分层残差模型**：承认轮询架构下的短连接物理盲区，通过 $\text{Residual} = \Delta(\text{uploadTotal}) - \text{UniqueObserved}$（其中 $\text{UniqueObserved} = \text{KnownApp} + \text{UnpairedMissingAttr} + \text{OtherUnique}$）显式维护全局残差。
 13. **代理链拓扑因果顺序规约 (Hop Order Semantics)** `[Scoped Observed / Provisional: 当前测试的策略选择组与出站拓扑]`：`chains[0]` 为最终物理出站节点，`chains[last]` 为顶层规则分流策略组，UI 渲染按 `chains.slice().reverse()` 呈现。
 14. **连接历史不可变性 (Routing Immutability)** `[Scoped Observed / Provisional: 当前受控长连接与测试拓扑]`：存活连接绑定创建时出站路径，受控实测显示节点切换不篡改已有存活连接的历史节点路径。
 15. **Gap 恢复与 Bootstrap 规约**：冷启动/重连首帧已有连接记录为 baseline（delta=0），跨 Gap 存活连接增量归属为 Gap 期间累积流量。
+16. **推荐默认采样间隔 (Sampling Cadence)**：推荐默认 **`250ms`**（在 CPU < 0.1% 的极低开销下最大化短连接捕获率），并允许用户自由配置为 500ms 或 1000ms。
 
 ---
 
 ## Open Questions
 
-### 实现选型 (Phase 1 评估决策项)
+### 实现选型 (Phase 2 & Phase 3 决策项)
 
-- Collector：Go vs Rust（结合 250ms/500ms 快照下的 CPU、RAM、GC 表现与 SQLite 写入性能）；
-- Storage：SQLite + WAL（长连接阶段性 checkpointing 与崩溃恢复）；
-- UI：Tauri vs 本地 Web UI 等；
-- UI 与 Collector：共享数据库读取 vs 本地 IPC / HTTP API。
+- Storage：SQLite + WAL（纯 Go `modernc.org/sqlite` 批量事务写入性能与阶段性 Checkpoint 策略）；
+- UI：Tauri vs 本地 Web UI；
+- UI 与 Collector：共享 SQLite 读取 vs 本地轻量 IPC / HTTP 查询端点。
 
 ---
 
 ## Current Risks
 
-1. **短连接采样盲区**：实测证明轮询机制下短连接存在物理盲区，必须在架构上支持 Residual 残差表达。
-2. **多跳代理 Double Counting**：多层代理会产生底层连接，已建立 Relay Candidate 配对去重规约。
-3. **连接生命周期语义**：必须使用 `disappeared_from_snapshot` 与 `possible_unobserved_tail` 正确建模。
-4. **敏感样本**：原始网络历史必须默认留在 `tmp/` 等 Git 忽略目录并在提交前脱敏。
+1. **短连接采样盲区**：实测证明轮询机制下短连接存在物理盲区，已在状态机中通过 Residual 残差显式建模。
+2. **多跳代理 Double Counting**：多层代理底层连接已建立 Pair-specific Relay 结构去重与未配对保留规约。
+3. **敏感样本**：原始网络历史必须默认留在 `tmp/` 等 Git 忽略目录并在提交前脱敏。
 
 ---
 
 ## Next Step
 
-进入 **Phase 1 — Collector 架构、数据模型与技术选型**：
-1. 设计本地 SQLite + WAL 数据模型（支持 Connection Details、Aggregates、Monitoring Gaps 与 Residuals）；
-2. 建立 Go vs Rust 原型性能对比（验证 250ms 快照下的 CPU、RAM、JSON 解析与批处理写盘开销）；
-3. 实现符合 RFC 规约的生产级 Collector 状态机。
+进入 **Phase 2 — 本地存储、SQLite 模型与聚合引擎**：
+1. 实现符合 `docs/phase2-storage-handoff.md` 的 SQLite + WAL 批量持久化消费者；
+2. 设计 Connections 明细表、分时 Aggregates 表、Monitoring Gaps 审计表与 Residuals 表；
+3. 验证长连接分段 checkpointing 与进程崩溃恢复。
 
 ---
 
 ## Recent Changes
 
-### 2026-08-20 / 2026-08-21 (Big Work Package A & B & B.1.1)
+### 2026-08-24 (Big Work Package C — Phase 1 Collector Prototype)
 
-- **Stage B0 / B.1.1 (Evidence Repair & Validation Gate)**：
-  - 修复实验窗口有效性 Gate、增强 Matcher 1-to-1 映射与路由校验；
-  - 重构 Relay Candidate 配对去重引擎为 pair-specific structural check，严禁静默过滤；
-  - 严谨对齐 `/traffic` 近似积分时间窗与 `COUNTER_RESET / epoch break` 检测；
-  - 增强 Live mutation safety perimeter（dry-run 保护与回滚校验）。
-- **Stage B1 (Phase 0C-4 Dynamic Routing & Node Switching)**：
-  - 实现受控节点切换工具与安全回滚保护；
-  - 实测证明已有连接链路历史不可变性（0 突变），新连接即时迁移；
-  - 正式升格 `chains` 动态拓扑因果顺序规约（`chains[0]` 为最终物理出站节点）。
-- **Stage B2 (Phase 0C-5 Lifecycle, Config Update & Controller Gaps)**：
-  - 实测 4.46s Monitoring Gap，证明存活连接稳定性与 Naive 算法 1450 倍虚假爆炸缺陷；
-  - 实测运行时配置更新（PATCH）下计数器连续性与连接保持；
-  - 确立生命周期恢复与内核冷重启检测状态机。
-- **Stage B3 (Phase 0 Synthesis & Collector RFC)**：
-  - 汇总量化指标矩阵，输出完整的 Collector 状态机转移图与数学模型。
-- **Stage B4 (Final Delivery)**：
-  - 全量同步更新 `docs/research/mihomo-data-source.md`、`docs/STATUS.md`、`docs/ARCHITECTURE.md` 与 `docs/ROADMAP.md`。
+- **Stage C0 (Phase Transition & Hygiene)**：创建 `feat/phase-1-collector` 分支，修复 Recent Changes 重复行，收紧 C0 证据表述，补齐动态切换与配置 patch 测试。
+- **Stage C1 (Language Spike & ADR 0001)**：实现 Go 与 Rust 最小状态机对比，验证 100% 确定性 SHA256 语义 Checksum 一致性；Go 达到 4,500 帧/秒吞吐，选定 Go 作为生产语言并产出 `docs/decisions/0001-collector-language.md`。
+- **Stage C2 (Collector RFC)**：产出 `docs/collector-rfc.md`，确立生产模块边界与状态机合同。
+- **Stage C3~C5 (Production Prototype)**：实现 Go 生产原型（`collector/`），包含只读客户端、指数退避重连循环、有界队列背压保护、分层归因、残差计算与确定性状态机。
+- **Stage C6 (Deterministic Tests)**：编写 10 项状态机单元测试、源码只读检查与集成测试（100% PASS）。
+- **Stage C7 (Live Shadow Validation)**：与 Phase 0 Probe 同场对照实测，通过 NTP、短并发与持续下载测试。
+- **Stage C8 (Benchmark & Interval Decision)**：4000 帧压测耗时 971ms，选定 250ms 为推荐默认采样间隔。
+- **Stage C9 (Phase 2 Handoff)**：输出 `docs/phase2-storage-handoff.md`，正式通过 Phase 1 Completion Gate。
 
 
 

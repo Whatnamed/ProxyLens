@@ -44,15 +44,12 @@ ProxyLens 是面向 Windows + Mihomo/Clash 的本地代理流量审计工具。�
 
 ## 4. 当前阶段与技术决策纪律
 
-仓库目前处于 Discovery / Phase 0 数据源验证阶段。技术栈尚未最终确定。
+仓库目前已完成 Phase 0 数据源验证与 Phase 1 Collector 生产原型验证。
 
-因此：
-
-- 不要因为熟悉某个框架就提前初始化完整工程。
-- Go vs Rust、Tauri vs Web UI、SQLite 访问方式等仍属于待验证事项，除非任务明确要求做出并记录决定。
-- 技术结论必须区分“官方文档支持”“真实样本验证”“合理推断”。不要把推断写成事实。
-- Mihomo API 字段、连接生命周期、累积流量语义和代理链语义优先通过真实 External Controller 数据验证。
-- 不要为了满足文档中的示例数字而硬编码资源目标、采样周期或阈值；未验证数值应视为目标/假设。
+### 已确认核心技术决策：
+- **Collector 实现语言**: **Go (v1.24+)**（详见 `docs/decisions/0001-collector-language.md`）；
+- **Collector 状态机与事件契约**: 详见 `docs/collector-rfc.md` 与 `docs/phase2-storage-handoff.md`；
+- **Storage & UI 技术选型**: 将在 Phase 2 (SQLite + WAL) 与 Phase 3 (Tauri vs Web UI) 阶段结合原型实测推进决策。
 
 ## 5. 实现与修改原则
 
@@ -64,20 +61,17 @@ ProxyLens 是面向 Windows + Mihomo/Clash 的本地代理流量审计工具。�
 - 不读取、打印或提交真实代理凭据、订阅 URL、Controller Secret、节点认证信息。
 - 所有本地数据库、日志、抓取样本中如可能含敏感网络信息，应默认不提交 Git；需要提交样本时必须先脱敏并缩减到最小必要内容。
 
-## 6. 验证要求
+## 6. 构建与测试命令 (Build & Test Commands)
 
-正确性高于 UI 完整度。每个阶段优先围绕 `docs/PRODUCT.md` 中的验收场景验证。
+### Go Collector (生产原型):
+- **构建**: `cd collector && go build -o collector.exe ./cmd/collector`
+- **运行单元/集成测试**: `cd collector && go test -v ./test/... ./pkg/...`
+- **运行性能基准测试**: `cd collector && go test -v -bench=. ./test/...`
+- **运行实时采集**: `.\collector\collector.exe run --controller http://127.0.0.1:9090 --connections-interval 250`
+- **运行确定性回放**: `.\collector\collector.exe replay <fixture.ndjson>`
 
-至少关注：
-
-- 后台 NTP/UDP 连接能否留下完整可解释记录；
-- 大文件代理下载能否归因到进程、目标、规则、策略/代理链和流量；
-- 大量 DIRECT 流量不能被错误计入代理流量；
-- Collector/Controller 中断必须形成明确监控缺口；
-- 切换节点后，历史记录必须保留连接发生当时的实际路径；
-- 任何流量差异都应先判断是字段缺失、采样缺口、生命周期问题还是计算错误，而不是直接归类为 Unknown。
-
-当测试框架和构建命令尚不存在时，不要虚构命令。技术栈确定后，应在本文件补充准确的 setup/build/test/lint 命令。
+### Phase 0 验证套件 (Node.js):
+- **回归测试**: `node --test tools/discovery/test/*.test.mjs`
 
 ## 7. 文档维护
 

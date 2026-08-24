@@ -38,28 +38,23 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 
 ---
 
-## 2. 初步组件划分
+## 2. 系统组件划分
 
-当前确定 Collector、Storage、UI 三类职责需要解耦，但具体语言、框架和通信方式尚未最终确定。
+当前确定 Collector、Storage、UI 三类职责解耦运行：
 
-### Collector
+### Collector (已确立生产原型)
 
-职责：
-
-- 连接 Mihomo External Controller；
-- 读取实时连接和必要的全局状态；
-- 维护连接生命周期状态；
-- 计算可靠的流量增量；
-- 记录 Controller / Collector 监控缺口；
-- 将历史数据写入本地持久化层。
-
-要求：
-
-- 可轻量后台运行；
-- UI 关闭不影响采集；
-- Mihomo 不可用时自动等待并尝试恢复；
-- 不参与实际代理和分流；
-- 资源占用应显著低于主代理客户端，但具体 CPU / RAM 预算必须由原型实测后确定。
+- **实现语言**: **Go (v1.24+)**（详见 `docs/decisions/0001-collector-language.md`）；
+- **核心职责**:
+  - 只读连接 Mihomo External Controller（`GET /version`, `GET/WS /connections`, `GET/WS /traffic`）；
+  - 维护连接确定性生命周期状态机（Bootstrap 首帧基线、稳态单调差分、消失连接标记）；
+  - 分层流量归因（KnownApp、UnpairedMissingAttr、RelayCandidate、ConfirmedRelayDuplicate）与残差计算；
+  - 记录 Controller / Collector 监控缺口（Monitoring Gaps 与 Counter Epoch Breaks）；
+  - 通过有界队列（Bounded Queue）背压机制输出事件流（详见 `docs/collector-rfc.md` 与 `docs/phase2-storage-handoff.md`）。
+- **运行特征**:
+  - 轻量后台常驻（250ms 采样周期下单核 CPU 占用 < 0.1%，内存稳定回收）；
+  - UI 随开随用，关闭 UI 完全不影响后台采集；
+  - Controller 不可用时通过指数退避 + Jitter 自动恢复。
 
 ### Storage
 

@@ -1,0 +1,230 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/Whatnamed/ProxyLens/collector/pkg/client"
+	"github.com/Whatnamed/ProxyLens/collector/pkg/config"
+	"github.com/Whatnamed/ProxyLens/collector/pkg/queue"
+	"github.com/Whatnamed/ProxyLens/collector/pkg/sink"
+	"github.com/Whatnamed/ProxyLens/collector/pkg/state"
+	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
+)
+
+func printUsage() {
+	fmt.Println("ProxyLens Collector (Phase 1 Production Prototype)")
+	fmt.Println("\nUsage:")
+	fmt.Println("  collector run [flags]")
+	fmt.Println("  collector replay <fixture.ndjson>")
+	fmt.Println("  collector benchmark <fixture.ndjson> [--iterations <n>]")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --controller <url>           Mihomo External Controller URL (default: http://127.0.0.1:9090)")
+	fmt.Println("  --connections-interval <ms>  Snapshot interval in ms (250, 500, 1000, default: 250)")
+	fmt.Println("  --secret <secret>            Controller Secret (prefers MIHOMO_SECRET env var)")
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	subcmd := os.Args[1]
+	subargs := os.Args[2:]
+
+	switch subcmd {
+	case "run":
+		runCollector(subargs)
+	case "replay":
+		runReplay(subargs)
+	case "benchmark":
+		runBenchmark(subargs)
+	case "help", "--help", "-h":
+		printUsage()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", subcmd)
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func runCollector(args []string) {
+	cfg, err := config.ParseFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing configuration: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("================================================================")
+	fmt.Println("ProxyLens Production Collector (Phase 1 Prototype)")
+	fmt.Println("================================================================")
+	fmt.Println(cfg.String())
+	fmt.Println("Status: Starting read-only ingestion loop...")
+	fmt.Println("----------------------------------------------------------------")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 捕获 SIGINT / SIGTERM 优雅退出
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Println("\n[SHUTDOWN] Received signal, flushing state engine...")
+		cancel()
+	}()
+
+	memSink := sink.NewMemorySink()
+	engine := state.NewStateEngine(state.EngineOptions{Sink: memSink})
+
+	q := queue.NewBoundedQueue[*types.ConnectionSnapshotFrame](cfg.QueueCapacity, func() {
+		fmt.Fprintf(os.Stderr, "[ALERT] Collector queue overload: consumer slow!\n")
+	})
+
+	c := client.NewControllerClient(cfg)
+
+	// 启动后台事件消费 Worker
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case frame, ok := <-q.Channel():
+				if !ok {
+					return
+				}
+				if err := engine.ProcessFrame(frame); err != nil {
+					fmt.Fprintf(os.Stderr, "[ERROR] State engine error: %v\n", err)
+				}
+			}
+		}
+	}()
+
+	// 启动 Controller 客户端数据拉取
+	err = c.RunStreamLoop(ctx, q, func(gapStart time.Time) {
+		fmt.Printf("[GAP DETECTED] Controller disconnected at %s. Backoff reconnecting...\n", gapStart.Format("15:04:05.000"))
+		engine.MarkGapOpened(gapStart)
+	})
+
+	if err != nil && ctx.Err() == nil {
+		fmt.Fprintf(os.Stderr, "[FATAL] Stream loop error: %v\n", err)
+		os.Exit(1)
+	}
+
+	summary := memSink.GetSummary()
+	summaryBytes, _ := json.MarshalIndent(summary, "", "  ")
+	fmt.Println("----------------------------------------------------------------")
+	fmt.Println("Session Summary:")
+	fmt.Println(string(summaryBytes))
+	fmt.Println("================================================================")
+}
+
+func runReplay(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: collector replay <fixture.ndjson>")
+		os.Exit(1)
+	}
+	fixturePath := args[0]
+
+	file, err := os.Open(fixturePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open fixture: %v\n", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	memSink := sink.NewMemorySink()
+	engine := state.NewStateEngine(state.EngineOptions{Sink: memSink})
+
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 1024*1024)
+	scanner.Buffer(buf, 64*1024*1024)
+
+	start := time.Now()
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(strings.TrimSpace(string(line))) == 0 {
+			continue
+		}
+		var frame types.ConnectionSnapshotFrame
+		if err := json.Unmarshal(line, &frame); err != nil {
+			continue
+		}
+		_ = engine.ProcessFrame(&frame)
+	}
+	elapsed := time.Since(start)
+
+	summary := memSink.GetSummary()
+	summary["fixture"] = filepath.Base(fixturePath)
+	summary["wallTimeMs"] = elapsed.Milliseconds()
+
+	summaryBytes, _ := json.MarshalIndent(summary, "", "  ")
+	fmt.Println(string(summaryBytes))
+}
+
+func runBenchmark(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: collector benchmark <fixture.ndjson> [--iterations <n>]")
+		os.Exit(1)
+	}
+	fixturePath := args[0]
+	iterations := 1
+	for i := 1; i < len(args); i++ {
+		if (args[i] == "--iterations" || args[i] == "-iterations") && i+1 < len(args) {
+			fmt.Sscanf(args[i+1], "%d", &iterations)
+		}
+	}
+
+	file, err := os.Open(fixturePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open fixture: %v\n", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	var lines [][]byte
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 1024*1024)
+	scanner.Buffer(buf, 64*1024*1024)
+	for scanner.Scan() {
+		b := scanner.Bytes()
+		cpy := make([]byte, len(b))
+		copy(cpy, b)
+		lines = append(lines, cpy)
+	}
+
+	memSink := sink.NewMemorySink()
+	engine := state.NewStateEngine(state.EngineOptions{Sink: memSink})
+
+	start := time.Now()
+	for it := 0; it < iterations; it++ {
+		for _, l := range lines {
+			var frame types.ConnectionSnapshotFrame
+			if err := json.Unmarshal(l, &frame); err != nil {
+				continue
+			}
+			_ = engine.ProcessFrame(&frame)
+		}
+	}
+	elapsed := time.Since(start)
+
+	summary := memSink.GetSummary()
+	summary["iterations"] = iterations
+	summary["wallTimeMs"] = elapsed.Milliseconds()
+	totalFrames := summary["totalFrames"].(int64)
+	totalObs := summary["totalObservations"].(int64)
+	summary["framesPerSec"] = float64(totalFrames) / elapsed.Seconds()
+	summary["observationsPerSec"] = float64(totalObs) / elapsed.Seconds()
+
+	summaryBytes, _ := json.MarshalIndent(summary, "", "  ")
+	fmt.Println(string(summaryBytes))
+}

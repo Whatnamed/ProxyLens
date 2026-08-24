@@ -84,7 +84,7 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 
 ---
 
-## Phase 1 — Collector Prototype
+## Phase 1 — Collector Prototype [COMPLETED]
 
 ### Goal
 
