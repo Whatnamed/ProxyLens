@@ -1,16 +1,14 @@
 package client
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
-	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"math/big"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,6 +18,7 @@ import (
 	"github.com/Whatnamed/ProxyLens/collector/pkg/config"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/queue"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
+	"github.com/gorilla/websocket"
 )
 
 // VersionInfo 映射 GET /version 返回
@@ -28,7 +27,7 @@ type VersionInfo struct {
 	Version string `json:"version"`
 }
 
-// ControllerClient 提供只读的 Mihomo Controller API 访问与 WebSocket 监听
+// ControllerClient 提供基于工业级成熟 WebSocket 库的只读 Mihomo 客户端
 type ControllerClient struct {
 	config                              *config.Config
 	httpClient                          *http.Client
@@ -80,185 +79,52 @@ func (c *ControllerClient) CheckVersion(ctx context.Context) (*VersionInfo, erro
 	return &info, nil
 }
 
-// ReadWebSocketMessage 从连接读取完整的 WebSocket Text 消息 (支持 masked client Pong, 分片帧, 超时与 Close)
-func ReadWebSocketMessage(conn net.Conn, r *bufio.Reader) ([]byte, error) {
-	var assembledPayload []byte
-
-	for {
-		header, err := r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-
-		fin := (header & 0x80) != 0
-		opcode := header & 0x0F
-
-		// Opcode 8: Close
-		if opcode == 0x08 {
-			return nil, io.EOF
-		}
-
-		b2, err := r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-
-		isMasked := (b2 & 0x80) != 0
-		length := int64(b2 & 0x7F)
-
-		if length == 126 {
-			var l uint16
-			b := make([]byte, 2)
-			if _, err := io.ReadFull(r, b); err != nil {
-				return nil, err
-			}
-			l = uint16(b[0])<<8 | uint16(b[1])
-			length = int64(l)
-		} else if length == 127 {
-			b := make([]byte, 8)
-			if _, err := io.ReadFull(r, b); err != nil {
-				return nil, err
-			}
-			length = 0
-			for i := 0; i < 8; i++ {
-				length = (length << 8) | int64(b[i])
-			}
-		}
-
-		var maskKey []byte
-		if isMasked {
-			maskKey = make([]byte, 4)
-			if _, err := io.ReadFull(r, maskKey); err != nil {
-				return nil, err
-			}
-		}
-
-		payload := make([]byte, length)
-		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, err
-		}
-
-		if isMasked {
-			for i := int64(0); i < length; i++ {
-				payload[i] ^= maskKey[i%4]
-			}
-		}
-
-		// Opcode 9: Ping -> 自动回复 Masked Pong (Opcode 10) 符合 RFC 6455
-		if opcode == 0x09 {
-			pongMask := make([]byte, 4)
-			rand.Read(pongMask)
-			maskedPayload := make([]byte, len(payload))
-			for i := range payload {
-				maskedPayload[i] = payload[i] ^ pongMask[i%4]
-			}
-			pongHeader := []byte{0x8A, byte(0x80 | len(payload))}
-			pongHeader = append(pongHeader, pongMask...)
-			pongHeader = append(pongHeader, maskedPayload...)
-			_, _ = conn.Write(pongHeader)
-			continue
-		}
-
-		// Opcode 10: Pong (忽略)
-		if opcode == 0x0A {
-			continue
-		}
-
-		// Opcode 1: Text, Opcode 0: Continuation
-		if opcode == 0x01 || opcode == 0x00 {
-			assembledPayload = append(assembledPayload, payload...)
-			if fin {
-				return assembledPayload, nil
-			}
-			continue
-		}
-	}
-}
-
-// ConnectWebSocket 建立与 /connections 的 WebSocket 流 (支持 TLS/WSS)
-func (c *ControllerClient) ConnectWebSocket(ctx context.Context) (net.Conn, *bufio.Reader, error) {
+// ConnectWebSocket 建立符合 RFC 6455 规范的 WebSocket 连接 (支持 TLS/WSS 握手校验)
+func (c *ControllerClient) ConnectWebSocket(ctx context.Context) (*websocket.Conn, error) {
 	u, err := url.Parse(c.config.ControllerURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	host := u.Host
-	isTLS := u.Scheme == "https" || u.Scheme == "wss"
-	if !strings.Contains(host, ":") {
-		if isTLS {
-			host += ":443"
-		} else {
-			host += ":80"
-		}
+	scheme := "ws"
+	if u.Scheme == "https" || u.Scheme == "wss" {
+		scheme = "wss"
 	}
-
-	var dialer net.Dialer
-	rawConn, err := dialer.DialContext(ctx, "tcp", host)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var conn net.Conn = rawConn
-	if isTLS {
-		serverName := u.Hostname()
-		tlsConn := tls.Client(rawConn, &tls.Config{
-			ServerName: serverName,
-		})
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			rawConn.Close()
-			return nil, nil, fmt.Errorf("TLS handshake failed: %w", err)
-		}
-		conn = tlsConn
-	}
-
-	// 生成随机 Sec-WebSocket-Key
-	keyBytes := make([]byte, 16)
-	rand.Read(keyBytes)
-	wsKey := base64.StdEncoding.EncodeToString(keyBytes)
 
 	intervalParam := ""
 	if c.config.ConnectionsInterval > 0 {
 		intervalParam = fmt.Sprintf("?interval=%d", c.config.ConnectionsInterval)
 	}
 
-	path := fmt.Sprintf("/connections%s", intervalParam)
-	authHeader := ""
+	wsURL := fmt.Sprintf("%s://%s/connections%s", scheme, u.Host, intervalParam)
+
+	requestHeader := make(http.Header)
 	if strings.TrimSpace(c.config.Secret) != "" {
-		authHeader = fmt.Sprintf("Authorization: Bearer %s\r\n", c.config.Secret)
+		requestHeader.Set("Authorization", "Bearer "+c.config.Secret)
 	}
 
-	req := fmt.Sprintf(
-		"GET %s HTTP/1.1\r\n"+
-			"Host: %s\r\n"+
-			"Upgrade: websocket\r\n"+
-			"Connection: Upgrade\r\n"+
-			"Sec-WebSocket-Key: %s\r\n"+
-			"Sec-WebSocket-Version: 13\r\n"+
-			"%s\r\n",
-		path, u.Host, wsKey, authHeader,
-	)
-
-	if _, err := conn.Write([]byte(req)); err != nil {
-		conn.Close()
-		return nil, nil, err
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 5 * time.Second,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: false,
+		},
 	}
 
-	reader := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(reader, &http.Request{Method: "GET"})
+	conn, resp, err := dialer.DialContext(ctx, wsURL, requestHeader)
 	if err != nil {
-		conn.Close()
-		return nil, nil, fmt.Errorf("failed to read WS upgrade response: %w", err)
+		if resp != nil {
+			return nil, fmt.Errorf("WS dial failed with HTTP %d: %w", resp.StatusCode, err)
+		}
+		return nil, fmt.Errorf("WS dial failed: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		conn.Close()
-		return nil, nil, fmt.Errorf("WS upgrade rejected with HTTP %d", resp.StatusCode)
-	}
+	// 设定 32MB 安全帧上限
+	conn.SetReadLimit(32 * 1024 * 1024)
 
-	return conn, reader, nil
+	return conn, nil
 }
 
-// RunStreamLoop 执行 WebSocket 监听循环与看门狗重连
+// RunStreamLoop 运行 WebSocket 消费循环，带 Stream Idle Watchdog 与指数退避重连
 func (c *ControllerClient) RunStreamLoop(
 	ctx context.Context,
 	q *queue.BoundedQueue[*types.IngestItem],
@@ -318,7 +184,7 @@ func (c *ControllerClient) RunStreamLoop(
 		}
 
 		// 2. 建立 WebSocket 连接
-		conn, reader, err := c.ConnectWebSocket(ctx)
+		conn, err := c.ConnectWebSocket(ctx)
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -335,57 +201,62 @@ func (c *ControllerClient) RunStreamLoop(
 		c.hasConnectedBefore.Store(true)
 		backoff = time.Duration(c.config.InitialBackoffMs) * time.Millisecond
 
-		doneCh := make(chan struct{})
-		lastFrameTime := atomic.Int64{}
-		lastFrameTime.Store(time.Now().UnixNano())
-
-		// 启动 Stream Idle 看门狗协程
+		// 异步响应 Context 取消
+		closeCh := make(chan struct{})
 		go func() {
-			ticker := time.NewTicker(1 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					conn.Close()
-					return
-				case <-doneCh:
-					return
-				case <-ticker.C:
-					lastTs := time.Unix(0, lastFrameTime.Load())
-					if time.Since(lastTs) > watchdogTimeout {
-						// 看门狗超时：half-open 连接判定，强制关闭
-						_ = q.Push(ctx, &types.IngestItem{
-							Kind:        types.ItemCollectorHealth,
-							Timestamp:   time.Now(),
-							HealthIssue: "stream_stalled_watchdog_timeout",
-							Details: map[string]any{
-								"watchdogTimeoutMs": watchdogTimeout.Milliseconds(),
-							},
-						})
-						conn.Close()
-						return
-					}
-				}
+			select {
+			case <-ctx.Done():
+				_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown"), time.Now().Add(time.Second))
+				_ = conn.Close()
+			case <-closeCh:
 			}
 		}()
 
 		// 3. 读取快照帧并推入有序队列
 		for {
-			payloadBytes, err := ReadWebSocketMessage(conn, reader)
+			// 设置 ReadDeadline 实现 Stream Idle 看门狗
+			_ = conn.SetReadDeadline(time.Now().Add(watchdogTimeout))
+			messageType, payloadBytes, err := conn.ReadMessage()
 			if err != nil {
-				close(doneCh)
-				conn.Close()
+				close(closeCh)
+				_ = conn.Close()
 
-				gapOpenedTime := time.Now()
-				_ = q.Push(ctx, &types.IngestItem{
+				isWatchdogTimeout := false
+				if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+					isWatchdogTimeout = true
+					_ = q.Push(ctx, &types.IngestItem{
+						Kind:        types.ItemCollectorHealth,
+						Timestamp:   time.Now(),
+						HealthIssue: "stream_stalled_watchdog_timeout",
+						Details: map[string]any{
+							"watchdogTimeoutMs": watchdogTimeout.Milliseconds(),
+						},
+					})
+				}
+
+				if ctx.Err() != nil {
+					// 正常关闭退出
+					return nil
+				}
+
+				// 触发 GapOpened
+				pushErr := q.Push(ctx, &types.IngestItem{
 					Kind:      types.ItemGapOpened,
-					Timestamp: gapOpenedTime,
+					Timestamp: time.Now(),
+					Details: map[string]any{
+						"isWatchdogTimeout": isWatchdogTimeout,
+					},
 				})
-
+				if pushErr != nil && !errors.Is(pushErr, context.Canceled) {
+					return pushErr
+				}
 				break
 			}
 
-			lastFrameTime.Store(time.Now().UnixNano())
+			if messageType != websocket.TextMessage {
+				continue
+			}
+
 			sessionFrameCount++
 
 			var payload types.ConnectionSnapshotPayload
@@ -412,22 +283,27 @@ func (c *ControllerClient) RunStreamLoop(
 				Frame:     frame,
 			}
 
-			// 保证入队，天然 Backpressure
 			if err := q.Push(ctx, item); err != nil {
 				// context canceled
 				break
 			}
 
-			// 支持验证模式下的故障重连注入
+			// 验证模式下的故障重连注入
 			if c.ValidationForceDisconnectAfterFrames > 0 && sessionFrameCount >= c.ValidationForceDisconnectAfterFrames {
 				c.ValidationForceDisconnectAfterFrames = 0 // 仅触发一次
-				close(doneCh)
-				conn.Close()
+				nonceBytes := make([]byte, 8)
+				rand.Read(nonceBytes)
+				injectionID := "inj-" + hex.EncodeToString(nonceBytes)
+
+				close(closeCh)
+				_ = conn.Close()
 				_ = q.Push(ctx, &types.IngestItem{
 					Kind:      types.ItemGapOpened,
 					Timestamp: time.Now(),
 					Details: map[string]any{
-						"injected": true,
+						"injected":    true,
+						"injectionId": injectionID,
+						"reason":      "validation_forced_disconnect",
 					},
 				})
 				break

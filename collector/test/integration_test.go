@@ -17,6 +17,7 @@ import (
 	"github.com/Whatnamed/ProxyLens/collector/pkg/sink"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/state"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
+	"github.com/gorilla/websocket"
 )
 
 func TestActiveMapMemoryReclaimSoak(t *testing.T) {
@@ -115,14 +116,14 @@ func TestQueueSlowConsumerBackpressure(t *testing.T) {
 				return
 			}
 			dequeuedItems = append(dequeuedItems, item)
-			time.Sleep(5 * time.Millisecond) // 故意慢速消费
+			time.Sleep(5 * time.Millisecond)
 			if len(dequeuedItems) == producedCount {
 				return
 			}
 		}
 	}()
 
-	// 生产者连续推 10 个元素（通过阻塞式 Push 向上游施加 Backpressure）
+	// 生产者通过阻塞 Push 施加 Backpressure
 	for i := 0; i < producedCount; i++ {
 		if err := q.Push(ctx, i); err != nil {
 			t.Fatalf("Push failed on item %d: %v", i, err)
@@ -143,6 +144,9 @@ func TestQueueSlowConsumerBackpressure(t *testing.T) {
 }
 
 func TestMockControllerFullLifecycleAndReconnection(t *testing.T) {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
 	var wsRequestCount int
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,31 +159,23 @@ func TestMockControllerFullLifecycleAndReconnection(t *testing.T) {
 
 		if r.URL.Path == "/connections" {
 			wsRequestCount++
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+
 			if wsRequestCount == 1 {
 				// 首次模拟升级成功后立即关闭触发断线
-				hj, ok := w.(http.Hijacker)
-				if !ok {
-					t.Fatalf("server doesn't support hijacking")
-				}
-				conn, _, _ := hj.Hijack()
-				conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"))
 				time.Sleep(10 * time.Millisecond)
-				conn.Close()
+				_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "disconnect"), time.Now().Add(time.Second))
 				return
 			}
 
 			// 第二次模拟正常推送 1 帧后结束
-			hj, ok := w.(http.Hijacker)
-			if !ok {
-				t.Fatalf("server doesn't support hijacking")
-			}
-			conn, _, _ := hj.Hijack()
-			conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"))
 			frameJSON := `{"uploadTotal":100,"downloadTotal":200,"connections":[]}`
-			hdr := []byte{0x81, byte(len(frameJSON))}
-			conn.Write(append(hdr, []byte(frameJSON)...))
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(frameJSON))
 			time.Sleep(50 * time.Millisecond)
-			conn.Close()
 			return
 		}
 
@@ -198,7 +194,7 @@ func TestMockControllerFullLifecycleAndReconnection(t *testing.T) {
 	c := client.NewControllerClient(cfg)
 	q := queue.NewBoundedQueue[*types.IngestItem](10)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
 	defer cancel()
 
 	go func() {

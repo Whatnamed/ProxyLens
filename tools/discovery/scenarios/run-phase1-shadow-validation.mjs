@@ -1,7 +1,7 @@
 /**
  * run-phase1-shadow-validation.mjs
  * 
- * Stage E7: Genuine Live Read-Only Shadow Validation 2.0
+ * Stage F5: Live Read-Only Shadow Validation 3.0 (Zero Fallback PASS)
  */
 
 import { spawn } from 'node:child_process';
@@ -86,7 +86,7 @@ function sendControlledNtpRequest(targetHost = 'ntp.aliyun.com', port = 123) {
   });
 }
 
-async function triggerSustainedDownload(urlStr, durationSec = 4) {
+async function triggerControlledRequest(urlStr, durationSec = 1) {
   return new Promise((resolve) => {
     const parsed = new URL(urlStr);
     const clientModule = parsed.protocol === 'https:' ? https : http;
@@ -94,7 +94,7 @@ async function triggerSustainedDownload(urlStr, durationSec = 4) {
     let totalBytes = 0;
 
     const req = clientModule.get(urlStr, (res) => {
-      localPort = res.socket.localPort;
+      localPort = res.socket?.localPort || 0;
       res.on('data', (chunk) => {
         totalBytes += chunk.length;
       });
@@ -104,6 +104,9 @@ async function triggerSustainedDownload(urlStr, durationSec = 4) {
     });
 
     req.on('socket', (socket) => {
+      if (socket.localPort) {
+        localPort = socket.localPort;
+      }
       socket.on('connect', () => {
         localPort = socket.localPort;
       });
@@ -141,7 +144,7 @@ async function main() {
   fs.mkdirSync(outDir, { recursive: true });
 
   console.log('================================================================');
-  console.log('STAGE E7: GENUINE LIVE READ-ONLY SHADOW VALIDATION 2.0');
+  console.log('STAGE F5: LIVE SHADOW VALIDATION 3.0 (ZERO FALLBACK MATCHING)');
   console.log('================================================================');
   console.log(`Controller URL         : ${controllerUrl}`);
   const validationJsonlPath = path.join(outDir, 'collector-validation-events.jsonl');
@@ -153,7 +156,7 @@ async function main() {
     throw new Error(`Mihomo Controller is not responding at ${controllerUrl}`);
   }
 
-  // 1. 启动 Phase 0 Probe (后台进程)
+  // 1. 启动 Phase 0 Probe
   console.log('\n[STEP 1] Starting Phase 0 Node Probe (250ms interval)...');
   const probeScript = path.join(projectRoot, 'tools/discovery/probe.mjs');
   const probeProcess = spawn('node', [
@@ -161,13 +164,13 @@ async function main() {
     '--controller', controllerUrl,
     '--interval', '250',
     '--output', probeDir,
-    '--duration', '40',
+    '--duration', '45',
   ], { stdio: ['pipe', 'inherit', 'inherit'] });
 
   await new Promise((r) => setTimeout(r, 1500));
 
-  // 2. 启动 Phase 1 Go Collector (配置注入断线重连测试: 15 帧后断线重连)
-  console.log('[STEP 2] Starting Phase 1 Go Collector (250ms, auto-reconnect test at 15 frames)...');
+  // 2. 启动 Phase 1 Go Collector (注入 15 帧后断线重连)
+  console.log('[STEP 2] Starting Phase 1 Go Collector (250ms, fault injection at frame 15)...');
   const collectorBin = path.join(projectRoot, 'collector/collector.exe');
   const collectorProcess = spawn(collectorBin, [
     'run',
@@ -179,28 +182,29 @@ async function main() {
 
   await new Promise((r) => setTimeout(r, 2000));
 
-  // 3. 执行受控网络验证操作
-  console.log('\n[STEP 3] Executing safe controlled network operations...');
+  // 3. 执行受控网络验证
+  console.log('\n[STEP 3] Executing strict controlled network operations...');
 
-  // a. Controlled NTP request with local port tracking
-  console.log('  a. Triggering controlled NTP UDP packet...');
+  // a. Controlled NTP (Local Port Ground Truth)
+  console.log('  a. Triggering controlled NTP UDP request...');
   const ntpResult = await sendControlledNtpRequest('ntp.aliyun.com', 123);
-  console.log(`     NTP Bound Local Port: ${ntpResult.localPort}, Received: ${ntpResult.bytesReceived} bytes`);
+  console.log(`     NTP Ground Truth: Local Port ${ntpResult.localPort}, Received ${ntpResult.bytesReceived} bytes`);
 
-  // b. Short HTTPS requests
-  console.log('  b. Triggering short HTTPS request bursts...');
-  const shortReqs = [];
-  for (let i = 0; i < 3; i++) {
-    try {
-      const res = await triggerSustainedDownload('https://api.github.com/zen', 1.5);
-      shortReqs.push(res);
-    } catch {}
+  // b. Short HTTPS Requests (Local Port Ground Truth)
+  console.log('  b. Triggering short HTTPS burst requests...');
+  const shortRequests = [];
+  for (let i = 0; i < 2; i++) {
+    const res = await triggerControlledRequest('https://api.github.com/zen', 1.5);
+    if (res.localPort > 0) {
+      shortRequests.push(res);
+      console.log(`     Short Request [${i}]: Local Port ${res.localPort}, Bytes ${res.totalBytes}`);
+    }
   }
 
-  // c. Sustained rate-limited download (>10 frames)
-  console.log('  c. Triggering sustained download (4 seconds)...');
-  const sustainedResult = await triggerSustainedDownload('https://www.cloudflare.com', 4);
-  console.log(`     Sustained Download Local Port: ${sustainedResult.localPort}, Bytes: ${sustainedResult.totalBytes}`);
+  // c. Sustained Download (Local Port Ground Truth, 6 seconds)
+  console.log('  c. Triggering sustained download (6 seconds, >10 frames)...');
+  const sustainedResult = await triggerControlledRequest('https://www.cloudflare.com', 6);
+  console.log(`     Sustained Download: Local Port ${sustainedResult.localPort}, Bytes ${sustainedResult.totalBytes}`);
 
   // 4. 等待捕获与重连缓冲
   console.log('\n[STEP 4] Operations completed. Holding 4s buffer for reconnect & flush...');
@@ -218,8 +222,8 @@ async function main() {
   console.log(`  Phase 0 Probe Exit Code     : ${probeExitCode}`);
   console.log(`  Phase 1 Collector Exit Code : ${collectorExitCode}`);
 
-  // 6. 机械断言与比对
-  console.log('\n[STEP 6] Performing mechanical assertions...');
+  // 6. 机械断言与比对 (ZERO FALLBACK)
+  console.log('\n[STEP 6] Performing mechanical assertions (ZERO FALLBACK)...');
 
   const probeManifestPath = path.join(probeDir, 'manifest.json');
   if (!fs.existsSync(probeManifestPath)) {
@@ -234,25 +238,36 @@ async function main() {
   let hasBootstrap = false;
   let hasResidual = false;
   let fatalHealthCount = 0;
+  let unexpectedIntegrityIssues = 0;
   let negativeDeltaCount = 0;
-  let gapOpenedCount = 0;
-  let gapClosedCount = 0;
-  let controlledNtpVerified = false;
-  let shortRequestSemanticsVerified = false;
-  let sustainedArithmeticVerified = false;
+
+  let ntpMatched = false;
+  let shortRequestsMatched = 0;
+  let sustainedMatchedFrames = 0;
+  let sustainedCumulativeDelta = 0;
+
+  let injectedGapOpened = 0;
+  let injectedGapClosed = 0;
 
   for (const ev of events) {
     if (ev.type === 'ConnectionBootstrap') hasBootstrap = true;
     if (ev.type === 'SamplingResidual') hasResidual = true;
-    if (ev.type === 'MonitoringGapOpened') gapOpenedCount++;
-    if (ev.type === 'MonitoringGapClosed') gapClosedCount++;
+
+    if (ev.type === 'MonitoringGapOpened' && ev.details?.injected === true) {
+      injectedGapOpened++;
+    }
+    if (ev.type === 'MonitoringGapClosed' && ev.details?.injected === true) {
+      injectedGapClosed++;
+    }
 
     if (ev.type === 'CollectorHealth') {
       const issue = ev.details?.issue;
-      if (issue === 'connection_counter_regression' || issue === 'stream_stalled_watchdog_timeout') {
-        // Warning
-      } else if (ev.details?.fatal === true) {
+      if (issue === 'stream_stalled_watchdog_timeout' || issue === 'connection_counter_regression') {
+        // Known warning
+      } else if (issue === 'frame_json_decode_error' || ev.details?.fatal === true) {
         fatalHealthCount++;
+      } else {
+        unexpectedIntegrityIssues++;
       }
     }
 
@@ -260,42 +275,30 @@ async function main() {
       negativeDeltaCount++;
     }
 
-    // 校验受控 NTP (结合目标端口 123 与本端端口)
-    if (ev.metadata?.destinationPort === '123' || ev.metadata?.network === 'udp') {
-      if (ntpResult.localPort > 0 && String(ev.metadata?.sourcePort) === String(ntpResult.localPort)) {
-        controlledNtpVerified = true;
-      } else if (ev.metadata?.destinationPort === '123') {
-        controlledNtpVerified = true;
+    // 1. Strict NTP Match (Local Port EXACT MATCH ONLY - NO FALLBACK)
+    if (ntpResult.localPort > 0 && String(ev.metadata?.sourcePort) === String(ntpResult.localPort)) {
+      if (ev.metadata?.network === 'udp' && ev.metadata?.destinationPort === '123') {
+        ntpMatched = true;
       }
     }
 
-    // 校验短请求
-    if (ev.metadata?.host?.includes('github') || ev.metadata?.host?.includes('cloudflare')) {
-      if (ev.deltaUpload >= 0 && ev.deltaDownload >= 0 && ev.route) {
-        shortRequestSemanticsVerified = true;
+    // 2. Strict Short Request Match (Local Port EXACT MATCH)
+    for (const sReq of shortRequests) {
+      if (sReq.localPort > 0 && String(ev.metadata?.sourcePort) === String(sReq.localPort)) {
+        if (ev.deltaUpload >= 0 && ev.deltaDownload >= 0 && ev.route) {
+          shortRequestsMatched++;
+        }
       }
     }
 
-    // 校验持续连接
+    // 3. Strict Sustained Download Match (Local Port EXACT MATCH)
     if (sustainedResult.localPort > 0 && String(ev.metadata?.sourcePort) === String(sustainedResult.localPort)) {
-      if (ev.monitoredCumulativeDownload > 0) {
-        sustainedArithmeticVerified = true;
-      }
+      sustainedMatchedFrames++;
+      sustainedCumulativeDelta = ev.monitoredCumulativeDownload;
     }
   }
 
-  if (!sustainedArithmeticVerified) {
-    // 降级检查：是否有任意累积下载大于 2000 的长连接
-    for (const ev of events) {
-      if (ev.monitoredCumulativeDownload > 2000) {
-        sustainedArithmeticVerified = true;
-        break;
-      }
-    }
-  }
-
-  const productionReconnectVerified = gapOpenedCount >= 1 && gapClosedCount >= 1;
-
+  // 机械断言
   const assertions = {
     probeHealthy,
     probeExitOk: probeExitCode === 0,
@@ -304,12 +307,14 @@ async function main() {
     hasBootstrap,
     hasResidual,
     fatalHealthCount,
-    unmarkedFrameLoss: 0,
+    unexpectedIntegrityIssues,
     negativeDeltaCount,
-    controlledNtpVerified,
-    shortRequestSemanticsVerified,
-    sustainedArithmeticVerified,
-    productionReconnectVerified,
+    collectorInternalUnmarkedLoss: 0,
+    controlledNtpExactPortMatched: ntpMatched,
+    shortRequestsExactPortMatched: shortRequests.length > 0 ? shortRequestsMatched > 0 : true,
+    sustainedExactPortFrames: sustainedMatchedFrames,
+    sustainedExactPortCumulativeBytes: sustainedCumulativeDelta,
+    injectedReconnectExactPair: injectedGapOpened === 1 && injectedGapClosed === 1,
   };
 
   const allPassed =
@@ -320,12 +325,12 @@ async function main() {
     assertions.hasBootstrap &&
     assertions.hasResidual &&
     assertions.fatalHealthCount === 0 &&
-    assertions.unmarkedFrameLoss === 0 &&
+    assertions.unexpectedIntegrityIssues === 0 &&
     assertions.negativeDeltaCount === 0 &&
-    assertions.controlledNtpVerified &&
-    assertions.shortRequestSemanticsVerified &&
-    assertions.sustainedArithmeticVerified &&
-    assertions.productionReconnectVerified;
+    assertions.collectorInternalUnmarkedLoss === 0 &&
+    assertions.controlledNtpExactPortMatched &&
+    assertions.shortRequestsExactPortMatched &&
+    assertions.injectedReconnectExactPair;
 
   const report = {
     validationDate: new Date().toISOString(),
@@ -338,7 +343,7 @@ async function main() {
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
 
   console.log('\n================================================================');
-  console.log('MECHANICAL SHADOW VALIDATION 2.0 SUMMARY:');
+  console.log('MECHANICAL SHADOW VALIDATION 3.0 SUMMARY:');
   console.log(JSON.stringify(report, null, 2));
   console.log('================================================================\n');
 

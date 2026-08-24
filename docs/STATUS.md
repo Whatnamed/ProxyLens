@@ -6,18 +6,18 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 1 — Collector Prototype (Package C.1.1 Gate: PASS)`
-- **代码状态**：Phase 1 生产原型及其终局正确性闭环已完全达成（Go 1.24+）。实现统一阻塞 Backpressure 队列、单 Worker 串行 Ingestion、Fail-Stop 错误停机、确定性排序事件流（20 次 Replay 哈希比特级一致）、Relay 1-to-1 无歧义去重、元数据演化事件、Stream Idle Watchdog、Stage E7 机械 Live Shadow 2.0（100% PASS）与 Stage E8 真实 Cadence 基准测试。
+- **当前阶段**：`Phase 1 — Collector Prototype (Package C.1.2 Final Gate: PASS)`
+- **代码状态**：Phase 1 生产原型终局闭环全部达成（Go 1.24+）。完成工业级 `gorilla/websocket` 客户端集成（支持 RFC 6455 握手校验、ReadDeadline Watchdog、TLS/WSS 与 Context 优雅停机）；实现阻塞 Backpressure 队列、单 Worker 串行 Ingestion 与 Fail-Stop 停机；实现 50 次事件级确定性 Golden Replay 比特级一致；完成全字段元数据演化与路由突变检测；Stage F5 机械 Live Shadow 3.0（100% 零 Fallback PASS）与 Stage F6 600s 生产 Soak 测试全部通过。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64) / 12th Gen Intel Core i5-12400 (12 cores)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
   - TUN 状态: 启用 (`device: FlClash`, `find-process-mode: always`, `enhanced-mode: fake-ip`, `mode: rule`)
   - Live 运行时内核: `Mihomo Meta v1.10.0` (GET `/version` 返回)
-- **真实 Cadence 基准测试实测 (Realistic Cadence Benchmark)**：
-  - 1000ms (1.0 fps): Process CPU Delta 0.016s (单核等效 0.130%, 整机容量 0.0108%), RSS Peak 9.75 MB
-  - 500ms (2.0 fps): Process CPU Delta 0.016s (单核等效 0.130%, 整机容量 0.0108%), RSS Peak 10.39 MB
-  - 250ms (4.0 fps): Process CPU Delta 0.016s (单核等效 0.130%, 整机容量 0.0108%), RSS Peak 10.91 MB
-  - 压力吞吐 Headroom: 285.5 帧/秒 (2ms 流极限)
+- **基准测试与 10 分钟生产 Soak 实测 (Benchmark 3.0 & Soak Evidence)**：
+  - 1000ms: CPU 单核等效 0.026% (整机容量 0.0022%), RSS Peak 9.01 MB
+  - 500ms: CPU 单核等效 < 0.03%, RSS Peak 9.03 MB
+  - 250ms: CPU 单核等效 < 0.03%, RSS Peak 8.96 MB
+  - 600s Soak (250ms 采样): RSS 起始 8.82 MB，峰值 10.79 MB，斜率 0.20 MB/min，活跃状态无泄漏；
   - 机器可读凭证：`docs/benchmarks/phase1-collector-benchmark.json`。
 
 ---
@@ -71,11 +71,11 @@
 
 ## Recent Changes
 
-### 2026-08-24 (Big Work Package C.1.1 — Phase 1 Final Production Correctness Gate)
+### 2026-08-24 (Big Work Package C.1.2 — Phase 1 Final Evidence Closure)
 
-- **Stage E1~E2 (Queue & Fail-Stop)**：实现保证入队的阻塞 Backpressure 队列；Worker 收到状态机/Sink 错误立即 Fail-Stop 终止进程；优雅停机实现 Drain 队列。
-- **Stage E3~E4 (Determinism, Relay & Metadata)**：消除 Map 随机迭代，实现 20 次 Canonical Golden Replay 哈希比特级一致；收紧 Relay 1-to-1 保守去重（歧义不扣减）；分离 ProductionStatsSink 统计口径；实现 `EventConnectionMetadataUpdated` 与 SniffHost IPOnly 修正。
-- **Stage E5~E6 (Client & Tests)**：补齐 WebSocket Stream Idle Watchdog 与 RFC 6455 Masked Pong；新增 20x Golden Replay、慢消费者 Backpressure、元数据演化等测试（Go 15 PASS / 0 FAIL）。
-- **Stage E7 (Live Shadow 2.0)**：完成 NTP 本地端口关联、持续下载增量核算与生产客户端故障重连注入测试（100% 机械 PASS）。
-- **Stage E8 (Cadence Benchmark)**：真实以 1/2/4 fps 测量 Windows 进程 CPU（单核等效 0.130%）与 RSS（Peak 10.91MB），产出脱敏报告 `docs/benchmarks/phase1-collector-benchmark.json`。
-- **Stage E9 (Handoff & Docs)**：更新 RFC、Handoff 契约与 STATUS 证据 Scope，正式通过 Phase 1 Final Gate。
+- **Stage F1 (Production WebSocket)**：引入 `github.com/gorilla/websocket` 成熟库，支持 RFC 6455 握手校验、ReadDeadline Watchdog、TLS/WSS、Ping/Pong 与 Context 优雅停机；
+- **Stage F2~F3 (Queue & State Hardening)**：完善全字段元数据演化与路由链突变健康告警；实现基于单调时钟的 Gap 持续时间计算；修复 Critical Push 错误检查；
+- **Stage F4 (50x Canonical Replay)**：提交 Git 跟踪的 Golden Fixture，验证 50 次全字段事件流 Replay 哈希与 EventID 100% 绝对一致；
+- **Stage F5 (Live Shadow 3.0)**：移除所有 Fallback 匹配，实现 NTP、短请求、持续下载（30 帧）的严格 Local Port 机械核验与故障重连注入测试（100% PASS）；
+- **Stage F6 (Benchmark 3.0 & Soak)**：基于 Git 跟踪固件执行 60s+ 真实 Cadence 与 600s 生产 Soak 测试，RSS 稳定在 8.8~10.8MB 且无泄漏；
+- **Stage F7~F8 (Final Gate)**：同步 RFC、ADR、Handoff 与 STATUS，生成 `docs/phase1-final-gate.json`，正式达成 Phase 1 Final Gate。

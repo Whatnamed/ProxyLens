@@ -244,7 +244,10 @@ func TestEpochResetDuringGapHandledSafely(t *testing.T) {
 	}
 	_ = engine.ProcessFrame(frame1)
 
-	engine.MarkGapOpened(time.Now())
+	_ = engine.ProcessIngestItem(&types.IngestItem{
+		Kind:      types.ItemGapOpened,
+		Timestamp: time.Now(),
+	})
 
 	frame2 := &types.ConnectionSnapshotFrame{
 		ReceivedAt: "2026-08-21T00:00:10.000Z",

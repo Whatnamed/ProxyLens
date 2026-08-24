@@ -50,8 +50,11 @@ type StateEngine struct {
 	hasEverBeenHealthy                     bool
 	gapIsOpen                              bool
 	gapStartTime                           time.Time
+	gapStartTimeMonotonic                  time.Time
 	gapStartTimeString                     string
+	gapInjectionDetails                    map[string]any
 	lastSuccessfullyProcessedHealthyFrameAt time.Time
+	lastHealthyMonotonic                   time.Time
 	lastSuccessfullyProcessedHealthyStr    string
 	isBootstrapFrame                       bool
 }
@@ -105,20 +108,32 @@ func (e *StateEngine) ProcessIngestItem(item *types.IngestItem) error {
 				gapStart = item.Timestamp
 			}
 			e.gapStartTime = gapStart
+			e.gapStartTimeMonotonic = e.lastHealthyMonotonic
+			if e.gapStartTimeMonotonic.IsZero() {
+				e.gapStartTimeMonotonic = time.Now()
+			}
 			e.gapStartTimeString = e.lastSuccessfullyProcessedHealthyStr
 			if e.gapStartTimeString == "" {
 				e.gapStartTimeString = gapStart.Format(time.RFC3339Nano)
 			}
+			e.gapInjectionDetails = item.Details
 			e.sessionState = types.SessionReconnectBackoff
+
+			details := map[string]any{
+				"gapStart":             e.gapStartTimeString,
+				"disconnectDetectedAt": item.Timestamp.Format(time.RFC3339Nano),
+			}
+			if item.Details != nil {
+				for k, v := range item.Details {
+					details[k] = v
+				}
+			}
 
 			ev := &types.CollectorEvent{
 				Type:                types.EventMonitoringGapOpened,
 				Timestamp:           item.Timestamp,
 				AttributionInterval: []string{e.gapStartTimeString},
-				Details: map[string]any{
-					"gapStart":             e.gapStartTimeString,
-					"disconnectDetectedAt": item.Timestamp.Format(time.RFC3339Nano),
-				},
+				Details:             details,
 			}
 			return e.emitEvent(ev)
 		}
@@ -141,7 +156,7 @@ func (e *StateEngine) ProcessIngestItem(item *types.IngestItem) error {
 			Timestamp: item.Timestamp,
 			Details: map[string]any{
 				"issue":       "queue_overload_degradation",
-				"description": "Collector input queue saturated, possible unobserved frames",
+				"description": "Collector input queue saturated, backpressure active",
 			},
 		}
 		return e.emitEvent(ev)
@@ -154,14 +169,25 @@ func (e *StateEngine) ProcessIngestItem(item *types.IngestItem) error {
 	}
 }
 
-// ProcessFrame 兼容旧直接调用入口（内部转调 processFrameInternal）
+// ProcessFrame 兼容入口
 func (e *StateEngine) ProcessFrame(frame *types.ConnectionSnapshotFrame) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.processFrameInternal(frame)
 }
 
-// processFrameInternal 串行执行确定性状态机计算
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame) error {
 	e.frameSequence++
 	e.eventSequence = 0
@@ -197,25 +223,30 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			gapStartStr = e.lastSuccessfullyProcessedHealthyStr
 		}
 
-		// 检查 Gap 期间是否发生 Global Epoch Reset
+		monotonicGapDurationMs := time.Since(e.gapStartTimeMonotonic).Milliseconds()
 		isEpochBreakAcrossGap := payload.UploadTotal < e.prevUploadTotal || payload.DownloadTotal < e.prevDownloadTotal
 
 		if isEpochBreakAcrossGap {
-			// 关闭 Gap 但标记区间物理流量不可用
+			closedDetails := map[string]any{
+				"actualGapMs":                 monotonicGapDurationMs,
+				"gapPhysicalDeltaUnavailable": true,
+				"reason":                      "epoch_reset_across_gap",
+			}
+			if e.gapInjectionDetails != nil {
+				for k, v := range e.gapInjectionDetails {
+					closedDetails[k] = v
+				}
+			}
+
 			if err := e.emitEvent(&types.CollectorEvent{
 				Type:                types.EventMonitoringGapClosed,
 				Timestamp:           frameTs,
 				AttributionInterval: []string{gapStartStr, frameTsStr},
-				Details: map[string]any{
-					"actualGapMs":                 frameTs.Sub(e.gapStartTime).Milliseconds(),
-					"gapPhysicalDeltaUnavailable": true,
-					"reason":                      "epoch_reset_across_gap",
-				},
+				Details:             closedDetails,
 			}); err != nil {
 				return err
 			}
 
-			// 触发 Epoch Break
 			if err := e.emitEvent(&types.CollectorEvent{
 				Type:      types.EventCounterEpochBreak,
 				Timestamp: frameTs,
@@ -234,22 +265,27 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			e.activeMap = make(map[string]*ActiveConnectionState)
 			e.gapIsOpen = false
 			e.isBootstrapFrame = true
-			// 继续进入下方的 Bootstrap 处理
 		} else {
-			// 正常 Gap 恢复（Epoch 连续）
 			e.sessionState = types.SessionRecovering
 			globalGapUp := payload.UploadTotal - e.prevUploadTotal
 			globalGapDown := payload.DownloadTotal - e.prevDownloadTotal
+
+			closedDetails := map[string]any{
+				"actualGapMs":           monotonicGapDurationMs,
+				"globalGapUploadDelta":   globalGapUp,
+				"globalGapDownloadDelta": globalGapDown,
+			}
+			if e.gapInjectionDetails != nil {
+				for k, v := range e.gapInjectionDetails {
+					closedDetails[k] = v
+				}
+			}
 
 			if err := e.emitEvent(&types.CollectorEvent{
 				Type:                types.EventMonitoringGapClosed,
 				Timestamp:           frameTs,
 				AttributionInterval: []string{gapStartStr, frameTsStr},
-				Details: map[string]any{
-					"actualGapMs":           frameTs.Sub(e.gapStartTime).Milliseconds(),
-					"globalGapUploadDelta":   globalGapUp,
-					"globalGapDownloadDelta": globalGapDown,
-				},
+				Details:             closedDetails,
 			}); err != nil {
 				return err
 			}
@@ -259,7 +295,6 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				currMap[c.ID] = c
 			}
 
-			// a. 跨 Gap 存活连接与新增连接（严格按切片原始顺序）
 			for _, c := range payload.Connections {
 				id := c.ID
 				if prev, exists := e.activeMap[id]; exists {
@@ -313,7 +348,6 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 						return err
 					}
 				} else {
-					// b. 恢复后首次出现的连接 (确定性分类与 Baseline 归属)
 					route := attribution.ClassifyRoute(c.Chains)
 					attrClass := attribution.ClassifyInitialAttribution(&c)
 					quality := c.Metadata.DeriveQualityFlags(c.Rule, c.Chains)
@@ -381,7 +415,6 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				}
 			}
 
-			// c. 在 Gap 期间消失的连接 (ID 排序保证确定性)
 			var disappearedIDs []string
 			for id := range e.activeMap {
 				if _, exists := currMap[id]; !exists {
@@ -411,6 +444,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			e.prevUploadTotal = payload.UploadTotal
 			e.prevDownloadTotal = payload.DownloadTotal
 			e.lastSuccessfullyProcessedHealthyFrameAt = frameTs
+			e.lastHealthyMonotonic = time.Now()
 			e.lastSuccessfullyProcessedHealthyStr = frameTsStr
 			e.gapIsOpen = false
 			e.sessionState = types.SessionHealthy
@@ -471,7 +505,6 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			}
 			e.activeMap[c.ID] = state
 
-			// Bootstrap 帧严格输出 Delta = 0, Monitored = 0
 			if err := e.emitEvent(&types.CollectorEvent{
 				Type:                        types.EventConnectionBootstrap,
 				Timestamp:                   frameTs,
@@ -502,6 +535,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		e.prevUploadTotal = payload.UploadTotal
 		e.prevDownloadTotal = payload.DownloadTotal
 		e.lastSuccessfullyProcessedHealthyFrameAt = frameTs
+		e.lastHealthyMonotonic = time.Now()
 		e.lastSuccessfullyProcessedHealthyStr = frameTsStr
 		e.hasEverBeenHealthy = true
 		e.isBootstrapFrame = false
@@ -532,13 +566,11 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		}
 	}
 
-	// 执行生产级 Relay 结构去重匹配 (无歧义 1-to-1)
 	confirmedRelays := attribution.PerformFrameRelayDeduplication(payload.Connections, deltas)
 
 	var uniqueObservedUpload int64
 	var uniqueObservedDownload int64
 
-	// a. 更新存活连接与新增连接 (严格按 Connections 原始顺序处理)
 	for _, c := range payload.Connections {
 		id := c.ID
 		delta := deltas[id]
@@ -547,13 +579,28 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		quality := c.Metadata.DeriveQualityFlags(c.Rule, c.Chains)
 
 		if prev, exists := e.activeMap[id]; exists {
-			// 1. 元数据演化检测 (Metadata Evolution)
-			metaChanged := prev.Snapshot.Metadata.Process != c.Metadata.Process ||
-				prev.Snapshot.Metadata.Host != c.Metadata.Host ||
-				prev.Snapshot.Metadata.SniffHost != c.Metadata.SniffHost ||
+			// 1. 全字段元数据演化与路由突变检测
+			chainsChanged := !slicesEqual(prev.Snapshot.Chains, c.Chains)
+			metaChanged := prev.Snapshot.Metadata != c.Metadata ||
 				prev.Snapshot.Rule != c.Rule ||
 				prev.Snapshot.RulePayload != c.RulePayload ||
+				!slicesEqual(prev.Snapshot.ProviderChains, c.ProviderChains) ||
+				chainsChanged ||
 				prev.QualityFlags != quality
+
+			if chainsChanged {
+				_ = e.emitEvent(&types.CollectorEvent{
+					Type:         types.EventCollectorHealth,
+					Timestamp:    frameTs,
+					ConnectionID: id,
+					Details: map[string]any{
+						"issue":      "routing_chain_mutation_observed",
+						"prevChains": prev.Snapshot.Chains,
+						"currChains": c.Chains,
+					},
+				})
+				prev.Route = attribution.ClassifyRoute(c.Chains)
+			}
 
 			if metaChanged {
 				prev.Snapshot = c
@@ -568,6 +615,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 					RulePayload:    c.RulePayload,
 					Chains:         c.Chains,
 					ProviderChains: c.ProviderChains,
+					Route:          prev.Route,
 				}); err != nil {
 					return err
 				}
@@ -651,7 +699,6 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				return err
 			}
 		} else {
-			// 稳态首次出现的新连接
 			route := attribution.ClassifyRoute(c.Chains)
 			initialClass := attribution.ClassifyInitialAttribution(&c)
 			var relayEvidence map[string]any
@@ -709,7 +756,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		}
 	}
 
-	// b. 消失连接检测 (通过排序保证确定性)
+	// 消失连接检测 (通过排序保证确定性)
 	var disappearedIDs []string
 	for id := range e.activeMap {
 		if _, exists := currMap[id]; !exists {
@@ -733,7 +780,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		delete(e.activeMap, id)
 	}
 
-	// c. 全局残差计算 (Residual = GlobalDelta - UniqueObserved)
+	// 全局残差计算 (Residual = GlobalDelta - UniqueObserved)
 	globalUpDelta := payload.UploadTotal - e.prevUploadTotal
 	globalDownDelta := payload.DownloadTotal - e.prevDownloadTotal
 
@@ -758,16 +805,9 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 	e.prevUploadTotal = payload.UploadTotal
 	e.prevDownloadTotal = payload.DownloadTotal
 	e.lastSuccessfullyProcessedHealthyFrameAt = frameTs
+	e.lastHealthyMonotonic = time.Now()
 	e.lastSuccessfullyProcessedHealthyStr = frameTsStr
 	return nil
-}
-
-// MarkGapOpened 外部显式通知断线
-func (e *StateEngine) MarkGapOpened(t time.Time) {
-	_ = e.ProcessIngestItem(&types.IngestItem{
-		Kind:      types.ItemGapOpened,
-		Timestamp: t,
-	})
 }
 
 // GetActiveConnectionsCount 获取当前活跃连接数
