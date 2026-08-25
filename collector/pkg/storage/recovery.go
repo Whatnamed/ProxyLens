@@ -66,5 +66,61 @@ func RebuildProjections(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	// 4. 从 collector_sessions 重新推导并关闭已停止/中断会话的未闭合连接观察生命周期
+	sessRows, err := tx.QueryContext(ctx, `SELECT session_id, status, started_at, ended_at, last_event_at FROM collector_sessions`)
+	if err != nil {
+		return fmt.Errorf("failed to query sessions during rebuild: %w", err)
+	}
+	defer sessRows.Close()
+
+	type sessionLifecycle struct {
+		id, status, startedAt string
+		endedAt, lastEventAt  sql.NullString
+	}
+	var sessions []sessionLifecycle
+	for sessRows.Next() {
+		var s sessionLifecycle
+		if err := sessRows.Scan(&s.id, &s.status, &s.startedAt, &s.endedAt, &s.lastEventAt); err != nil {
+			return fmt.Errorf("failed to scan session lifecycle during rebuild: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+
+	for _, s := range sessions {
+		if s.status == string(SessionStatusClosedClean) {
+			endTime := s.endedAt.String
+			if endTime == "" {
+				endTime = s.lastEventAt.String
+			}
+			if endTime == "" {
+				endTime = s.startedAt
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE connections SET
+					observation_ended_at = ?,
+					observation_end_reason = 'collector_session_closed'
+				WHERE session_id = ? AND observation_ended_at IS NULL;
+			`, endTime, s.id); err != nil {
+				return fmt.Errorf("failed to reconcile clean session close during rebuild: %w", err)
+			}
+		} else if s.status == string(SessionStatusInterrupted) {
+			endTime := s.endedAt.String
+			if endTime == "" {
+				endTime = s.lastEventAt.String
+			}
+			if endTime == "" {
+				endTime = s.startedAt
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE connections SET
+					observation_ended_at = ?,
+					observation_end_reason = 'collector_session_interrupted'
+				WHERE session_id = ? AND observation_ended_at IS NULL;
+			`, endTime, s.id); err != nil {
+				return fmt.Errorf("failed to reconcile interrupted session close during rebuild: %w", err)
+			}
+		}
+	}
+
 	return tx.Commit()
 }

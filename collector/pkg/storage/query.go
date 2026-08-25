@@ -24,7 +24,8 @@ func (q *QueryService) GetConnection(ctx context.Context, sessionID string, epoc
 	row := q.db.QueryRowContext(ctx, `
 		SELECT
 			session_id, epoch_id, connection_id, mihomo_start, first_observed_at, last_observed_at,
-			disappeared_observed_at, state, preexisting_at_start, possible_unobserved_tail, start_classification,
+			disappeared_observed_at, observation_ended_at, observation_end_reason, observation_end_event_id,
+			state, preexisting_at_start, possible_unobserved_tail, start_classification,
 			process, process_path, host, sniff_host, network, type, source_ip, source_port,
 			destination_ip, remote_destination, destination_port, dns_mode, special_proxy,
 			special_rules_json, inbound_user, inbound_name, inbound_port, rule, rule_payload,
@@ -39,11 +40,12 @@ func (q *QueryService) GetConnection(ctx context.Context, sessionID string, epoc
 	var rec ConnectionRecord
 	var mihomoStart, startClass, specialRulesJSON, chainsJSON, providerChainsJSON, qualityJSON, relayEvJSON sql.NullString
 	var firstObsStr, lastObsStr string
-	var disObsStr sql.NullString
+	var disObsStr, obsEndedStr, obsEndReason, obsEndEvID sql.NullString
 
 	err := row.Scan(
 		&rec.SessionID, &rec.EpochID, &rec.ConnectionID, &mihomoStart, &firstObsStr, &lastObsStr,
-		&disObsStr, &rec.State, &rec.PreexistingAtStart, &rec.PossibleUnobservedTail, &startClass,
+		&disObsStr, &obsEndedStr, &obsEndReason, &obsEndEvID,
+		&rec.State, &rec.PreexistingAtStart, &rec.PossibleUnobservedTail, &startClass,
 		&rec.Metadata.Process, &rec.Metadata.ProcessPath, &rec.Metadata.Host, &rec.Metadata.SniffHost,
 		&rec.Metadata.Network, &rec.Metadata.Type, &rec.Metadata.SourceIP, &rec.Metadata.SourcePort,
 		&rec.Metadata.DestinationIP, &rec.Metadata.RemoteDestination, &rec.Metadata.DestinationPort,
@@ -67,6 +69,13 @@ func (q *QueryService) GetConnection(ctx context.Context, sessionID string, epoc
 		t, _ := time.Parse(time.RFC3339Nano, disObsStr.String)
 		rec.DisappearedObservedAt = &t
 	}
+	if obsEndedStr.Valid && obsEndedStr.String != "" {
+		t, _ := time.Parse(time.RFC3339Nano, obsEndedStr.String)
+		rec.ObservationEndedAt = &t
+	}
+	rec.ObservationEndReason = obsEndReason.String
+	rec.ObservationEndEventID = obsEndEvID.String
+	rec.ObservationActive = (rec.ObservationEndedAt == nil)
 
 	rec.Metadata.SpecialRules = specialRulesJSON.String
 	if chainsJSON.Valid && chainsJSON.String != "" {
@@ -135,7 +144,8 @@ func (q *QueryService) ListConnections(ctx context.Context, filter ConnectionFil
 	querySQL := fmt.Sprintf(`
 		SELECT
 			session_id, epoch_id, connection_id, mihomo_start, first_observed_at, last_observed_at,
-			disappeared_observed_at, state, preexisting_at_start, possible_unobserved_tail, start_classification,
+			disappeared_observed_at, observation_ended_at, observation_end_reason, observation_end_event_id,
+			state, preexisting_at_start, possible_unobserved_tail, start_classification,
 			process, process_path, host, sniff_host, network, type, source_ip, source_port,
 			destination_ip, remote_destination, destination_port, dns_mode, special_proxy,
 			special_rules_json, inbound_user, inbound_name, inbound_port, rule, rule_payload,
@@ -160,11 +170,12 @@ func (q *QueryService) ListConnections(ctx context.Context, filter ConnectionFil
 		var rec ConnectionRecord
 		var mihomoStart, startClass, specialRulesJSON, chainsJSON, providerChainsJSON, qualityJSON, relayEvJSON sql.NullString
 		var firstObsStr, lastObsStr string
-		var disObsStr sql.NullString
+		var disObsStr, obsEndedStr, obsEndReason, obsEndEvID sql.NullString
 
 		if err := rows.Scan(
 			&rec.SessionID, &rec.EpochID, &rec.ConnectionID, &mihomoStart, &firstObsStr, &lastObsStr,
-			&disObsStr, &rec.State, &rec.PreexistingAtStart, &rec.PossibleUnobservedTail, &startClass,
+			&disObsStr, &obsEndedStr, &obsEndReason, &obsEndEvID,
+			&rec.State, &rec.PreexistingAtStart, &rec.PossibleUnobservedTail, &startClass,
 			&rec.Metadata.Process, &rec.Metadata.ProcessPath, &rec.Metadata.Host, &rec.Metadata.SniffHost,
 			&rec.Metadata.Network, &rec.Metadata.Type, &rec.Metadata.SourceIP, &rec.Metadata.SourcePort,
 			&rec.Metadata.DestinationIP, &rec.Metadata.RemoteDestination, &rec.Metadata.DestinationPort,
@@ -187,6 +198,13 @@ func (q *QueryService) ListConnections(ctx context.Context, filter ConnectionFil
 			t, _ := time.Parse(time.RFC3339Nano, disObsStr.String)
 			rec.DisappearedObservedAt = &t
 		}
+		if obsEndedStr.Valid && obsEndedStr.String != "" {
+			t, _ := time.Parse(time.RFC3339Nano, obsEndedStr.String)
+			rec.ObservationEndedAt = &t
+		}
+		rec.ObservationEndReason = obsEndReason.String
+		rec.ObservationEndEventID = obsEndEvID.String
+		rec.ObservationActive = (rec.ObservationEndedAt == nil)
 
 		rec.Metadata.SpecialRules = specialRulesJSON.String
 		if chainsJSON.Valid && chainsJSON.String != "" {

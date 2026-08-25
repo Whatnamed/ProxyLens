@@ -276,10 +276,13 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 			state = 'disappeared_from_snapshot',
 			disappeared_observed_at = ?,
 			possible_unobserved_tail = 1,
+			observation_ended_at = ?,
+			observation_end_reason = 'disappeared_from_snapshot',
+			observation_end_event_id = ?,
 			updated_at = ?
 		WHERE session_id = ? AND epoch_id = ? AND connection_id = ?;
 		`
-		res, err := tx.ExecContext(ctx, updateSQL, obsAtStr, nowStr, ev.SessionID, ev.EpochID, ev.ConnectionID)
+		res, err := tx.ExecContext(ctx, updateSQL, obsAtStr, obsAtStr, ev.EventID, nowStr, ev.SessionID, ev.EpochID, ev.ConnectionID)
 		if err != nil {
 			return fmt.Errorf("failed to project Disappeared: %w", err)
 		}
@@ -289,6 +292,20 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 		}
 		if rows != 1 {
 			return fmt.Errorf("%w: expected 1 row affected for Disappeared on connection %s, got %d", ErrProjectionContractViolation, ev.ConnectionID, rows)
+		}
+
+	case types.EventCounterEpochBreak:
+		// CounterEpochBreak 属于旧 Epoch 的最后一个事件，关闭旧 Epoch 下所有仍在观察的连接
+		updateSQL := `
+		UPDATE connections SET
+			observation_ended_at = ?,
+			observation_end_reason = 'epoch_boundary',
+			observation_end_event_id = ?,
+			updated_at = ?
+		WHERE session_id = ? AND epoch_id = ? AND observation_ended_at IS NULL;
+		`
+		if _, err := tx.ExecContext(ctx, updateSQL, obsAtStr, ev.EventID, nowStr, ev.SessionID, ev.EpochID); err != nil {
+			return fmt.Errorf("failed to project CounterEpochBreak: %w", err)
 		}
 
 	case types.EventRelayClassificationChanged:

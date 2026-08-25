@@ -93,6 +93,17 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 			if _, err := tx.ExecContext(ctx, insertGapSQL, gapID, sessionID, gapStart, nowStr, gapReason, nowStr); err != nil {
 				return fmt.Errorf("failed to insert offline boundary gap: %w", err)
 			}
+
+			// 同时关闭旧 session 所有 open observations (时间用 gapStart，绝不用新 session start 冒充)
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE connections SET
+					observation_ended_at = ?,
+					observation_end_reason = 'collector_session_interrupted',
+					updated_at = ?
+				WHERE session_id = ? AND observation_ended_at IS NULL;
+			`, gapStart, nowStr, prevSessionID); err != nil {
+				return fmt.Errorf("failed to close open observations for interrupted session: %w", err)
+			}
 		} else if prevStatus == string(SessionStatusInterrupted) {
 			// 前序会话已被标记为 interrupted (例如显式 EndSession(interrupted))
 			gapStart := prevEndedStr.String
@@ -201,20 +212,43 @@ func (s *SQLiteEventSink) Emit(ev *types.CollectorEvent) error {
 	return tx.Commit()
 }
 
-// EndSession 优雅结束会话
+// EndSession 优雅结束会话并关闭所有尚未结束观察的连接
 func (s *SQLiteEventSink) EndSession(ctx context.Context, sessionID string, status SessionStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE collector_sessions SET
 			status = ?,
 			ended_at = ?,
 			updated_at = ?
 		WHERE session_id = ?;
-	`, string(status), nowStr, nowStr, sessionID)
-	return err
+	`, string(status), nowStr, nowStr, sessionID); err != nil {
+		return err
+	}
+
+	endReason := "collector_session_closed"
+	if status == SessionStatusInterrupted {
+		endReason = "collector_session_interrupted"
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE connections SET
+			observation_ended_at = ?,
+			observation_end_reason = ?,
+			updated_at = ?
+		WHERE session_id = ? AND observation_ended_at IS NULL;
+	`, nowStr, endReason, nowStr, sessionID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // Close 关闭底层数据库连接
