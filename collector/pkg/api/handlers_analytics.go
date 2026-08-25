@@ -133,9 +133,61 @@ func (s *Server) handleTopHosts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func parseAnalyticsFilter(r *http.Request) (storage.AnalyticsFilter, error) {
+	from, to, err := parseTimeFilter(r)
+	if err != nil {
+		return storage.AnalyticsFilter{}, err
+	}
+
+	route, err := parseRouteFilter(r)
+	if err != nil {
+		return storage.AnalyticsFilter{}, err
+	}
+
+	limit := parseLimit(r, 20, 100)
+
+	return storage.AnalyticsFilter{
+		StartTime: from,
+		EndTime:   to,
+		Route:     route,
+		Limit:     limit,
+	}, nil
+}
+
 func (s *Server) handleTopRules(w http.ResponseWriter, r *http.Request) {
-	s.handleTopQuery(w, r, "GetTopRules", func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
-		return s.analyticsSvc.GetTopRules(ctx, f)
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
+		return
+	}
+	if s.analyticsSvc == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "DB_UNAVAILABLE", "Analytics service is unavailable")
+		return
+	}
+
+	filter, err := parseAnalyticsFilter(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "INVALID_TIMESTAMP", err.Error())
+		return
+	}
+
+	items, err := s.analyticsSvc.GetTopRulesDetailed(r.Context(), filter)
+	if err != nil {
+		if errors.Is(err, storage.ErrNoCompletedAccountingRun) {
+			s.writeError(w, http.StatusNotFound, "NO_COMPLETED_ACCOUNTING_RUN", "No completed accounting run found in database")
+			return
+		}
+		s.logInternalError("GetTopRulesDetailed failed", err)
+		s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to query top rules")
+		return
+	}
+
+	if items == nil {
+		items = []storage.TopRuleItem{}
+	}
+
+	s.writeJSON(w, http.StatusOK, TopRulesResponse{
+		Items: items,
+		Limit: filter.Limit,
 	})
 }
 
@@ -161,25 +213,10 @@ func (s *Server) handleTopQuery(w http.ResponseWriter, r *http.Request, queryNam
 		return
 	}
 
-	from, to, err := parseTimeFilter(r)
+	filter, err := parseAnalyticsFilter(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "INVALID_TIMESTAMP", err.Error())
 		return
-	}
-
-	route, err := parseRouteFilter(r)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "INVALID_ROUTE", err.Error())
-		return
-	}
-
-	limit := parseLimit(r, 20, 100)
-
-	filter := storage.AnalyticsFilter{
-		StartTime: from,
-		EndTime:   to,
-		Route:     route,
-		Limit:     limit,
 	}
 
 	items, err := fn(r.Context(), filter)
@@ -195,7 +232,7 @@ func (s *Server) handleTopQuery(w http.ResponseWriter, r *http.Request, queryNam
 
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"items": items,
-		"limit": limit,
+		"limit": filter.Limit,
 	})
 }
 

@@ -28,9 +28,14 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
   useEffect(() => {
     if (!client || !isTauri || probeReportedRef.current) return;
 
-    // 执行 WebView -> Tauri -> authenticated Sidecar E2E 探针自检 (B2)
+    // 仅在显式开启 PROXYLENS_E2E_MODE=1 时执行 WebView -> Tauri -> authenticated Sidecar E2E 探针自检 (B2)
     const runE2EProbe = async () => {
       try {
+        const isE2E = await invoke<boolean>('get_e2e_mode');
+        if (!isE2E) {
+          return;
+        }
+
         const meta = await client.getMeta();
         const summary = await client.getSummary();
         const conns = await client.getConnections({ limit: 1 });

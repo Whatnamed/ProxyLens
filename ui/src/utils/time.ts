@@ -11,32 +11,35 @@ export type QuickWindowType = 'today' | 'yesterday' | '7d' | '30d';
 
 export function getQuickWindow(type: QuickWindowType, now = new Date()): TimeRangeRFC3339 {
   const current = new Date(now);
+  const year = current.getFullYear();
+  const month = current.getMonth();
+  const date = current.getDate();
 
   switch (type) {
     case 'today': {
-      const start = new Date(current.getFullYear(), current.getMonth(), current.getDate(), 0, 0, 0, 0);
+      const start = new Date(year, month, date, 0, 0, 0, 0);
       return {
         from: start.toISOString(),
         to: current.toISOString()
       };
     }
     case 'yesterday': {
-      const start = new Date(current.getFullYear(), current.getMonth(), current.getDate() - 1, 0, 0, 0, 0);
-      const end = new Date(current.getFullYear(), current.getMonth(), current.getDate() - 1, 23, 59, 59, 999);
+      const start = new Date(year, month, date - 1, 0, 0, 0, 0);
+      const end = new Date(year, month, date, 0, 0, 0, 0);
       return {
         from: start.toISOString(),
         to: end.toISOString()
       };
     }
     case '7d': {
-      const start = new Date(current.getTime() - 7 * 86400000);
+      const start = new Date(year, month, date - 6, 0, 0, 0, 0);
       return {
         from: start.toISOString(),
         to: current.toISOString()
       };
     }
     case '30d': {
-      const start = new Date(current.getTime() - 30 * 86400000);
+      const start = new Date(year, month, date - 29, 0, 0, 0, 0);
       return {
         from: start.toISOString(),
         to: current.toISOString()

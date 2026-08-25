@@ -14,6 +14,7 @@ pub fn run() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_query_api_session,
+            commands::get_e2e_mode,
             commands::report_e2e_probe
         ])
         .setup(|app| {

@@ -360,6 +360,20 @@ type TopDimensionItem struct {
 	EstimatedDownloadBytes int64           `json:"estimatedDownloadBytes"`
 }
 
+type TopRuleItem struct {
+	Rule                   string          `json:"rule"`
+	RulePayload            string          `json:"rulePayload"`
+	Route                  types.RouteType `json:"route,omitempty"`
+	UploadBytes            int64           `json:"uploadBytes"`
+	DownloadBytes          int64           `json:"downloadBytes"`
+	TotalBytes             int64           `json:"totalBytes"`
+	ConnectionCount        int64           `json:"connectionCount"`
+	ExactUploadBytes       int64           `json:"exactUploadBytes"`
+	ExactDownloadBytes     int64           `json:"exactDownloadBytes"`
+	EstimatedUploadBytes   int64           `json:"estimatedUploadBytes"`
+	EstimatedDownloadBytes int64           `json:"estimatedDownloadBytes"`
+}
+
 type AnalyticsFilter struct {
 	StartTime *time.Time
 	EndTime   *time.Time

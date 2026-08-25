@@ -180,6 +180,27 @@ func TestAPIServerAuthCORSAndEndpoints(t *testing.T) {
 		t.Errorf("Top processes failed with %d", w.Code)
 	}
 
+	// 7.1 /api/v1/analytics/top/rules 契约测试 (包含 (rule, rulePayload, route) + bytes + connectionCount)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analytics/top/rules?limit=10", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Top rules failed with %d: %s", w.Code, w.Body.String())
+	}
+	var topRulesRes TopRulesResponse
+	if err := json.NewDecoder(w.Body).Decode(&topRulesRes); err != nil {
+		t.Fatalf("Failed to decode top rules response: %v", err)
+	}
+	if len(topRulesRes.Items) == 0 {
+		t.Errorf("Expected top rules items, got 0")
+	} else {
+		firstRule := topRulesRes.Items[0]
+		if firstRule.Rule == "" || firstRule.RulePayload == "" || firstRule.Route == "" || firstRule.ConnectionCount <= 0 {
+			t.Errorf("Expected TopRuleItem to contain rule, rulePayload, route, connectionCount > 0, got %+v", firstRule)
+		}
+	}
+
 	// 8. 非法 Timestamp -> 400
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/analytics/summary?from=invalid-time", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)

@@ -13,141 +13,154 @@ import (
 )
 
 func main() {
-	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty")
-	outPath := flag.String("out", "", "Output SQLite database path (e.g. ./fixtures/healthy.db)")
+	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled")
+	outPath := flag.String("out", "", "Output SQLite database path (e.g. ./fixtures/fixture_healthy.db)")
+	anchorStr := flag.String("anchor", "", "Anchor time in RFC3339 (optional, defaults to current UTC time)")
+	scaleCount := flag.Int("scale", 100000, "Event count for scaled profile (default: 100000)")
 	flag.Parse()
 
 	if *outPath == "" {
 		*outPath = filepath.Join(".", fmt.Sprintf("fixture_%s.db", *profile))
 	}
 
-	// 确保父目录存在
-	if dir := filepath.Dir(*outPath); dir != "." && dir != "" {
-		_ = os.MkdirAll(dir, 0755)
+	var anchorTime time.Time
+	if *anchorStr != "" {
+		t, err := time.Parse(time.RFC3339Nano, *anchorStr)
+		if err != nil {
+			t, err = time.Parse(time.RFC3339, *anchorStr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[FATAL] Invalid --anchor timestamp '%s': %v\n", *anchorStr, err)
+				os.Exit(1)
+			}
+		}
+		anchorTime = t.UTC()
+	} else {
+		anchorTime = time.Now().UTC()
 	}
 
-	// 如果文件已存在，先删除重建
+	// 确保父目录存在
+	if dir := filepath.Dir(*outPath); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "[FATAL] Failed to create directory '%s': %v\n", dir, err)
+			os.Exit(1)
+		}
+	}
+
+	// 清理旧文件
 	_ = os.Remove(*outPath)
 	_ = os.Remove(*outPath + "-wal")
 	_ = os.Remove(*outPath + "-shm")
 
 	ctx := context.Background()
 	absPath, _ := filepath.Abs(*outPath)
-	fmt.Printf("[UI Fixture Generator] Generating profile '%s' at: %s\n", *profile, absPath)
+	fmt.Printf("[UI Fixture Generator] Generating profile '%s' (Anchor: %s) at: %s\n", *profile, anchorTime.Format(time.RFC3339), absPath)
 
 	switch *profile {
 	case "empty":
 		generateEmpty(ctx, absPath)
 	case "healthy":
-		generateHealthy(ctx, absPath)
+		generateHealthy(ctx, absPath, anchorTime)
 	case "gaps":
-		generateGaps(ctx, absPath)
+		generateGaps(ctx, absPath, anchorTime)
 	case "stale":
-		generateStale(ctx, absPath)
+		generateStale(ctx, absPath, anchorTime)
+	case "scaled":
+		generateScaled(ctx, absPath, anchorTime, *scaleCount)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty\n", *profile)
+		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled\n", *profile)
 		os.Exit(1)
 	}
 
 	fmt.Printf("[UI Fixture Generator] Successfully generated profile '%s'!\n", *profile)
 }
 
-func generateEmpty(ctx context.Context, dbPath string) {
-	db, err := storage.OpenDB(ctx, dbPath)
+func checkErr(op string, err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize empty DB: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[FATAL FIXTURE ERROR] Operation '%s' failed: %v\n", op, err)
 		os.Exit(1)
 	}
-	defer db.Close()
-	fmt.Println("  ✔ Empty database initialized with valid current migrations.")
 }
 
-func generateHealthy(ctx context.Context, dbPath string) {
+func generateEmpty(ctx context.Context, dbPath string) {
+	db, err := storage.OpenDB(ctx, dbPath)
+	checkErr("OpenDB empty", err)
+	defer db.Close()
+	fmt.Println("  ✔ Empty database initialized with valid schema migrations.")
+}
+
+func generateHealthy(ctx context.Context, dbPath string, anchor time.Time) {
 	sessionID := "sess-synthetic-healthy"
 	sink, err := storage.OpenSQLiteSink(ctx, dbPath, sessionID, "v1.0.0-synthetic")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "OpenSQLiteSink failed: %v\n", err)
-		os.Exit(1)
-	}
+	checkErr("OpenSQLiteSink healthy", err)
 
-	baseTime := time.Now().UTC().Add(-24 * time.Hour)
+	baseTime := anchor.Add(-24 * time.Hour)
 	seq := int64(1)
 
 	// 1. Chrome 访问多个海外域名 (PROXY)
-	emitConn(sink, sessionID, 1, &seq, "c-chrome-1", "chrome.exe", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+	emitConnSafe(sink, sessionID, 1, &seq, "c-chrome-1", "chrome.exe", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
 		"github.com", "", "140.82.112.3", "443", "tcp", "DomainSuffix", "github.com", types.RouteProxy,
 		[]string{"Node-HK-01", "ProxyGroup"}, 50000, 250000, baseTime.Add(1*time.Hour))
 
-	emitConn(sink, sessionID, 1, &seq, "c-chrome-2", "chrome.exe", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+	emitConnSafe(sink, sessionID, 1, &seq, "c-chrome-2", "chrome.exe", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
 		"google.com", "google.com", "142.250.190.46", "443", "tcp", "DomainKeyword", "google", types.RouteProxy,
 		[]string{"Node-HK-01", "ProxyGroup"}, 15000, 120000, baseTime.Add(2*time.Hour))
 
-	// 2. VS Code 访问 API (PROXY - 切换出口节点为 Node-JP-02)
-	emitConn(sink, sessionID, 1, &seq, "c-code-1", "Code.exe", "C:\\Users\\Synthetic\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+	// 2. VS Code 访问 API (PROXY - Node-JP-02)
+	emitConnSafe(sink, sessionID, 1, &seq, "c-code-1", "Code.exe", "C:\\Users\\Synthetic\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
 		"api.github.com", "", "140.82.112.4", "443", "tcp", "DomainSuffix", "github.com", types.RouteProxy,
 		[]string{"Node-JP-02", "AutoSelect"}, 80000, 450000, baseTime.Add(4*time.Hour))
 
 	// 3. Spotify 音频流 (PROXY - Node-US-03)
-	emitConn(sink, sessionID, 1, &seq, "c-spotify-1", "Spotify.exe", "C:\\Users\\Synthetic\\AppData\\Local\\Spotify\\Spotify.exe",
+	emitConnSafe(sink, sessionID, 1, &seq, "c-spotify-1", "Spotify.exe", "C:\\Users\\Synthetic\\AppData\\Local\\Spotify\\Spotify.exe",
 		"audio-ak.spotify.com", "audio-ak.spotify.com", "104.154.127.100", "443", "tcp", "DomainSuffix", "spotify.com", types.RouteProxy,
 		[]string{"Node-US-03", "MediaGroup"}, 120000, 1850000, baseTime.Add(5*time.Hour))
 
 	// 4. 国内直连流量 (DIRECT - 微信 / 百度)
-	emitConn(sink, sessionID, 1, &seq, "c-wechat-1", "WeChat.exe", "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
+	emitConnSafe(sink, sessionID, 1, &seq, "c-wechat-1", "WeChat.exe", "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe",
 		"szshort.weixin.qq.com", "", "183.6.84.10", "443", "tcp", "GeoIP", "CN", types.RouteDirect,
 		[]string{"DIRECT"}, 45000, 890000, baseTime.Add(6*time.Hour))
 
-	emitConn(sink, sessionID, 1, &seq, "c-curl-1", "curl.exe", "C:\\Windows\\System32\\curl.exe",
+	emitConnSafe(sink, sessionID, 1, &seq, "c-curl-1", "curl.exe", "C:\\Windows\\System32\\curl.exe",
 		"baidu.com", "", "220.181.38.148", "80", "tcp", "DomainSuffix", "baidu.com", types.RouteDirect,
 		[]string{"DIRECT"}, 1200, 3400, baseTime.Add(7*time.Hour))
 
 	// 5. UDP 流量 (DNS / QUIC)
-	emitConn(sink, sessionID, 1, &seq, "c-dns-1", "chrome.exe", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+	emitConnSafe(sink, sessionID, 1, &seq, "c-dns-1", "chrome.exe", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
 		"", "", "8.8.8.8", "53", "udp", "Match", "Final", types.RouteProxy,
 		[]string{"Node-HK-01", "ProxyGroup"}, 512, 1024, baseTime.Add(8*time.Hour))
 
 	// 6. 产生一次节点切换证据 (Node switch)
-	emitConn(sink, sessionID, 1, &seq, "c-chrome-switch", "chrome.exe", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+	emitConnSafe(sink, sessionID, 1, &seq, "c-chrome-switch", "chrome.exe", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
 		"fastly.net", "", "151.101.1.57", "443", "tcp", "DomainSuffix", "fastly.net", types.RouteProxy,
 		[]string{"Node-SG-01", "ProxyGroup"}, 30000, 150000, baseTime.Add(9*time.Hour))
 
-	_ = sink.EndSession(ctx, sessionID, storage.SessionStatusClosedClean)
-	_ = sink.Close()
+	checkErr("EndSession healthy", sink.EndSession(ctx, sessionID, storage.SessionStatusClosedClean))
+	checkErr("Close sink healthy", sink.Close())
 
 	// 执行一次完整的 Accounting Rebuild
 	db, err := storage.OpenDB(ctx, dbPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "OpenDB failed: %v\n", err)
-		os.Exit(1)
-	}
+	checkErr("OpenDB rebuild", err)
 	defer db.Close()
 
-	if _, err := storage.RebuildAccounting(ctx, db, "synthetic healthy profile build"); err != nil {
-		fmt.Fprintf(os.Stderr, "RebuildAccounting failed: %v\n", err)
-		os.Exit(1)
-	}
+	_, err = storage.RebuildAccounting(ctx, db, "synthetic healthy profile build")
+	checkErr("RebuildAccounting healthy", err)
 }
 
-func generateGaps(ctx context.Context, dbPath string) {
+func generateGaps(ctx context.Context, dbPath string, anchor time.Time) {
 	// 先生成基础数据
-	generateHealthy(ctx, dbPath)
+	generateHealthy(ctx, dbPath, anchor)
 
-	// 然后向 monitoring_gaps 插入一条 controller_stream 缺口和一条 collector_session_boundary 缺口
 	db, err := storage.OpenDB(ctx, dbPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "OpenDB for gaps failed: %v\n", err)
-		os.Exit(1)
-	}
+	checkErr("OpenDB gaps", err)
 	defer db.Close()
 
-	tNow := time.Now().UTC()
-	gap1Start := tNow.Add(-10 * time.Hour).Format(time.RFC3339Nano)
-	gap1End := tNow.Add(-9 * time.Hour).Format(time.RFC3339Nano)
+	gap1Start := anchor.Add(-10 * time.Hour).Format(time.RFC3339Nano)
+	gap1End := anchor.Add(-9 * time.Hour).Format(time.RFC3339Nano)
 
-	gap2Start := tNow.Add(-5 * time.Hour).Format(time.RFC3339Nano)
-	gap2End := tNow.Add(-4 * time.Hour - 30*time.Minute).Format(time.RFC3339Nano)
+	gap2Start := anchor.Add(-5 * time.Hour).Format(time.RFC3339Nano)
+	gap2End := anchor.Add(-4 * time.Hour - 30*time.Minute).Format(time.RFC3339Nano)
 
-	_, _ = db.ExecContext(ctx, `
+	_, err = db.ExecContext(ctx, `
 		INSERT INTO monitoring_gaps (
 			gap_id, source, session_id, started_at, ended_at, duration_ms, reason,
 			global_gap_upload_delta, global_gap_download_delta, physical_delta_unavailable, precision, created_at
@@ -155,46 +168,98 @@ func generateGaps(ctx context.Context, dbPath string) {
 		('gap-controller-1', 'controller_stream', 'sess-synthetic-healthy', ?, ?, 3600000, 'Controller stream reconnect timeout', 204800, 1048576, 0, 'interval_derived', ?),
 		('gap-collector-1', 'collector_session_boundary', 'sess-synthetic-healthy', ?, ?, 1800000, 'Collector daemon offline interval', 51200, 524288, 0, 'interval_derived', ?);
 	`, gap1Start, gap1End, gap1End, gap2Start, gap2End, gap2End)
+	checkErr("Insert monitoring_gaps", err)
 
-	// 重新聚合
-	_, _ = storage.RebuildAccounting(ctx, db, "synthetic gaps profile rebuild")
+	_, err = storage.RebuildAccounting(ctx, db, "synthetic gaps profile rebuild")
+	checkErr("RebuildAccounting gaps", err)
 }
 
-func generateStale(ctx context.Context, dbPath string) {
+func generateStale(ctx context.Context, dbPath string, anchor time.Time) {
 	// 先生成 healthy 并完成 Rebuild
-	generateHealthy(ctx, dbPath)
+	generateHealthy(ctx, dbPath, anchor)
 
-	// 然后以新 Session 追加数个未核算的 Journal 事件，制造 lagEvents > 0
 	sessionID := "sess-synthetic-stale-append"
 	sink, err := storage.OpenSQLiteSink(ctx, dbPath, sessionID, "v1.0.0-synthetic")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "OpenSQLiteSink failed: %v\n", err)
-		os.Exit(1)
-	}
+	checkErr("OpenSQLiteSink stale", err)
 
 	seq := int64(100)
-	tNow := time.Now().UTC()
-	emitConn(sink, sessionID, 1, &seq, "c-stale-1", "curl.exe", "C:\\Windows\\System32\\curl.exe",
+	emitConnSafe(sink, sessionID, 1, &seq, "c-stale-1", "curl.exe", "C:\\Windows\\System32\\curl.exe",
 		"news.ycombinator.com", "", "178.62.207.240", "443", "tcp", "DomainKeyword", "ycombinator", types.RouteProxy,
-		[]string{"Node-HK-01", "ProxyGroup"}, 2048, 8192, tNow.Add(-10*time.Minute))
+		[]string{"Node-HK-01", "ProxyGroup"}, 2048, 8192, anchor.Add(-10*time.Minute))
 
-	emitConn(sink, sessionID, 1, &seq, "c-stale-2", "node.exe", "C:\\Program Files\\nodejs\\node.exe",
+	emitConnSafe(sink, sessionID, 1, &seq, "c-stale-2", "node.exe", "C:\\Program Files\\nodejs\\node.exe",
 		"registry.npmjs.org", "", "104.16.16.35", "443", "tcp", "DomainSuffix", "npmjs.org", types.RouteProxy,
-		[]string{"Node-HK-01", "ProxyGroup"}, 15000, 64000, tNow.Add(-5*time.Minute))
+		[]string{"Node-HK-01", "ProxyGroup"}, 15000, 64000, anchor.Add(-5*time.Minute))
 
-	_ = sink.Close()
-	// 注意：这里故意不执行 RebuildAccounting，形成 stale 状态！
+	checkErr("Close sink stale", sink.Close())
 }
 
-func emitConn(sink *storage.SQLiteEventSink, sessionID string, epoch int, seq *int64, connID, proc, procPath, host, sniffHost, destIP string, destPort string, net, rule, rulePayload string, route types.RouteType, chains []string, up, down int64, t time.Time) {
+func generateScaled(ctx context.Context, dbPath string, anchor time.Time, totalEvents int) {
+	sessionID := "sess-synthetic-scaled"
+	sink, err := storage.OpenSQLiteSink(ctx, dbPath, sessionID, "v1.0.0-synthetic-scaled")
+	checkErr("OpenSQLiteSink scaled", err)
+
+	processes := []struct {
+		name, path, host, ip, rule, payload string
+		route                               types.RouteType
+		chains                              []string
+	}{
+		{"chrome.exe", "C:\\Program Files\\Google\\Chrome\\chrome.exe", "google.com", "142.250.190.46", "DomainKeyword", "google", types.RouteProxy, []string{"Node-HK-01", "ProxyGroup"}},
+		{"chrome.exe", "C:\\Program Files\\Google\\Chrome\\chrome.exe", "github.com", "140.82.112.3", "DomainSuffix", "github.com", types.RouteProxy, []string{"Node-HK-01", "ProxyGroup"}},
+		{"Code.exe", "C:\\VSCode\\Code.exe", "api.github.com", "140.82.112.4", "DomainSuffix", "github.com", types.RouteProxy, []string{"Node-JP-02", "AutoSelect"}},
+		{"Spotify.exe", "C:\\Spotify\\Spotify.exe", "audio.spotify.com", "104.154.127.100", "DomainSuffix", "spotify.com", types.RouteProxy, []string{"Node-US-03", "MediaGroup"}},
+		{"WeChat.exe", "C:\\Tencent\\WeChat.exe", "weixin.qq.com", "183.6.84.10", "GeoIP", "CN", types.RouteDirect, []string{"DIRECT"}},
+		{"curl.exe", "C:\\Windows\\System32\\curl.exe", "baidu.com", "220.181.38.148", "DomainSuffix", "baidu.com", types.RouteDirect, []string{"DIRECT"}},
+		{"slack.exe", "C:\\Slack\\slack.exe", "slack.com", "54.148.100.1", "DomainSuffix", "slack.com", types.RouteProxy, []string{"Node-SG-01", "ProxyGroup"}},
+		{"node.exe", "C:\\Node\\node.exe", "registry.npmjs.org", "104.16.16.35", "DomainSuffix", "npmjs.org", types.RouteProxy, []string{"Node-HK-01", "ProxyGroup"}},
+	}
+
+	startWindow := anchor.Add(-30 * 24 * time.Hour)
+	intervalStep := (30 * 24 * time.Hour) / time.Duration(totalEvents)
+
+	fmt.Printf("  -> Ingesting %d events distributed over 30 days...\n", totalEvents)
+	seq := int64(1)
+	connSeen := make(map[string]bool)
+
+	for i := 0; i < totalEvents; i++ {
+		p := processes[i%len(processes)]
+		t := startWindow.Add(time.Duration(i) * intervalStep)
+		connID := fmt.Sprintf("c-scaled-%d", i%5000) // 5000 distinct connections
+
+		evType := types.EventConnectionNew
+		if connSeen[connID] {
+			evType = types.EventConnectionDelta
+		} else {
+			connSeen[connID] = true
+		}
+
+		emitConnEvent(sink, sessionID, 1, &seq, connID, evType, p.name, p.path, p.host, "", p.ip, "443", "tcp", p.rule, p.payload, p.route, p.chains, int64(1024+(i%5000)), int64(4096+(i%20000)), t)
+	}
+
+	checkErr("EndSession scaled", sink.EndSession(ctx, sessionID, storage.SessionStatusClosedClean))
+	checkErr("Close sink scaled", sink.Close())
+
+	fmt.Println("  -> Ingestion completed. Running RebuildAccounting...")
+	db, err := storage.OpenDB(ctx, dbPath)
+	checkErr("OpenDB scaled", err)
+	defer db.Close()
+
+	t0 := time.Now()
+	runRec, err := storage.RebuildAccounting(ctx, db, fmt.Sprintf("scaled profile build (%d events)", totalEvents))
+	checkErr("RebuildAccounting scaled", err)
+	fmt.Printf("  ✔ RebuildAccounting completed in %v (RunID: %s)\n", time.Since(t0), runRec.RunID)
+}
+
+func emitConnEvent(sink *storage.SQLiteEventSink, sessionID string, epoch int, seq *int64, connID string, evType types.EventType, proc, procPath, host, sniffHost, destIP string, destPort string, net, rule, rulePayload string, route types.RouteType, chains []string, up, down int64, t time.Time) {
+	currentSeq := *seq
 	*seq++
 	ev := &types.CollectorEvent{
-		EventID:          fmt.Sprintf("ev-%s-%d", connID, *seq),
+		EventID:          fmt.Sprintf("ev-seq-%d", currentSeq),
 		SessionID:        sessionID,
 		EpochID:          epoch,
-		FrameSequence:    *seq,
+		FrameSequence:    currentSeq,
 		EventSequence:    1,
-		Type:             types.EventConnectionNew,
+		Type:             evType,
 		Timestamp:        t,
 		ConnectionID:     connID,
 		Route:            route,
@@ -219,5 +284,13 @@ func emitConn(sink *storage.SQLiteEventSink, sessionID string, epoch int, seq *i
 		ObservedUploadCounter:   up,
 		ObservedDownloadCounter: down,
 	}
-	_ = sink.Emit(ev)
+	err := sink.Emit(ev)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[FATAL] Emit failed for event %s: %v\n", ev.EventID, err)
+		os.Exit(1)
+	}
+}
+
+func emitConnSafe(sink *storage.SQLiteEventSink, sessionID string, epoch int, seq *int64, connID, proc, procPath, host, sniffHost, destIP string, destPort string, net, rule, rulePayload string, route types.RouteType, chains []string, up, down int64, t time.Time) {
+	emitConnEvent(sink, sessionID, epoch, seq, connID, types.EventConnectionNew, proc, procPath, host, sniffHost, destIP, destPort, net, rule, rulePayload, route, chains, up, down, t)
 }

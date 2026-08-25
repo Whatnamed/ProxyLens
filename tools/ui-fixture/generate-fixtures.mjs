@@ -30,10 +30,17 @@ console.log('================================================================');
 console.log('Generating Deterministic Synthetic UI Fixtures');
 console.log('================================================================');
 
+const anchorArg = process.argv.find((a) => a.startsWith('--anchor=') || a === '--anchor');
+let anchorFlag = '';
+if (anchorArg) {
+  const val = anchorArg.includes('=') ? anchorArg.split('=')[1] : process.argv[process.argv.indexOf(anchorArg) + 1];
+  if (val) anchorFlag = ` --anchor "${val}"`;
+}
+
 for (const p of profiles) {
   const targetDb = path.join(fixtureDir, `fixture_${p}.db`);
   console.log(`\nGenerating profile [${p}] -> ${targetDb}...`);
-  execSync(`go run ./cmd/proxylens-ui-fixture --profile "${p}" --out "${targetDb}"`, {
+  execSync(`go run ./cmd/proxylens-ui-fixture --profile "${p}" --out "${targetDb}"${anchorFlag}`, {
     cwd: path.join(rootDir, 'collector'),
     stdio: 'inherit'
   });

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * ProxyLens Pre-UI Query Performance Sanity Benchmark
+ * ProxyLens Pre-UI Scaled Query Performance Sanity Benchmark
  *
- * 测量 Phase 3B 主面板（Overview）所需端点在 Today / 7d / 30d 窗口下的实际响应性能与载荷大小。
+ * 测量 Phase 3B Overview 主看板所需端点在大型数据集 (>=100,000 accounted traffic events, 30天时间跨度)
+ * 下针对 Today / 7d / 30d 时间窗口的实际冷热响应性能与载荷大小。
  */
 
 import { spawn, execSync } from 'node:child_process';
@@ -17,16 +18,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..', '..');
 
-const fixtureHealthyDb = path.resolve(rootDir, 'fixtures', 'fixture_healthy.db');
+const fixtureScaledDb = path.resolve(rootDir, 'fixtures', 'fixture_scaled.db');
 const queryApiBinary = path.resolve(rootDir, 'collector', 'proxylens-query-api.exe');
 
-// 确保 fixture 已存在
-if (!fs.existsSync(fixtureHealthyDb)) {
-  execSync('node tools/ui-fixture/generate-fixtures.mjs', { cwd: rootDir, stdio: 'inherit' });
-}
+console.log('[Setup] Enforcing fresh build of proxylens-query-api...');
+execSync('go build -o proxylens-query-api.exe ./cmd/proxylens-query-api', { cwd: path.join(rootDir, 'collector'), stdio: 'inherit' });
 
-if (!fs.existsSync(queryApiBinary)) {
-  execSync('go build -o proxylens-query-api.exe ./cmd/proxylens-query-api', { cwd: path.join(rootDir, 'collector'), stdio: 'inherit' });
+// 1. 若 scaled fixture 不存在，则生成 100,000 事件覆盖 30 天的数据集
+if (!fs.existsSync(fixtureScaledDb)) {
+  console.log('[Setup] Generating scaled fixture (100,000 events over 30 days)...');
+  execSync('go run ./cmd/proxylens-ui-fixture --profile scaled --scale 100000 --out ../fixtures/fixture_scaled.db', {
+    cwd: path.join(rootDir, 'collector'),
+    stdio: 'inherit'
+  });
 }
 
 function httpRequest(options) {
@@ -54,12 +58,12 @@ function httpRequest(options) {
 
 async function main() {
   console.log('================================================================');
-  console.log('ProxyLens Phase 3B0: Pre-UI Query Performance Sanity Benchmark');
+  console.log('ProxyLens Phase 3B0: Scaled Dataset Pre-UI Query Sanity Benchmark');
   console.log('================================================================');
 
   const token = crypto.randomBytes(32).toString('hex');
   const apiProc = spawn(queryApiBinary, [
-    '--db', fixtureHealthyDb,
+    '--db', fixtureScaledDb,
     '--listen', '127.0.0.1:0'
   ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
@@ -84,13 +88,13 @@ async function main() {
 
   const readyInfo = await readyPromise;
   const port = readyInfo.port;
-  console.log(`\nQuery API ready on port ${port} (connected to fixture_healthy.db)\n`);
+  console.log(`\nQuery API ready on port ${port} (connected to fixture_scaled.db)\n`);
 
   const tNow = new Date();
   const windows = [
     { name: 'Today', from: new Date(tNow.getFullYear(), tNow.getMonth(), tNow.getDate()).toISOString(), to: tNow.toISOString() },
-    { name: 'Last 7 Days', from: new Date(tNow.getTime() - 7 * 86400000).toISOString(), to: tNow.toISOString() },
-    { name: 'Last 30 Days', from: new Date(tNow.getTime() - 30 * 86400000).toISOString(), to: tNow.toISOString() }
+    { name: 'Last 7 Days', from: new Date(tNow.getFullYear(), tNow.getMonth(), tNow.getDate() - 6).toISOString(), to: tNow.toISOString() },
+    { name: 'Last 30 Days', from: new Date(tNow.getFullYear(), tNow.getMonth(), tNow.getDate() - 29).toISOString(), to: tNow.toISOString() }
   ];
 
   const endpoints = [
@@ -99,8 +103,7 @@ async function main() {
     { path: '/api/v1/analytics/top/processes?limit=20', timeScoped: true },
     { path: '/api/v1/analytics/top/rules?limit=20', timeScoped: true },
     { path: '/api/v1/analytics/top/final-proxies?limit=20', timeScoped: true },
-    { path: '/api/v1/coverage', timeScoped: true },
-    { path: '/api/v1/connections?limit=50', timeScoped: true }
+    { path: '/api/v1/coverage', timeScoped: true }
   ];
 
   const results = [];
@@ -136,12 +139,12 @@ async function main() {
       results.push({
         window: win.name,
         endpoint: ep.path.split('?')[0],
-        coldMs: coldRes.latencyMs.toFixed(2),
-        warmMs: warmRes.latencyMs.toFixed(2),
+        coldMs: Number(coldRes.latencyMs.toFixed(2)),
+        warmMs: Number(warmRes.latencyMs.toFixed(2)),
         payloadBytes: coldRes.payloadBytes
       });
 
-      console.log(`  ✔ ${ep.path.padEnd(35)} | Cold: ${coldRes.latencyMs.toFixed(2).padStart(6)} ms | Warm: ${warmRes.latencyMs.toFixed(2).padStart(6)} ms | Payload: ${coldRes.payloadBytes.toString().padStart(6)} B`);
+      console.log(`  ✔ ${ep.path.padEnd(35)} | Cold: ${coldRes.latencyMs.toFixed(2).padStart(7)} ms | Warm: ${warmRes.latencyMs.toFixed(2).padStart(7)} ms | Payload: ${coldRes.payloadBytes.toString().padStart(6)} B`);
     }
     console.log('');
   }
@@ -154,10 +157,9 @@ async function main() {
   await new Promise((r) => apiProc.on('close', r));
 
   console.log('================================================================');
-  console.log('Query Performance Sanity Summary Matrix:');
+  console.log('Scaled Dataset (100,000 events) Performance Sanity Summary Matrix:');
   console.log('================================================================');
   console.table(results);
-  console.log('Performance Sanity Result: ALL Phase 3B Overview Queries < 20 ms. ZERO BLOCKERS.');
   console.log('================================================================');
 }
 

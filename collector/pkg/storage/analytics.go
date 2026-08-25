@@ -510,6 +510,170 @@ func (a *AnalyticsService) GetTopRules(ctx context.Context, filter AnalyticsFilt
 	return a.GetTopDimensions(ctx, "rule", filter)
 }
 
+// GetTopRulesDetailed 查询指定窗口内的规则使用排行（包含 (rule, rulePayload, route) + bytes + connectionCount）
+func (a *AnalyticsService) GetTopRulesDetailed(ctx context.Context, filter AnalyticsFilter) ([]TopRuleItem, error) {
+	run, err := a.GetLatestCompletedAccountingRun(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT
+			session_id, epoch_id, connection_id, observed_at,
+			interval_start, interval_end, precision, route,
+			accounted_upload, accounted_download,
+			COALESCE(rule, '') AS rule_name,
+			COALESCE(rule_payload, '') AS rule_payload_val
+		FROM accounted_traffic
+		WHERE run_id = ? AND rule IS NOT NULL AND rule != '';
+	`, run.RunID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query top rules: %w", err)
+	}
+	defer rows.Close()
+
+	type ruleKey struct {
+		rule        string
+		rulePayload string
+		route       types.RouteType
+	}
+	type ruleAgg struct {
+		up, down               int64
+		exactUp, exactDown     int64
+		estUp, estDown         int64
+		distinctConns          map[string]bool
+	}
+
+	aggMap := make(map[ruleKey]*ruleAgg)
+
+	var qStart, qEnd *time.Time
+	if filter.StartTime != nil {
+		t := filter.StartTime.UTC()
+		qStart = &t
+	}
+	if filter.EndTime != nil {
+		t := filter.EndTime.UTC()
+		qEnd = &t
+	}
+
+	for rows.Next() {
+		var sessID, connID, obsAtStr, prec, route, rName, rPayload string
+		var epochID int
+		var intStart, intEnd sql.NullString
+		var accUp, accDown int64
+
+		if err := rows.Scan(
+			&sessID, &epochID, &connID, &obsAtStr,
+			&intStart, &intEnd, &prec, &route,
+			&accUp, &accDown, &rName, &rPayload,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan top rules row: %w", err)
+		}
+
+		if filter.Route != "" && route != string(filter.Route) {
+			continue
+		}
+
+		obsTime, _ := time.Parse(time.RFC3339Nano, obsAtStr)
+		obsTime = obsTime.UTC()
+
+		var effUp, effDown int64
+		var isExact bool
+
+		if prec == "exact_snapshot" || !intStart.Valid || !intEnd.Valid {
+			inRange := true
+			if qStart != nil && obsTime.Before(*qStart) {
+				inRange = false
+			}
+			if qEnd != nil && !obsTime.Before(*qEnd) {
+				inRange = false
+			}
+			if inRange {
+				effUp = accUp
+				effDown = accDown
+				isExact = true
+			}
+		} else {
+			sTime, _ := time.Parse(time.RFC3339Nano, intStart.String)
+			eTime, _ := time.Parse(time.RFC3339Nano, intEnd.String)
+			sTime = sTime.UTC()
+			eTime = eTime.UTC()
+
+			wStart := sTime
+			if qStart != nil && qStart.After(wStart) {
+				wStart = *qStart
+			}
+			wEnd := eTime
+			if qEnd != nil && qEnd.Before(wEnd) {
+				wEnd = *qEnd
+			}
+
+			if wEnd.After(wStart) {
+				effUp = NewIntervalAllocator(sTime, eTime, accUp).Allocate(wStart, wEnd)
+				effDown = NewIntervalAllocator(sTime, eTime, accDown).Allocate(wStart, wEnd)
+				isExact = false
+			}
+		}
+
+		if effUp == 0 && effDown == 0 {
+			continue
+		}
+
+		k := ruleKey{rule: rName, rulePayload: rPayload, route: types.RouteType(route)}
+		agg, ok := aggMap[k]
+		if !ok {
+			agg = &ruleAgg{distinctConns: make(map[string]bool)}
+			aggMap[k] = agg
+		}
+
+		agg.up += effUp
+		agg.down += effDown
+		if isExact {
+			agg.exactUp += effUp
+			agg.exactDown += effDown
+		} else {
+			agg.estUp += effUp
+			agg.estDown += effDown
+		}
+		connFullKey := fmt.Sprintf("%s:%d:%s", sessID, epochID, connID)
+		agg.distinctConns[connFullKey] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading top rules: %w", err)
+	}
+
+	var results []TopRuleItem
+	for k, v := range aggMap {
+		results = append(results, TopRuleItem{
+			Rule:                   k.rule,
+			RulePayload:            k.rulePayload,
+			Route:                  k.route,
+			UploadBytes:            v.up,
+			DownloadBytes:          v.down,
+			TotalBytes:             v.up + v.down,
+			ConnectionCount:        int64(len(v.distinctConns)),
+			ExactUploadBytes:       v.exactUp,
+			ExactDownloadBytes:     v.exactDown,
+			EstimatedUploadBytes:   v.estUp,
+			EstimatedDownloadBytes: v.estDown,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].TotalBytes > results[j].TotalBytes
+	})
+
+	limit := 10
+	if filter.Limit > 0 {
+		limit = filter.Limit
+	}
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
+	return results, nil
+}
+
 func (a *AnalyticsService) GetTopFinalProxies(ctx context.Context, filter AnalyticsFilter) ([]TopDimensionItem, error) {
 	return a.GetTopDimensions(ctx, "final_proxy", filter)
 }

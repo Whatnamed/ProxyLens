@@ -4,6 +4,7 @@ import {
   MetaResponse,
   UsageSummary,
   TopDimensionResponse,
+  TopRulesResponse,
   CoverageSummary,
   ConnectionsListResponse,
   ConnectionDetailResponse,
@@ -84,8 +85,8 @@ export class QueryApiClient {
     return this.request<TopDimensionResponse>('/api/v1/analytics/top/hosts', { from, to, route, limit });
   }
 
-  async getTopRules(from?: string, to?: string, route?: string, limit?: number): Promise<TopDimensionResponse> {
-    return this.request<TopDimensionResponse>('/api/v1/analytics/top/rules', { from, to, route, limit });
+  async getTopRules(from?: string, to?: string, route?: string, limit?: number): Promise<TopRulesResponse> {
+    return this.request<TopRulesResponse>('/api/v1/analytics/top/rules', { from, to, route, limit });
   }
 
   async getTopFinalProxies(from?: string, to?: string, route?: string, limit?: number): Promise<TopDimensionResponse> {

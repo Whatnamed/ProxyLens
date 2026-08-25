@@ -99,16 +99,38 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 ### 3.4 Top Dimension Breakdown
 - `GET /api/v1/analytics/top/processes?from=...&to=...&route=...&limit=20`
 - `GET /api/v1/analytics/top/hosts?from=...&to=...&route=...&limit=20`
-- `GET /api/v1/analytics/top/rules?from=...&to=...&route=...&limit=20`
 - `GET /api/v1/analytics/top/final-proxies?from=...&to=...&route=...&limit=20`
 - `GET /api/v1/analytics/protocols?from=...&to=...&route=...&limit=20`
 
-- **Response**:
+- **通用维度 Response**:
 ```json
 {
   "items": [
     {
       "key": "chrome.exe",
+      "route": "PROXY",
+      "uploadBytes": 1048576,
+      "downloadBytes": 10485760,
+      "totalBytes": 11534336,
+      "connectionCount": 42,
+      "exactUploadBytes": 1048576,
+      "exactDownloadBytes": 10485760,
+      "estimatedUploadBytes": 0,
+      "estimatedDownloadBytes": 0
+    }
+  ],
+  "limit": 20
+}
+```
+
+- `GET /api/v1/analytics/top/rules?from=...&to=...&route=...&limit=20`
+  - **专用规则维度 Response**:
+```json
+{
+  "items": [
+    {
+      "rule": "DomainSuffix",
+      "rulePayload": "google.com",
       "route": "PROXY",
       "uploadBytes": 1048576,
       "downloadBytes": 10485760,

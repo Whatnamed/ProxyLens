@@ -6,27 +6,28 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 3A Complete, Pre-UI Readiness & Contract Freeze Complete (NEXT: Phase 3B — Actual ProxyLens Audit UI Design)`
+- **当前阶段**：`Phase 3B0 Pre-UI Closure Complete (Ready for Phase 3B Visual Design & UI Implementation)`
 - **平台与契约状态**：
-  > **The platform and data contracts are ready. No production visual UI has been designed or implemented yet.**
+  > **Pre-UI engineering is complete; next action requires UI design decisions.**
   
-  1. **React WebView -> Tauri Session -> Bundled Sidecar 真实鉴权 E2E 验证**:
-     - 每次 smoke 强制重新编译 Release 二进制与前端 Vite bundle；
-     - 真实启动 `proxylens-desktop.exe`，React WebView 内部自动通过 `get_query_api_session()` 桥接 Bearer Token；
-     - 前端安全请求 `/meta` + `/summary` + `/connections` 并通过 `report_e2e_probe` 输出纯安全非敏感标记，验证完整产品闭环：**100% PASS**；
-  2. **UI 信息架构与语义展示契约冻结 (IA & Semantic Contracts Frozen)**:
-     - 建立并冻结 [`docs/ui-information-architecture-v1.md`](docs/ui-information-architecture-v1.md)（Overview, History, Connection Detail, Coverage, System Status）；
-     - 建立并冻结 [`docs/ui-semantic-presentation-v1.md`](docs/ui-semantic-presentation-v1.md)（UTC vs 本地时区、IEC 二进制单位、Exact vs Estimated 明确区分、可解释未知细分）；
-     - 建立并冻结 [`docs/ui-api-coverage-matrix-v1.md`](docs/ui-api-coverage-matrix-v1.md)（证明现有 10 个端点 100% 满足 Phase 3B Overview 主看板，趋势图等非必需接口明确标记为 `DEFER UNTIL VISUAL DESIGN REQUIRES IT`）；
-  3. **确定性合成 UI 开发数据集生成器 (`tools/ui-fixture/`)**:
-     - 支持 `healthy`（多进程/多节点/节点切换/分流）、`gaps`（controller/collector缺口）、`stale`（新鲜度滞后）与 `empty` 4 种 profile；
-     - 严格合成匿名数据，杜绝泄露真实用户凭据与私密流量历史；
-  4. **Pre-UI 查询性能 Sanity 实测 (`run-pre-ui-query-sanity.mjs`)**:
-     - 针对 Today / 7d / 30d 窗口下的全部 Overview 查询端点进行冷热请求测量；
-     - 实测延迟全部在 **1 ~ 8 ms** 之间，响应载荷在 0.6KB ~ 10KB 之间，**ZERO PERFORMANCE BLOCKERS**；
-  5. **前端非视觉语义 Utility 库与单测 (`ui/src/utils/`)**:
-     - 落地 `formatBytes`, `getQuickWindow`, `mapApiError` 语义函数，7 个自动化单测 100% PASS；
-  6. **测试套件覆盖**: 全部 55 个 Go 测试 (test: 9, state: 10, storage: 34, api: 2) + 18 个 Phase 0 回归测试 + 7 个前端 Utility 单元测试 100% PASS。
+  1. **Top Rules 维度与 IA 契约精确对齐**:
+     - 只读查询 `GET /api/v1/analytics/top/rules` 专享 `TopRulesResponse`，支持 `(rule, rulePayload, route) + bytes + connectionCount`，通过独立 API 契约测试验证；
+     - 明确 IA 承诺边界：Top Processes 仅承诺 `process` name（不承诺 `processPath`），Top Hosts 仅承诺 `host`（destination-IP ranking 延后），Reject 仅承诺 bytes（连接数标记为 DEFERRED），History destinationPort 过滤标记为 Phase 3C DEFERRED；
+  2. **本地天感知时间窗口 (Local-Day Aware Quick Windows)**:
+     - Today: `[local today 00:00, now)`；
+     - Yesterday: `[local yesterday 00:00, local today 00:00)`；
+     - 7d: `[local start-of-day 6 days ago 00:00, now)`；
+     - 30d: `[local start-of-day 29 days ago 00:00, now)`；
+     - 底层转换为 UTC RFC3339 纳秒/毫秒 ISO 字符串，7 个边界断言单测 100% PASS；
+  3. **E2E 探针执行环境隔离**:
+     - 探针自检（`/meta` + `/summary` + `/connections`）仅在 `PROXYLENS_E2E_MODE=1` 时执行，普通 Tauri 启动零额外网络请求，Token 严禁暴露；
+  4. **Fixture 生成器规范化与 Fail-Closed 保证**:
+     - 删除冗余漂移的 `tools/ui-fixture/main.go`，唯一 generator 保留在 `collector/cmd/proxylens-ui-fixture/main.go`；
+     - 针对所有 Emit / Exec / Rebuild / Close 关键错误实施 fail-closed；支持可选 `--anchor <RFC3339>`；
+  5. **大规模性能实测 (100,000 Events Scaled Dataset Sanity)**:
+     - 实测覆盖 30 天、100,000 个核算事件的 `fixture_scaled.db` 数据集；
+     - 实测冷热请求延迟：`/meta` (0.89~8.87ms), `/coverage` (0.52~1.16ms), `/summary` (215~260ms), `/top/rules` (261~354ms), `/top/final-proxies` (416~546ms), `/top/processes` (521~674ms)，所有 Overview 端点全部 < 700ms（远低于 1s 阈值）；
+  6. **全量测试套件覆盖**: 全部 55 个 Go 测试 + 18 个 Phase 0 回归测试 + 7 个前端 Utility 单元测试 100% PASS，Tauri 原生 Release 冒烟 100% PASS。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64) / 12th Gen Intel Core i5-12400 (12 cores)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中

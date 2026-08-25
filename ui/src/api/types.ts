@@ -131,6 +131,25 @@ export interface TopDimensionResponse {
   limit: number;
 }
 
+export interface TopRuleItem {
+  rule: string;
+  rulePayload: string;
+  route: string;
+  uploadBytes: number;
+  downloadBytes: number;
+  totalBytes: number;
+  connectionCount: number;
+  exactUploadBytes: number;
+  exactDownloadBytes: number;
+  estimatedUploadBytes: number;
+  estimatedDownloadBytes: number;
+}
+
+export interface TopRulesResponse {
+  items: TopRuleItem[];
+  limit: number;
+}
+
 export interface ConnectionRecord {
   sessionId: string;
   epochId: number;

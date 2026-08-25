@@ -19,7 +19,7 @@
 2. **流量总量与分流对比 (Traffic & Routing Totals)**:
    - Proxy 总流量 (Upload / Download / Total)；
    - Direct 总流量 (Upload / Download / Total)；
-   - Reject 拦截计数/流量；
+   - Reject 拦截流量 (Upload / Download / Total)；*(注: Reject 连接数当前无独立聚合 API，标记为 DEFERRED)*；
    - 流量归因完整性指示（Known Application vs Missing Attribution vs Residual）。
 3. **监控覆盖与健康度 (Monitoring Coverage)**:
    - 监控覆盖率（%）；
@@ -29,10 +29,10 @@
    - Latest Accounting Run 状态；
    - Fresh / Stale 状态与落后事件数 (`lagEvents`)。
 5. **Top 排名维度 (Top Dimension Breakdown)**:
-   - **Top Processes**: 消耗代理流量最多的进程列表（进程名、路径、上传、下载、连接数）；
-   - **Top Final Proxies**: 流量最大的出口节点列表（节点名称、上传、下载、连接数）；
-   - **Top Rules**: 触发频率与流量最高的路由规则（Rule Name、Rule Payload、上传、下载、连接数）；
-   - **Top Hosts / Destinations**: 目标域名与 IP 分布；
+   - **Top Processes**: 消耗代理流量最多的进程列表（进程名 `process`、上传、下载、连接数；*注: 分时聚合不承诺 `processPath`*）；
+   - **Top Final Proxies**: 流量最大的出口节点列表（节点名称 `finalProxy`、分流、上传、下载、连接数）；
+   - **Top Rules**: 触发频率与流量最高的路由规则（规则名 `rule`、规则载荷 `rulePayload`、分流 `route`、上传、下载、连接数）；
+   - **Top Hosts**: 目标域名流量排行（域名 `host`、分流、上传、下载、连接数；*注: destination-IP ranking 标记为 DEFER UNTIL DESIGN REQUIRES IT*）；
    - **Protocols & Networks**: TCP vs UDP 流量分布。
 
 ---
@@ -47,7 +47,7 @@
 - **Route**: `ALL` | `PROXY` | `DIRECT` | `REJECT`；
 - **Process**: 进程名模糊匹配；
 - **Host / Domain**: 域名/嗅探域名匹配；
-- **Destination IP / Port**: 目标 IP / 端口匹配；
+- **Destination IP**: 目标 IP 匹配 *(注: destinationPort 过滤标记为 Phase 3C DEFERRED)*；
 - **Network**: `tcp` | `udp`。
 
 ### 2.3 列表项元数据

@@ -68,3 +68,15 @@ type ConnectionTrafficResponse struct {
 	ConnectionID string                            `json:"connectionId"`
 	Traffic      []*storage.ConnectionTrafficRecord `json:"traffic"`
 }
+
+// TopDimensionsResponse 多维聚合排行通用响应
+type TopDimensionsResponse struct {
+	Items []storage.TopDimensionItem `json:"items"`
+	Limit int                        `json:"limit"`
+}
+
+// TopRulesResponse 专门用于 Top Rules 维度聚合响应 (包含 rule, rulePayload, route, bytes, connectionCount)
+type TopRulesResponse struct {
+	Items []storage.TopRuleItem `json:"items"`
+	Limit int                   `json:"limit"`
+}

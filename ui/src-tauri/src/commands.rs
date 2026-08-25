@@ -12,6 +12,11 @@ pub fn get_query_api_session(state: State<'_, AppState>) -> Result<QueryApiSessi
     Err("Query API session not initialized. Make sure DB is configured and sidecar is running.".to_string())
 }
 
+#[tauri::command]
+pub fn get_e2e_mode() -> bool {
+    env::var("PROXYLENS_E2E_MODE").unwrap_or_default() == "1"
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct E2EProbeReport {
