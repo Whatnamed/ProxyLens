@@ -59,13 +59,13 @@ func RebuildAccounting(ctx context.Context, db *sql.DB, notes string) (*Accounti
 		return nil, fmt.Errorf("failed to insert accounting_run: %w", err)
 	}
 
-	// 3. 读取所有 connections 执行 Conservative Relay Reconciliation (E3)
+	// 3. 读取所有 connections 执行严格收紧的 Conservative Relay Reconciliation (E3 / Phase 1 Matcher)
 	relayMap, err := reconcileRelayRelations(ctx, tx, runID)
 	if err != nil {
 		return nil, fmt.Errorf("relay reconciliation failed: %w", err)
 	}
 
-	// 4. 派生 accounted_traffic (E2: 元数据取源于当时发生事件的 event_journal)
+	// 4. 派生 accounted_traffic (E2 / 直接以当前 event snapshot 完整事实为准，不回退覆盖)
 	if err := deriveAccountedTraffic(ctx, tx, runID, relayMap); err != nil {
 		return nil, fmt.Errorf("accounted traffic derivation failed: %w", err)
 	}
@@ -94,7 +94,7 @@ func RebuildAccounting(ctx context.Context, db *sql.DB, notes string) (*Accounti
 		return nil, fmt.Errorf("%w: accounted totals exceed raw totals (up: %d > %d, down: %d > %d)", ErrAccountingInvariantBroken, accUpSum, rawUpSum, accDownSum, rawDownSum)
 	}
 
-	// 6. 生成 Hourly Materialized Aggregations (E5: 纯整型纳秒分摊，无 float64)
+	// 6. 生成 Hourly Materialized Aggregations (E5: 复用通用 Additive IntervalAllocator)
 	if err := rebuildHourlyAggregates(ctx, tx, runID); err != nil {
 		return nil, fmt.Errorf("hourly aggregation rebuild failed: %w", err)
 	}
@@ -139,16 +139,17 @@ type connInfo struct {
 	route                      types.RouteType
 	attributionClass           types.AttributionClass
 	process, host, destIP      string
+	rule, rulePayload          string
 	chains                     []string
 	monitoredUp, monitoredDown int64
 }
 
-// reconcileRelayRelations 实现收紧的 Conservative Relay Reconciliation
+// reconcileRelayRelations 实现严格收紧的 Conservative Relay Reconciliation (复用 Phase 1 严密匹配规则)
 func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map[connKey]AccountingClass, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT
 			session_id, epoch_id, connection_id, first_observed_at, last_observed_at,
-			route, latest_attribution_class, process, host, destination_ip, chains_json,
+			route, latest_attribution_class, process, host, destination_ip, rule, rule_payload, chains_json,
 			monitored_upload_total, monitored_download_total
 		FROM connections;
 	`)
@@ -163,7 +164,7 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 		var firstStr, lastStr, chainsJSON string
 		if err := rows.Scan(
 			&c.key.sessionID, &c.key.epochID, &c.key.connectionID, &firstStr, &lastStr,
-			&c.route, &c.attributionClass, &c.process, &c.host, &c.destIP, &chainsJSON,
+			&c.route, &c.attributionClass, &c.process, &c.host, &c.destIP, &c.rule, &c.rulePayload, &chainsJSON,
 			&c.monitoredUp, &c.monitoredDown,
 		); err != nil {
 			return nil, err
@@ -191,13 +192,15 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 
 		for _, c := range conns {
 			hasProcess := strings.TrimSpace(c.process) != ""
-			// Candidate: 必须具备 Phase 1 / Phase 0 确立的 candidate 特征
+			hasRule := strings.TrimSpace(c.rule) != ""
+
+			// Candidate: 必须具备 Phase 1 确立的 candidate 特征 (缺失 process + 缺失 rule + 具有 proxy chains)
 			isCandidate := c.attributionClass == types.ClassRelayCandidate ||
 				c.attributionClass == types.ClassConfirmedRelayDuplicate ||
-				(!hasProcess && c.route == types.RouteProxy && len(c.chains) > 0)
+				(!hasProcess && !hasRule && len(c.chains) > 0 && c.route == types.RouteProxy)
 
-			// Logical: 必须是明确已知应用连接
-			isLogical := c.attributionClass == types.ClassKnownApplication || hasProcess
+			// Logical: 必须是明确应用连接 (具有 process + rule，或 ClassKnownApplication)
+			isLogical := c.attributionClass == types.ClassKnownApplication || (hasProcess && hasRule)
 
 			if isCandidate {
 				candidates = append(candidates, c)
@@ -216,11 +219,31 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 
 		for _, cand := range candidates {
 			for _, log := range logicals {
-				// 1. Structural Relation: 物理出站节点必须一致 (chains[0])
-				if len(cand.chains) == 0 || len(log.chains) == 0 {
+				candChains := cand.chains
+				logChains := log.chains
+
+				// 1. Structural Relation (与 Phase 1 CheckStructuralRelayPair 一致):
+				//    Candidate chains >= 1, Logical chains > 1 (必须有上层策略选择层级)
+				if len(candChains) == 0 || len(logChains) <= 1 {
 					continue
 				}
-				if cand.chains[0] != log.chains[0] {
+				// 物理出站节点必须一致 (chains[0])
+				if candChains[0] != logChains[0] {
+					continue
+				}
+
+				// 检查 shared structural hops
+				var sharedHops []string
+				logHopMap := make(map[string]bool, len(logChains))
+				for _, hop := range logChains {
+					logHopMap[hop] = true
+				}
+				for _, hop := range candChains {
+					if logHopMap[hop] {
+						sharedHops = append(sharedHops, hop)
+					}
+				}
+				if len(sharedHops) == 0 {
 					continue
 				}
 
@@ -241,9 +264,9 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 					continue
 				}
 
-				// 3. Minimum traffic 门槛与 Conservative tolerance
-				hasMinTraffic := (cand.monitoredUp >= 64 || cand.monitoredDown >= 64 || log.monitoredUp >= 64 || log.monitoredDown >= 64)
-				if !hasMinTraffic {
+				// 3. Minimum traffic 门槛 (与 Phase 1 一致: 单向需 > 500B，杜绝小流量误配)
+				hasTraffic := cand.monitoredUp > 500 || cand.monitoredDown > 500 || log.monitoredUp > 500 || log.monitoredDown > 500
+				if !hasTraffic {
 					continue
 				}
 
@@ -265,26 +288,38 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 					maxDown = cand.monitoredDown
 				}
 
-				upRatio := 0.0
+				upRatio := 1.0
 				if maxUp > 0 {
 					upRatio = float64(upDiff) / float64(maxUp)
 				}
-				downRatio := 0.0
+				downRatio := 1.0
 				if maxDown > 0 {
 					downRatio = float64(downDiff) / float64(maxDown)
 				}
 
-				// 严格容差：<=1024 字节或 <= 10% 相对误差
-				upMatch := upDiff <= 1024 || (maxUp > 0 && upRatio <= 0.10)
-				downMatch := downDiff <= 1024 || (maxDown > 0 && downRatio <= 0.10)
+				// 严格保守容差: 相对误差 <= 5% 或 (绝对误差 < 2000 且 相对误差 < 20%)，禁止 100B vs 1000B 因 <=1024B 而误判
+				upMatch := (maxUp > 0 && upRatio <= 0.05) || (upDiff < 2000 && upRatio < 0.20)
+				downMatch := (maxDown > 0 && downRatio <= 0.05) || (downDiff < 2000 && downRatio < 0.20)
 
-				if upMatch && downMatch {
+				var trafficMatch bool
+				if log.monitoredUp > 500 && log.monitoredDown > 500 {
+					trafficMatch = upMatch && downMatch
+				} else if log.monitoredDown > 2000 && log.monitoredUp <= 500 {
+					trafficMatch = downMatch && (upDiff < 2000 && upRatio < 0.20)
+				} else if log.monitoredUp > 2000 && log.monitoredDown <= 500 {
+					trafficMatch = upMatch && (downDiff < 2000 && downRatio < 0.20)
+				} else {
+					trafficMatch = upMatch && downMatch
+				}
+
+				if trafficMatch {
 					candidateMatches[cand.key] = append(candidateMatches[cand.key], log)
 					logicalMatches[log.key] = append(logicalMatches[log.key], cand)
 
 					pairKey := fmt.Sprintf("%s:%s", cand.key.connectionID, log.key.connectionID)
 					matchEvidenceMap[pairKey] = map[string]any{
 						"overlapMs":         overlapMs,
+						"sharedHops":        sharedHops,
 						"candidateChains":   cand.chains,
 						"logicalChains":     log.chains,
 						"candidateTotals":   map[string]int64{"upload": cand.monitoredUp, "download": cand.monitoredDown},
@@ -296,7 +331,7 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 			}
 		}
 
-		// 判定 1-to-1 confirmed 与 ambiguous / unpaired 并持久化 relation
+		// 判定 1-to-1 confirmed 与 ambiguous / unpaired 并持久化 relation (SQL 错误必须向上传播)
 		for _, cand := range candidates {
 			matchedLogicals := candidateMatches[cand.key]
 
@@ -385,9 +420,8 @@ func insertRelayRelation(tx *sql.Tx, runID string, candKey connKey, logKey *conn
 	return err
 }
 
-// deriveAccountedTraffic 遍历 raw connection_traffic，元数据严格取源于当时发生的 event_journal event
+// deriveAccountedTraffic 遍历 raw connection_traffic，直接以该 event 自身的完整 snapshot 为事实 (不向旧值 fallback)
 func deriveAccountedTraffic(ctx context.Context, tx *sql.Tx, runID string, relayMap map[connKey]AccountingClass) error {
-	// 1. 准备 accounted_traffic 插入语句
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO accounted_traffic (
 			run_id, source_event_id, session_id, epoch_id, connection_id, observed_at,
@@ -408,23 +442,17 @@ func deriveAccountedTraffic(ctx context.Context, tx *sql.Tx, runID string, relay
 	}
 	defer stmt.Close()
 
-	// 2. 按权威序列严格流式遍历所有 journal 事件，动态维护时间轴因果状态
+	// 按权威序列流式读取所有生成流量的 journal 事件 (ConnectionNew / ConnectionDelta)
 	jRows, err := tx.QueryContext(ctx, `
 		SELECT event_id, session_id, epoch_id, frame_sequence, event_sequence, event_type, observed_at, event_json
 		FROM event_journal
+		WHERE event_type IN ('ConnectionNew', 'ConnectionDelta')
 		ORDER BY frame_sequence ASC, event_sequence ASC;
 	`)
 	if err != nil {
 		return err
 	}
 	defer jRows.Close()
-
-	type histMeta struct {
-		process, processPath, host, sniffHost, destIP, network, rule, rulePayload string
-		chains                                                                    []string
-		route                                                                     types.RouteType
-	}
-	currentMeta := make(map[connKey]histMeta)
 
 	for jRows.Next() {
 		var eventID, sessID, eventType, obsAtStr, ej string
@@ -444,140 +472,68 @@ func deriveAccountedTraffic(ctx context.Context, tx *sql.Tx, runID string, relay
 
 		k := connKey{sessionID: sessID, epochID: epochID, connectionID: ev.ConnectionID}
 
-		// 如果是元数据注入/更新事件，推进因果状态机
-		if eventType == string(types.EventConnectionBootstrap) ||
-			eventType == string(types.EventConnectionNew) ||
-			eventType == string(types.EventConnectionMetadataUpdated) {
-			m := currentMeta[k]
-			if ev.Metadata.Process != "" {
-				m.process = ev.Metadata.Process
-			}
-			if ev.Metadata.ProcessPath != "" {
-				m.processPath = ev.Metadata.ProcessPath
-			}
-			if ev.Metadata.Host != "" {
-				m.host = ev.Metadata.Host
-			}
-			if ev.Metadata.SniffHost != "" {
-				m.sniffHost = ev.Metadata.SniffHost
-			}
-			if ev.Metadata.DestinationIP != "" {
-				m.destIP = ev.Metadata.DestinationIP
-			}
-			if ev.Metadata.Network != "" {
-				m.network = ev.Metadata.Network
-			}
-			if ev.Rule != "" {
-				m.rule = ev.Rule
-			}
-			if ev.RulePayload != "" {
-				m.rulePayload = ev.RulePayload
-			}
-			if len(ev.Chains) > 0 {
-				m.chains = ev.Chains
-			}
-			if ev.Route != "" {
-				m.route = ev.Route
-			}
-			currentMeta[k] = m
+		accClass := relayMap[k]
+		if accClass == "" {
+			accClass = ClassUnique
 		}
 
-		// 仅对产生流量的事件 (ConnectionNew / ConnectionDelta) 派生 accounted_traffic
-		if eventType == string(types.EventConnectionNew) || eventType == string(types.EventConnectionDelta) {
-			accClass := relayMap[k]
-			if accClass == "" {
-				accClass = ClassUnique
-			}
+		// 严格直接取当前事件自身携带的字段事实 (不向旧值 fallback)
+		proc := ev.Metadata.Process
+		procPath := ev.Metadata.ProcessPath
+		host := ev.Metadata.Host
+		sniffHost := ev.Metadata.SniffHost
+		destIP := ev.Metadata.DestinationIP
+		network := ev.Metadata.Network
+		rule := ev.Rule
+		rulePayload := ev.RulePayload
+		chains := ev.Chains
+		route := ev.Route
+		if route == "" {
+			route = types.RouteUnknown
+		}
 
-			hist := currentMeta[k]
+		var accUp, accDown int64
+		if accClass == ClassConfirmedRelayDuplicate {
+			accUp = 0
+			accDown = 0
+		} else {
+			accUp = ev.DeltaUpload
+			accDown = ev.DeltaDownload
+		}
 
-			proc := ev.Metadata.Process
-			if proc == "" {
-				proc = hist.process
-			}
-			procPath := ev.Metadata.ProcessPath
-			if procPath == "" {
-				procPath = hist.processPath
-			}
-			host := ev.Metadata.Host
-			if host == "" {
-				host = hist.host
-			}
-			sniffHost := ev.Metadata.SniffHost
-			if sniffHost == "" {
-				sniffHost = hist.sniffHost
-			}
-			destIP := ev.Metadata.DestinationIP
-			if destIP == "" {
-				destIP = hist.destIP
-			}
-			network := ev.Metadata.Network
-			if network == "" {
-				network = hist.network
-			}
-			rule := ev.Rule
-			if rule == "" {
-				rule = hist.rule
-			}
-			rulePayload := ev.RulePayload
-			if rulePayload == "" {
-				rulePayload = hist.rulePayload
-			}
-			chains := ev.Chains
-			if len(chains) == 0 {
-				chains = hist.chains
-			}
-			route := ev.Route
-			if route == "" {
-				route = hist.route
-			}
-			if route == "" {
-				route = types.RouteUnknown
-			}
+		var finalProxy, topGroup sql.NullString
+		if route == types.RouteDirect {
+			finalProxy = sql.NullString{String: "DIRECT", Valid: true}
+		} else if len(chains) > 0 {
+			finalProxy = sql.NullString{String: chains[0], Valid: true}
+			topGroup = sql.NullString{String: chains[len(chains)-1], Valid: true}
+		}
 
-			var accUp, accDown int64
-			if accClass == ClassConfirmedRelayDuplicate {
-				accUp = 0
-				accDown = 0
-			} else {
-				accUp = ev.DeltaUpload
-				accDown = ev.DeltaDownload
-			}
+		var intStart, intEnd sql.NullString
+		if len(ev.AttributionInterval) >= 2 {
+			intStart = sql.NullString{String: ev.AttributionInterval[0], Valid: true}
+			intEnd = sql.NullString{String: ev.AttributionInterval[1], Valid: true}
+		}
+		prec := ev.Precision
+		if prec == "" {
+			prec = "exact_snapshot"
+		}
 
-			var finalProxy, topGroup sql.NullString
-			if route == types.RouteDirect {
-				finalProxy = sql.NullString{String: "DIRECT", Valid: true}
-			} else if len(chains) > 0 {
-				finalProxy = sql.NullString{String: chains[0], Valid: true}
-				topGroup = sql.NullString{String: chains[len(chains)-1], Valid: true}
-			}
-
-			var intStart, intEnd sql.NullString
-			if len(ev.AttributionInterval) >= 2 {
-				intStart = sql.NullString{String: ev.AttributionInterval[0], Valid: true}
-				intEnd = sql.NullString{String: ev.AttributionInterval[1], Valid: true}
-			}
-			prec := ev.Precision
-			if prec == "" {
-				prec = "exact_snapshot"
-			}
-
-			if _, err := stmt.ExecContext(ctx,
-				runID, eventID, sessID, epochID, ev.ConnectionID, obsAtStr,
-				intStart, intEnd, prec, string(route),
-				ev.DeltaUpload, ev.DeltaDownload, accUp, accDown,
-				string(accClass), proc, procPath, host, sniffHost, destIP, network,
-				rule, rulePayload, finalProxy, topGroup, DimensionDerivationVersion,
-			); err != nil {
-				return err
-			}
+		if _, err := stmt.ExecContext(ctx,
+			runID, eventID, sessID, epochID, ev.ConnectionID, obsAtStr,
+			intStart, intEnd, prec, string(route),
+			ev.DeltaUpload, ev.DeltaDownload, accUp, accDown,
+			string(accClass), proc, procPath, host, sniffHost, destIP, network,
+			rule, rulePayload, finalProxy, topGroup, DimensionDerivationVersion,
+		); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-// rebuildHourlyAggregates 实现纯整型纳秒分摊，杜绝 float64 精度损失 (E5.3, E8.5)
+// rebuildHourlyAggregates 使用通用 IntervalAllocator 生成小时级物化视图 (保证绝对可加守恒与非负)
 func rebuildHourlyAggregates(ctx context.Context, tx *sql.Tx, runID string) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT
@@ -653,7 +609,7 @@ func rebuildHourlyAggregates(ctx context.Context, tx *sql.Tx, runID string) erro
 				isExact:     true,
 			})
 		} else {
-			// 纯整型纳秒分摊算法 (去除所有 float64)
+			// 复用 IntervalAllocator (F(b) - F(a))
 			startTime, _ := time.Parse(time.RFC3339Nano, intStart.String)
 			endTime, _ := time.Parse(time.RFC3339Nano, intEnd.String)
 			startTime = startTime.UTC()
@@ -665,10 +621,10 @@ func rebuildHourlyAggregates(ctx context.Context, tx *sql.Tx, runID string) erro
 					bucketStart: bucket, upBytes: accUp, downBytes: accDown, isExact: false,
 				})
 			} else {
-				totalNs := endTime.Sub(startTime).Nanoseconds()
-				curr := startTime
-				var allocatedUp, allocatedDown int64
+				allocUp := NewIntervalAllocator(startTime, endTime, accUp)
+				allocDown := NewIntervalAllocator(startTime, endTime, accDown)
 
+				curr := startTime
 				for curr.Before(endTime) {
 					bucket := curr.Truncate(time.Hour)
 					nextBucket := bucket.Add(time.Hour)
@@ -676,31 +632,17 @@ func rebuildHourlyAggregates(ctx context.Context, tx *sql.Tx, runID string) erro
 					if bucketEnd.After(endTime) {
 						bucketEnd = endTime
 					}
-					overlapNs := bucketEnd.Sub(curr).Nanoseconds()
 
-					var pieceUp, pieceDown int64
-					if totalNs > 0 {
-						pieceUp = (accUp * overlapNs) / totalNs
-						pieceDown = (accDown * overlapNs) / totalNs
-					}
+					pUp := allocUp.Allocate(curr, bucketEnd)
+					pDown := allocDown.Allocate(curr, bucketEnd)
 
 					allocations = append(allocations, timeAllocation{
 						bucketStart: bucket,
-						upBytes:     pieceUp,
-						downBytes:   pieceDown,
+						upBytes:     pUp,
+						downBytes:   pDown,
 						isExact:     false,
 					})
-					allocatedUp += pieceUp
-					allocatedDown += pieceDown
 					curr = bucketEnd
-				}
-
-				// 余数整型补偿到首个 bucket，保证绝对守恒
-				remUp := accUp - allocatedUp
-				remDown := accDown - allocatedDown
-				if len(allocations) > 0 {
-					allocations[0].upBytes += remUp
-					allocations[0].downBytes += remDown
 				}
 			}
 		}

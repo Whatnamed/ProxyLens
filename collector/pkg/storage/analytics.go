@@ -57,14 +57,13 @@ func (a *AnalyticsService) GetLatestCompletedAccountingRun(ctx context.Context) 
 	return &r, nil
 }
 
-// GetUsageSummary 根据已发布的最新核算数据返回全局用量与质量摘要 (E4 / 任意范围精确计算)
+// GetUsageSummary 根据已发布的最新核算数据返回全局用量与质量摘要 (复用 IntervalAllocator，错误向上传播)
 func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter AnalyticsFilter) (*UsageSummary, error) {
 	run, err := a.GetLatestCompletedAccountingRun(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// 遍历该 run_id 下的所有 accounted_traffic 记录，执行精确时间窗口分摊计算
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT
 			observed_at, interval_start, interval_end, precision, route,
@@ -99,7 +98,7 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 			&obsAtStr, &intStart, &intEnd, &prec, &route,
 			&rawUp, &rawDown, &accUp, &accDown, &accClass,
 		); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan accounted traffic row: %w", err)
 		}
 
 		if filter.Route != "" && route != string(filter.Route) {
@@ -109,11 +108,9 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 		obsTime, _ := time.Parse(time.RFC3339Nano, obsAtStr)
 		obsTime = obsTime.UTC()
 
-		// 计算当前记录落入 [qStart, qEnd] 的有效比例与流量 (整型纳秒分摊，杜绝 partial hour 整桶粗暴统计)
 		var effRawUp, effRawDown, effAccUp, effAccDown int64
 
 		if prec == "exact_snapshot" || !intStart.Valid || !intEnd.Valid {
-			// Exact snapshot
 			inRange := true
 			if qStart != nil && obsTime.Before(*qStart) {
 				inRange = false
@@ -128,35 +125,26 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 				effAccDown = accDown
 			}
 		} else {
-			// Interval only overlap
+			// 复用 IntervalAllocator
 			sTime, _ := time.Parse(time.RFC3339Nano, intStart.String)
 			eTime, _ := time.Parse(time.RFC3339Nano, intEnd.String)
 			sTime = sTime.UTC()
 			eTime = eTime.UTC()
 
-			clipS := sTime
-			if qStart != nil && clipS.Before(*qStart) {
-				clipS = *qStart
+			wStart := sTime
+			if qStart != nil && qStart.After(wStart) {
+				wStart = *qStart
 			}
-			clipE := eTime
-			if qEnd != nil && clipE.After(*qEnd) {
-				clipE = *qEnd
+			wEnd := eTime
+			if qEnd != nil && qEnd.Before(wEnd) {
+				wEnd = *qEnd
 			}
 
-			if clipE.After(clipS) {
-				totalNs := eTime.Sub(sTime).Nanoseconds()
-				overlapNs := clipE.Sub(clipS).Nanoseconds()
-				if totalNs > 0 {
-					effRawUp = (rawUp * overlapNs) / totalNs
-					effRawDown = (rawDown * overlapNs) / totalNs
-					effAccUp = (accUp * overlapNs) / totalNs
-					effAccDown = (accDown * overlapNs) / totalNs
-				} else {
-					effRawUp = rawUp
-					effRawDown = rawDown
-					effAccUp = accUp
-					effAccDown = accDown
-				}
+			if wEnd.After(wStart) {
+				effRawUp = NewIntervalAllocator(sTime, eTime, rawUp).Allocate(wStart, wEnd)
+				effRawDown = NewIntervalAllocator(sTime, eTime, rawDown).Allocate(wStart, wEnd)
+				effAccUp = NewIntervalAllocator(sTime, eTime, accUp).Allocate(wStart, wEnd)
+				effAccDown = NewIntervalAllocator(sTime, eTime, accDown).Allocate(wStart, wEnd)
 			}
 		}
 
@@ -189,7 +177,7 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 		}
 	}
 
-	// 聚合 Sampling Residuals
+	// 聚合 Sampling Residuals (错误向上传播)
 	var resWhere []string
 	var resArgs []any
 	if filter.StartTime != nil {
@@ -204,45 +192,74 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 	if len(resWhere) > 0 {
 		resWhereSQL = "WHERE " + strings.Join(resWhere, " AND ")
 	}
-	_ = a.db.QueryRowContext(ctx, fmt.Sprintf(`
+	if err := a.db.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT COALESCE(SUM(residual_upload), 0), COALESCE(SUM(residual_download), 0)
 		FROM residual_intervals %s;
-	`, resWhereSQL), resArgs...).Scan(&summary.SamplingResidualUpload, &summary.SamplingResidualDownload)
-
-	// 聚合 Controller Gap 物理流量
-	var gapWhere = []string{"source = 'controller_stream'"}
-	var gapArgs []any
-	if filter.StartTime != nil {
-		gapWhere = append(gapWhere, "(ended_at >= ? OR ended_at IS NULL)")
-		gapArgs = append(gapArgs, filter.StartTime.UTC().Format(time.RFC3339Nano))
+	`, resWhereSQL), resArgs...).Scan(&summary.SamplingResidualUpload, &summary.SamplingResidualDownload); err != nil {
+		return nil, fmt.Errorf("failed to query sampling residuals: %w", err)
 	}
-	if filter.EndTime != nil {
-		gapWhere = append(gapWhere, "started_at <= ?")
-		gapArgs = append(gapArgs, filter.EndTime.UTC().Format(time.RFC3339Nano))
-	}
-	gapWhereSQL := "WHERE " + strings.Join(gapWhere, " AND ")
-	_ = a.db.QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT COALESCE(SUM(global_gap_upload_delta), 0), COALESCE(SUM(global_gap_download_delta), 0)
-		FROM monitoring_gaps %s;
-	`, gapWhereSQL), gapArgs...).Scan(&summary.ControllerGapPhysicalUpload, &summary.ControllerGapPhysicalDownload)
 
-	// 计算 Coverage
+	// 聚合 Controller Gap 物理流量 (复用 IntervalAllocator 精确分摊，杜绝整段冒充当前窗口)
+	gapRows, err := a.db.QueryContext(ctx, `
+		SELECT started_at, ended_at, global_gap_upload_delta, global_gap_download_delta
+		FROM monitoring_gaps
+		WHERE source = 'controller_stream' AND global_gap_upload_delta IS NOT NULL;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query monitoring gaps for traffic: %w", err)
+	}
+	defer gapRows.Close()
+
+	for gapRows.Next() {
+		var gStartStr, gEndStr sql.NullString
+		var gUp, gDown sql.NullInt64
+		if err := gapRows.Scan(&gStartStr, &gEndStr, &gUp, &gDown); err != nil {
+			return nil, fmt.Errorf("failed to scan gap row: %w", err)
+		}
+		if !gStartStr.Valid || !gUp.Valid || !gDown.Valid {
+			continue
+		}
+
+		gStart, _ := time.Parse(time.RFC3339Nano, gStartStr.String)
+		gStart = gStart.UTC()
+		gEnd := time.Now().UTC()
+		if gEndStr.Valid && gEndStr.String != "" {
+			t, _ := time.Parse(time.RFC3339Nano, gEndStr.String)
+			gEnd = t.UTC()
+		}
+
+		wStart := gStart
+		if qStart != nil && qStart.After(wStart) {
+			wStart = *qStart
+		}
+		wEnd := gEnd
+		if qEnd != nil && qEnd.Before(wEnd) {
+			wEnd = *qEnd
+		}
+
+		if wEnd.After(wStart) {
+			summary.ControllerGapPhysicalUpload += NewIntervalAllocator(gStart, gEnd, gUp.Int64).Allocate(wStart, wEnd)
+			summary.ControllerGapPhysicalDownload += NewIntervalAllocator(gStart, gEnd, gDown.Int64).Allocate(wStart, wEnd)
+		}
+	}
+
+	// 计算 Coverage (错误向上传播)
 	cov, err := a.GetCoverage(ctx, filter.StartTime, filter.EndTime)
-	if err == nil {
-		summary.Coverage = cov
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute coverage: %w", err)
 	}
+	summary.Coverage = cov
 
 	return &summary, nil
 }
 
-// GetTopDimensions 通用多维聚合排行查询 (全窗口 Distinct 连接数与精确时间分摊)
+// GetTopDimensions 通用多维聚合排行查询 (全窗口 Distinct 连接数与 IntervalAllocator 精确时间分摊)
 func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string, filter AnalyticsFilter) ([]TopDimensionItem, error) {
 	run, err := a.GetLatestCompletedAccountingRun(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// 构造多维字段投影
 	dimColumn := "process"
 	switch dimType {
 	case "process":
@@ -311,7 +328,7 @@ func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string,
 			&intStart, &intEnd, &prec, &route,
 			&accUp, &accDown, &dimKey,
 		); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan top dimension row: %w", err)
 		}
 
 		if filter.Route != "" && route != string(filter.Route) {
@@ -343,25 +360,18 @@ func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string,
 			sTime = sTime.UTC()
 			eTime = eTime.UTC()
 
-			clipS := sTime
-			if qStart != nil && clipS.Before(*qStart) {
-				clipS = *qStart
+			wStart := sTime
+			if qStart != nil && qStart.After(wStart) {
+				wStart = *qStart
 			}
-			clipE := eTime
-			if qEnd != nil && clipE.After(*qEnd) {
-				clipE = *qEnd
+			wEnd := eTime
+			if qEnd != nil && qEnd.Before(wEnd) {
+				wEnd = *qEnd
 			}
 
-			if clipE.After(clipS) {
-				totalNs := eTime.Sub(sTime).Nanoseconds()
-				overlapNs := clipE.Sub(clipS).Nanoseconds()
-				if totalNs > 0 {
-					effUp = (accUp * overlapNs) / totalNs
-					effDown = (accDown * overlapNs) / totalNs
-				} else {
-					effUp = accUp
-					effDown = accDown
-				}
+			if wEnd.After(wStart) {
+				effUp = NewIntervalAllocator(sTime, eTime, accUp).Allocate(wStart, wEnd)
+				effDown = NewIntervalAllocator(sTime, eTime, accDown).Allocate(wStart, wEnd)
 				isExact = false
 			}
 		}
@@ -448,7 +458,6 @@ func (a *AnalyticsService) GetProtocolBreakdown(ctx context.Context, filter Anal
 
 // GetCoverage 计算指定时间窗口内的监控覆盖度与缺口并集 (支持 Trailing Offline & Future Clip & Provenance)
 func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Time) (*CoverageSummary, error) {
-	// 1. 查找已知监控起始时间 (第一条 session 的 started_at)
 	var firstSessStartStr sql.NullString
 	err := a.db.QueryRowContext(ctx, "SELECT MIN(started_at) FROM collector_sessions;").Scan(&firstSessStartStr)
 	if err != nil || !firstSessStartStr.Valid || firstSessStartStr.String == "" {
@@ -481,7 +490,7 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 		KnownScopeStart: &knownScopeStart,
 	}
 
-	// 2. Future Query Clip: 如果请求完全在未来
+	// 1. Future Query Clip: 如果请求完全在未来
 	if reqStart.After(now) {
 		summary.FutureDurationMs = reqEnd.Sub(reqStart).Milliseconds()
 		summary.CoverageRatio = nil
@@ -515,7 +524,7 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 		effectiveWindowMs = 1
 	}
 
-	// 3. 读取所有与 [effStart, effEnd] 重叠的数据库记录 Gaps
+	// 2. 读取所有与 [effStart, effEnd] 重叠的数据库记录 Gaps
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT source, started_at, ended_at, reason
 		FROM monitoring_gaps
@@ -537,7 +546,7 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 		var src, startStr, reason string
 		var endStr sql.NullString
 		if err := rows.Scan(&src, &startStr, &endStr, &reason); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan gap row: %w", err)
 		}
 		gStart, _ := time.Parse(time.RFC3339Nano, startStr)
 		gStart = gStart.UTC()
@@ -569,7 +578,7 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 		}
 	}
 
-	// 4. Trailing Offline Gap: 检查最新 session 是否处于停止/中断状态
+	// 3. Trailing Offline Gap: 检查最新 session 是否处于停止/中断状态
 	var latestStatus, latestEndedStr, latestLastEventStr sql.NullString
 	err = a.db.QueryRowContext(ctx, `
 		SELECT status, ended_at, last_event_at
@@ -607,7 +616,7 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 	summary.ControllerGapDurationMs = ctrlGapMs
 	summary.CollectorOfflineDurationMs = offGapMs
 
-	// 5. 执行区间求并集 (Interval Union，保留 Provenance)
+	// 4. 执行区间求并集 (Interval Union，保留 Provenance)
 	sort.Slice(rawIntervals, func(i, j int) bool {
 		return rawIntervals[i].start.Before(rawIntervals[j].start)
 	})
@@ -651,7 +660,7 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 
 	summary.MergedGaps = merged
 
-	// 6. 计算已覆盖与未覆盖时间
+	// 5. 计算已覆盖与未覆盖时间
 	var uncoveredMs int64
 	for _, m := range merged {
 		uncoveredMs += m.DurationMs
