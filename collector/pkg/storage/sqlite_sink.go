@@ -12,10 +12,11 @@ import (
 
 // SQLiteEventSink 提供基于 SQLite + WAL 的可靠事件持久化 Sink
 type SQLiteEventSink struct {
-	mu        sync.Mutex
-	db        *sql.DB
-	sessionID string
-	dbPath    string
+	mu            sync.Mutex
+	db            *sql.DB
+	sessionID     string
+	dbPath        string
+	heartbeatDone chan struct{}
 }
 
 // NewSQLiteEventSink 创建 SQLiteEventSink 实例
@@ -43,7 +44,7 @@ func OpenSQLiteSink(ctx context.Context, dbPath string, sessionID string, collec
 	return sink, nil
 }
 
-// BeginSession 初始化 Collector 会话并检测前序会话异常与生成离线 Gap
+// BeginSession 初始化 Collector 会话并检测前序会话异常与生成离线 Gap (启动心跳)
 func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, collectorVersion string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -65,15 +66,13 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 		SELECT session_id, status, last_event_at, ended_at
 		FROM collector_sessions
 		WHERE session_id != ?
-		ORDER BY started_at DESC LIMIT 1
+		ORDER BY started_at DESC LIMIT 1;
 	`, sessionID).Scan(&prevSessionID, &prevStatus, &prevLastEventStr, &prevEndedStr)
 
 	if err == nil {
-		// 存在前序会话
 		if prevStatus == string(SessionStatusRunning) {
-			// 前序会话非正常退出 (未显式关闭，状态仍为 running)
 			if _, err := tx.ExecContext(ctx, `
-				UPDATE collector_sessions SET status = 'interrupted', ended_at = ?, updated_at = ? WHERE session_id = ?
+				UPDATE collector_sessions SET status = 'interrupted', ended_at = ?, updated_at = ? WHERE session_id = ?;
 			`, nowStr, nowStr, prevSessionID); err != nil {
 				return fmt.Errorf("failed to mark previous session as interrupted: %w", err)
 			}
@@ -94,7 +93,6 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 				return fmt.Errorf("failed to insert offline boundary gap: %w", err)
 			}
 
-			// 同时关闭旧 session 所有 open observations (时间用 gapStart，绝不用新 session start 冒充)
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE connections SET
 					observation_ended_at = ?,
@@ -102,13 +100,12 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 					updated_at = ?
 				WHERE session_id = ? AND observation_ended_at IS NULL;
 			`, gapStart, nowStr, prevSessionID); err != nil {
-				return fmt.Errorf("failed to close open observations for interrupted session: %w", err)
+				return fmt.Errorf("failed to close open observations of interrupted session: %w", err)
 			}
 		} else if prevStatus == string(SessionStatusInterrupted) {
-			// 前序会话已被标记为 interrupted (例如显式 EndSession(interrupted))
-			gapStart := prevEndedStr.String
+			gapStart := prevLastEventStr.String
 			if gapStart == "" {
-				gapStart = prevLastEventStr.String
+				gapStart = prevEndedStr.String
 			}
 			if gapStart == "" {
 				gapStart = nowStr
@@ -125,7 +122,6 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 				return fmt.Errorf("failed to insert interrupted boundary gap: %w", err)
 			}
 		} else if prevStatus == string(SessionStatusClosedClean) {
-			// 前序会话正常退出，推导 collector_not_running 离线缺口
 			gapStart := prevEndedStr.String
 			if gapStart == "" {
 				gapStart = prevLastEventStr.String
@@ -148,18 +144,50 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 		return fmt.Errorf("failed to query previous session: %w", err)
 	}
 
-	// 2. 插入当前新会话
+	// 2. 插入当前新会话 (记录初始心跳与心跳周期 5000ms)
 	insertSessionSQL := `
 	INSERT INTO collector_sessions (
-		session_id, started_at, status, collector_version, created_at, updated_at
-	) VALUES (?, ?, 'running', ?, ?, ?)
+		session_id, started_at, status, collector_version,
+		last_heartbeat_at, heartbeat_interval_ms, created_at, updated_at
+	) VALUES (?, ?, 'running', ?, ?, 5000, ?, ?)
 	ON CONFLICT(session_id) DO NOTHING;
 	`
-	if _, err := tx.ExecContext(ctx, insertSessionSQL, sessionID, nowStr, collectorVersion, nowStr, nowStr); err != nil {
+	if _, err := tx.ExecContext(ctx, insertSessionSQL, sessionID, nowStr, collectorVersion, nowStr, nowStr, nowStr); err != nil {
 		return fmt.Errorf("failed to insert new session: %w", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// 3. 启动后台轻量心跳循环 (F4)
+	if s.heartbeatDone != nil {
+		close(s.heartbeatDone)
+	}
+	s.heartbeatDone = make(chan struct{})
+	go s.heartbeatLoop(sessionID, s.heartbeatDone)
+
+	return nil
+}
+
+func (s *SQLiteEventSink) heartbeatLoop(sessionID string, done chan struct{}) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			nowStr := time.Now().UTC().Format(time.RFC3339Nano)
+			_, _ = s.db.ExecContext(ctx, `
+				UPDATE collector_sessions SET last_heartbeat_at = ?, updated_at = ?
+				WHERE session_id = ? AND status = 'running';
+			`, nowStr, nowStr, sessionID)
+			cancel()
+		}
+	}
 }
 
 func errorsIsNoRows(err error) bool {
@@ -174,70 +202,74 @@ func (s *SQLiteEventSink) Emit(ev *types.CollectorEvent) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin event transaction: %w", err)
-	}
-	defer tx.Rollback()
+	return execWithTxRetry(ctx, s.db, 5, func(tx *sql.Tx) error {
+		// 1. Ingest 不可变 Journal
+		isDup, err := IngestJournalRecord(ctx, tx, ev)
+		if err != nil {
+			return fmt.Errorf("failed to ingest journal: %w", err)
+		}
+		if isDup {
+			return nil
+		}
 
-	// 1. 写入 Journal 并检查幂等与顺序
-	isDuplicate, err := IngestJournalRecord(ctx, tx, ev)
-	if err != nil {
-		return fmt.Errorf("journal ingestion failure: %w", err)
-	}
+		// 2. 投影派生事实表
+		if err := ApplyEventProjection(ctx, tx, ev); err != nil {
+			return fmt.Errorf("failed to project event: %w", err)
+		}
 
-	// 2. 若是重复事件，整个事务直接 commit 退出 (No-op，不推进 session progress 与 last_event_at)
-	if isDuplicate {
-		return tx.Commit()
-	}
-
-	// 3. 应用投影
-	if err := ApplyEventProjection(ctx, tx, ev); err != nil {
-		return fmt.Errorf("projection failure: %w", err)
-	}
-
-	// 4. 更新 session 的 last_event_at 与 last_frame_sequence
-	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
-	obsAtStr := ev.Timestamp.UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `
+		// 3. 推进 Session 进度并顺带刷新心跳
+		obsAtStr := ev.Timestamp.UTC().Format(time.RFC3339Nano)
+		nowStr := time.Now().UTC().Format(time.RFC3339Nano)
+		updateSessionSQL := `
 		UPDATE collector_sessions SET
 			last_event_at = ?,
-			last_frame_sequence = MAX(last_frame_sequence, ?),
+			last_heartbeat_at = ?,
+			last_frame_sequence = ?,
 			updated_at = ?
 		WHERE session_id = ?;
-	`, obsAtStr, ev.FrameSequence, nowStr, ev.SessionID); err != nil {
-		return fmt.Errorf("failed to update session progress: %w", err)
-	}
+		`
+		if _, err := tx.ExecContext(ctx, updateSessionSQL, obsAtStr, nowStr, ev.FrameSequence, nowStr, ev.SessionID); err != nil {
+			return fmt.Errorf("failed to update session progress: %w", err)
+		}
 
-	return tx.Commit()
+		return nil
+	})
 }
 
-// EndSession 优雅结束会话并关闭所有尚未结束观察的连接
+// EndSession 显式结束当前会话并原子关闭未闭合连接
 func (s *SQLiteEventSink) EndSession(ctx context.Context, sessionID string, status SessionStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
+	if s.heartbeatDone != nil {
+		close(s.heartbeatDone)
+		s.heartbeatDone = nil
+	}
+
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339Nano)
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE collector_sessions SET
-			status = ?,
-			ended_at = ?,
-			updated_at = ?
-		WHERE session_id = ?;
-	`, string(status), nowStr, nowStr, sessionID); err != nil {
+	updateSQL := `
+	UPDATE collector_sessions SET
+		status = ?,
+		ended_at = ?,
+		last_heartbeat_at = ?,
+		updated_at = ?
+	WHERE session_id = ?;
+	`
+	if _, err := tx.ExecContext(ctx, updateSQL, string(status), nowStr, nowStr, nowStr, sessionID); err != nil {
 		return err
 	}
 
-	// 优先以 last_event_at 作为 interrupted 连接结束时间
 	var lastEventStr sql.NullString
-	_ = tx.QueryRowContext(ctx, "SELECT last_event_at FROM collector_sessions WHERE session_id = ?", sessionID).Scan(&lastEventStr)
-	
+	_ = tx.QueryRowContext(ctx, "SELECT last_event_at FROM collector_sessions WHERE session_id = ?;", sessionID).Scan(&lastEventStr)
+
 	endObsTime := nowStr
 	endReason := "collector_session_closed"
 	if status == SessionStatusInterrupted {
@@ -259,10 +291,15 @@ func (s *SQLiteEventSink) EndSession(ctx context.Context, sessionID string, stat
 	return tx.Commit()
 }
 
-// Close 关闭底层数据库连接
+// Close 关闭 Sink 并释放资源
 func (s *SQLiteEventSink) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.heartbeatDone != nil {
+		close(s.heartbeatDone)
+		s.heartbeatDone = nil
+	}
 
 	if s.db != nil {
 		return s.db.Close()

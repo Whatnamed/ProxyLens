@@ -6,15 +6,22 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 2B1 — Accounting & Aggregation Foundation Complete (Phase 2B still IN PROGRESS)`
-- **代码状态**：Phase 2B1 版本化核算、保守中继对账与分时聚合层已完全落地实现：
-  1. **连接观察生命周期语义 (E1)**：在 `connections` 引入 `observation_ended_at`、`observation_end_reason` 与 `observation_end_event_id`，精确区分 `disappeared_from_snapshot`、`epoch_boundary`、`collector_session_closed` 与 `collector_session_interrupted`，绝不把采集器启停伪装成网络连接关闭；
-  2. **版本化核算层 (E2 / E3, ADR 0003)**：构建 `accounting_runs`、`relay_relations` 与 `accounted_traffic`。保持原始事实（`event_journal` / `connection_traffic`）绝对不可变，核算视图作为派生层 100% 确定性全量可重建；
-  3. **保守中继对账 (Conservative Relay Reconciliation v1)**：仅在同 session + epoch 内执行结构、时间与流量三元匹配，遇到 1-to-N / N-to-1 歧义一律不扣流量（`accounted = raw`），杜绝误扣；
-  4. **单层物化分时聚合 (E5)**：构建 `usage_hourly_dimensions` 覆盖 9 大核心维度；时间分配采用向下取整 + 确定性余数补偿，整数字节绝对守恒；
-  5. **监控覆盖率模型 (E6)**：从首个会话定义 `known_scope_start`，区间早于此识别为 `outside_known_scope`；区间内重叠缺口通过区间求并集（Interval Union）精准去重；
-  6. **面向 UI 的稳定 Analytics API 与 Minimal CLI (E7)**：提供 `AnalyticsService` 与 `collector accounting rebuild`、`collector analytics summary / top-processes / top-hosts / top-proxies / coverage` 命令；
-  7. **自动化测试与端到端实测 (E8)**：全套 Migration（v1->v5）、Lifecycle、Relay、Byte Conservation、Coverage Union 与 10k 性能 Sanity 测试 100% PASS。
+- **当前阶段**：`Phase 2 Complete — Storage, Accounting & Runtime Validation Finalized (Ready for Phase 3 UI)`
+- **代码状态**：Phase 2B2 运行时验证、非阻塞核算边界、心跳存活检测、派生层安全保留策略与全栈性能/验收实测已完全落地并验证通过：
+  1. **非阻塞绑定序列核算重建 (F1 / F2, ADR 0004)**：引入全局单调自增 `journal_sequence` 与 `accounting_runs.source_journal_sequence_max`；阶段 A 仅用 <5ms 短事务锁定边界，阶段 B~F 采用分批（1000 行/批）退避重试短事务写入，彻底杜绝 Collector 实时采集被阻塞；
+  2. **显式 Freshness / Staleness API (F3)**：实现 `GetAccountingFreshness(ctx)`，精准返回 `LagEvents` 与 `IsFresh` 状态，并在 `GetUsageSummary` 中提供；
+  3. **Collector 心跳与运行时存活检测 (F4)**：`SQLiteEventSink` 运行 5s 后台轻量心跳；`GetCoverage` 在会话处于 `running` 但心跳超时时动态派生 `collector_runtime_liveness: collector_heartbeat_stale` 监控缺口；
+  4. **安全派生层保留策略 (F5, Safe Derived Retention)**：实现 `PlanDerivedRetention` 与 `ApplyDerivedRetention`，仅清理旧 completed/failed 派生运行，**100% 保证 raw authority 数据（Journal, Sessions, Gaps）永不被删除**；
+  5. **WAL 运维与 SQLite 完整性保障 (F6 / F11)**：DSN 统一配置 `synchronous=NORMAL`, `busy_timeout=10000`, 并在 CLI 提供 `collector storage integrity` 执行 `PRAGMA integrity_check` 与 `foreign_key_check`；
+  6. **全栈性能基准矩阵 (F7 / F8 / F9)**：
+     - 1000ms Steady (100 conns): 10.1s, DB=2960 KB, WAL=0 KB, Coverage=96.9%, Integrity=PASS;
+     - 500ms Churn (50 conns): 10.1s, DB=3948 KB, WAL=0 KB, Coverage=97.4%, Integrity=PASS;
+     - 250ms Mixed (NTP+Proxy+Direct): 10.1s, DB=3648 KB, WAL=0 KB, Coverage=97.2%, Integrity=PASS;
+     - 250ms Relay-Heavy (50 pairs): 10.1s, DB=11308 KB, WAL=0 KB, Coverage=94.9%, Integrity=PASS;
+     - 并发 Rebuild: 在持续 250ms 写入期间，Non-blocking Rebuild 耗时 **278 ms**，Freshness 正确识别并追平；
+     - 30s 高压 Soak: 连续处理 125 帧，内存平稳，数据库完整性检验为 **HEALTHY**；
+  7. **PRODUCT A–E 确定性验收 (F10)**：所有 5 项产品核心场景全部通过确定性单元测试验证；
+  8. **测试套件覆盖**: 全部 33 个 Go 测试 + 18 个 Phase 0 回归测试 100% PASS。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64) / 12th Gen Intel Core i5-12400 (12 cores)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
@@ -23,7 +30,7 @@
 - **双事实权威源与三层存储模型 (Dual Authority & Layered Storage)**：
   - 网络观测权威: `event_journal`
   - 采集生命周期权威: `collector_sessions`
-  - 原始事实层: `event_journal`, `connection_traffic`
+  - 原始事实层: `event_journal`, `connection_traffic`, `monitoring_gaps`
   - 版本化核算层: `accounting_runs`, `relay_relations`, `accounted_traffic`
   - 分时聚合层: `usage_hourly_dimensions`
 
@@ -43,25 +50,25 @@
 10. **Collector 语言选型 (ADR 0001)**：选定 **Go (v1.24+)** 作为生产 Collector 开发语言。
 11. **存储引擎与持久化选型 (ADR 0002)**：选定 **SQLite + WAL**（纯 Go `modernc.org/sqlite` 驱动，`synchronous=NORMAL`）；`event_journal` 与 `collector_sessions` 构成双事实权威层。
 12. **版本化核算与保守中继对账 (ADR 0003)**：原始事实永久不可变；核算与物化分时聚合带版本且支持确定性全量重算；歧义中继连接不扣减；分时聚合严格保证整数字节守恒。
-13. **代理链拓扑因果顺序规约 (Hop Order Semantics)**：`chains[0]` 为最终物理出站节点，`chains[last]` 为顶层规则分流策略组，出站节点历史只从发生时的 chains 派生，绝不读取当前活动选择组状态篡改历史。
-14. **Gap 恢复与 Bootstrap 规约**：冷启动/重连首帧已有连接记录为 baseline（delta=0），跨 Gap 存活连接增量归属为 Gap 期间累积流量；Gap 期间若发生 Epoch Break 则废弃跨 Gap 增量并新建 Epoch。
+13. **运行时核算边界、Freshness 与安全保留策略 (ADR 0004)**：全局单调 `journal_sequence` 快照边界；分批短事务写让出写锁；显式 Freshness 表达；心跳存活动态缺口判定；保留策略绝对不可删除 Raw Authority。
+14. **代理链拓扑因果顺序规约 (Hop Order Semantics)**：`chains[0]` 为最终物理出站节点，`chains[last]` 为顶层规则分流策略组，出站节点历史只从发生时的 chains 派生，绝不读取当前活动选择组状态篡改历史。
+15. **Gap 恢复与 Bootstrap 规约**：冷启动/重连首帧已有连接记录为 baseline（delta=0），跨 Gap 存活连接增量归属为 Gap 期间累积流量；Gap 期间若发生 Epoch Break 则废弃跨 Gap 增量并新建 Epoch。
 
 ---
 
 ## Open Questions
 
-### 实现选型 (Phase 2B2 & Phase 3 决策项)
+### 实现选型 (Phase 3 决策项)
 
-- Storage 运维：长期 Retention 自动清理策略与 WAL checkpoint 调度器调优；
-- UI：Tauri vs 本地 Web UI；
-- UI 与 Collector 通信：共享 SQLite 只读连接 vs 本地轻量 IPC / HTTP 查询端点。
+- UI 技术选型：Tauri + React/Vue vs 本地 Web UI (Go 内置轻量静态服务 + REST API)；
+- 审计智能与规则诊断交互设计 (Audit Intelligence, Top-K 规则误命中、节点归属分布图表)。
 
 ---
 
 ## Next Step
 
-进入 **Phase 2B2 — 存储生命周期运维、全栈基准与审计核算最终验收**：
-1. 实现数据生命周期 Retention 自动清理机制；
-2. 优化 SQLite WAL checkpoint 调度；
-3. 执行端到端全栈性能基准测量与长时间稳定性 Soak；
-4. 运行 PRODUCT A-E 全场景持久化与核算最终验收。
+进入 **Phase 3 — Audit Intelligence & Local UI (MVP 可视化审计看板)**：
+1. UI 架构选型与轻量 API 端点对接；
+2. 实现会话与时间窗口选择器、监控覆盖率状态栏；
+3. 实现出站代理节点、分流规则命中与进程流量排行榜看板；
+4. 实现多跳中继去重可解释性下钻与证据展示。

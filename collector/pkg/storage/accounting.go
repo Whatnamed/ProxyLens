@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -15,65 +16,133 @@ import (
 const (
 	AccountingAlgorithmVersion = "reconciled-accounting-v1"
 	DimensionDerivationVersion = "chain-semantics-v1"
+	DefaultBatchSize           = 1000
 )
 
 var runSeqCounter int64
 
-// RebuildAccounting 从不可变原始证据完整重算并原子发布一轮核算结果
+// RebuildAccounting 从不可变原始证据执行非阻塞、绑定序列边界的完整核算 (F2 Non-Blocking Bounded Rebuild)
 func RebuildAccounting(ctx context.Context, db *sql.DB, notes string) (*AccountingRunRecord, error) {
 	now := time.Now().UTC()
 	seq := atomic.AddInt64(&runSeqCounter, 1)
 	runID := fmt.Sprintf("run-%d-%d", now.UnixNano(), seq)
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to begin accounting tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	// 1. 统计源 Journal 边界信息
+	// -------------------------------------------------------------
+	// 阶段 A: Capture Source Boundary (极短写事务，带锁重试)
+	// -------------------------------------------------------------
+	var boundarySeq int64
 	var eventCount int64
 	var minObs, maxObs sql.NullString
-	err = tx.QueryRowContext(ctx, `
-		SELECT COUNT(*), MIN(observed_at), MAX(observed_at) FROM event_journal;
-	`).Scan(&eventCount, &minObs, &maxObs)
+
+	err := execWithTxRetry(ctx, db, 15, func(tx *sql.Tx) error {
+		// 检查是否有未完成的 running run
+		var runningRunID, runningStartStr string
+		err := tx.QueryRowContext(ctx, `
+			SELECT run_id, started_at FROM accounting_runs
+			WHERE status = 'running'
+			ORDER BY started_at DESC LIMIT 1;
+		`).Scan(&runningRunID, &runningStartStr)
+		if err == nil {
+			runningStart, _ := time.Parse(time.RFC3339Nano, runningStartStr)
+			// 如果超过 10 分钟，判定为崩溃遗留，标记 failed
+			if time.Since(runningStart) > 10*time.Minute {
+				_, _ = tx.ExecContext(ctx, `
+					UPDATE accounting_runs SET status = 'failed', failed_reason = 'abandoned_crashed_run'
+					WHERE run_id = ?;
+				`, runningRunID)
+			} else {
+				return ErrAccountingAlreadyRunning
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("failed to check running accounting runs: %w", err)
+		}
+
+		// 读取当前最大 journal_sequence 与总数
+		err = tx.QueryRowContext(ctx, `
+			SELECT
+				COALESCE(MAX(journal_sequence), 0),
+				COUNT(*),
+				MIN(observed_at),
+				MAX(observed_at)
+			FROM event_journal;
+		`).Scan(&boundarySeq, &eventCount, &minObs, &maxObs)
+		if err != nil {
+			return fmt.Errorf("failed to query journal boundary: %w", err)
+		}
+
+		boundaryData := map[string]any{
+			"eventCount":               eventCount,
+			"sourceJournalSequenceMax": boundarySeq,
+			"minObservedAt":            minObs.String,
+			"maxObservedAt":            maxObs.String,
+			"reconciledTime":           now.Format(time.RFC3339Nano),
+		}
+		boundaryJSON, _ := json.Marshal(boundaryData)
+
+		insertRunSQL := `
+		INSERT INTO accounting_runs (
+			run_id, algorithm_version, started_at, status,
+			source_journal_event_count, source_journal_sequence_max,
+			source_boundary_json, notes
+		) VALUES (?, ?, ?, 'running', ?, ?, ?, ?);
+		`
+		if _, err := tx.ExecContext(ctx, insertRunSQL,
+			runID, AccountingAlgorithmVersion, now.Format(time.RFC3339Nano),
+			eventCount, boundarySeq, string(boundaryJSON), notes,
+		); err != nil {
+			return fmt.Errorf("failed to insert running accounting_run: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to query journal boundary: %w", err)
+		return nil, err
 	}
 
-	boundaryData := map[string]any{
-		"eventCount":     eventCount,
-		"minObservedAt":  minObs.String,
-		"maxObservedAt":  maxObs.String,
-		"reconciledTime": now.Format(time.RFC3339Nano),
-	}
-	boundaryJSON, _ := json.Marshal(boundaryData)
-
-	// 2. 插入 accounting_runs (初始状态 running)
-	insertRunSQL := `
-	INSERT INTO accounting_runs (
-		run_id, algorithm_version, started_at, status, source_journal_event_count, source_boundary_json, notes
-	) VALUES (?, ?, ?, 'running', ?, ?, ?);
-	`
-	if _, err := tx.ExecContext(ctx, insertRunSQL, runID, AccountingAlgorithmVersion, now.Format(time.RFC3339Nano), eventCount, string(boundaryJSON), notes); err != nil {
-		return nil, fmt.Errorf("failed to insert accounting_run: %w", err)
+	// 错误/取消捕获闭包：确保失败时将 run 标记为 failed
+	markFailed := func(failErr error) {
+		ctxFail, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = execWithTxRetry(ctxFail, db, 5, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctxFail, `
+				UPDATE accounting_runs SET status = 'failed', failed_reason = ?
+				WHERE run_id = ?;
+			`, failErr.Error(), runID)
+			return err
+		})
 	}
 
-	// 3. 读取所有 connections 执行严格收紧的 Conservative Relay Reconciliation (E3 / Phase 1 Matcher)
-	relayMap, err := reconcileRelayRelations(ctx, tx, runID)
+	// -------------------------------------------------------------
+	// 阶段 B: Construct Bounded Connection Summaries (只读，<= boundarySeq)
+	// -------------------------------------------------------------
+	relayMap, relayRelations, err := reconcileBoundedRelayRelations(ctx, db, runID, boundarySeq)
 	if err != nil {
+		markFailed(err)
 		return nil, fmt.Errorf("relay reconciliation failed: %w", err)
 	}
 
-	// 4. 派生 accounted_traffic (E2 / 直接以当前 event snapshot 完整事实为准，不回退覆盖)
-	if err := deriveAccountedTraffic(ctx, tx, runID, relayMap); err != nil {
+	// -------------------------------------------------------------
+	// 阶段 C: Batch Write relay_relations (分批短事务，每批让出写锁)
+	// -------------------------------------------------------------
+	if err := batchWriteRelayRelations(ctx, db, relayRelations); err != nil {
+		markFailed(err)
+		return nil, fmt.Errorf("batch write relay_relations failed: %w", err)
+	}
+
+	// -------------------------------------------------------------
+	// 阶段 D: Read Bounded Journal -> Derive & Batch Write accounted_traffic (读写彻底解耦)
+	// -------------------------------------------------------------
+	if err := streamAndBatchWriteAccountedTraffic(ctx, db, runID, boundarySeq, relayMap); err != nil {
+		markFailed(err)
 		return nil, fmt.Errorf("accounted traffic derivation failed: %w", err)
 	}
 
-	// 5. 校验 Invariants (E3.6)
+	// -------------------------------------------------------------
+	// 阶段 E: Invariants Validation
+	// -------------------------------------------------------------
 	var rawUpSum, rawDownSum, accUpSum, accDownSum int64
 	var negCount int64
-	err = tx.QueryRowContext(ctx, `
+	err = db.QueryRowContext(ctx, `
 		SELECT
 			COALESCE(SUM(raw_upload), 0),
 			COALESCE(SUM(raw_download), 0),
@@ -84,46 +153,56 @@ func RebuildAccounting(ctx context.Context, db *sql.DB, notes string) (*Accounti
 		WHERE run_id = ?;
 	`, runID).Scan(&rawUpSum, &rawDownSum, &accUpSum, &accDownSum, &negCount)
 	if err != nil {
+		markFailed(err)
 		return nil, fmt.Errorf("failed to validate accounting invariants: %w", err)
 	}
 
 	if negCount > 0 {
-		return nil, fmt.Errorf("%w: negative accounted bytes detected (%d rows)", ErrAccountingInvariantBroken, negCount)
+		invErr := fmt.Errorf("%w: negative accounted bytes detected (%d rows)", ErrAccountingInvariantBroken, negCount)
+		markFailed(invErr)
+		return nil, invErr
 	}
 	if accUpSum > rawUpSum || accDownSum > rawDownSum {
-		return nil, fmt.Errorf("%w: accounted totals exceed raw totals (up: %d > %d, down: %d > %d)", ErrAccountingInvariantBroken, accUpSum, rawUpSum, accDownSum, rawDownSum)
+		invErr := fmt.Errorf("%w: accounted totals exceed raw totals (up: %d > %d, down: %d > %d)", ErrAccountingInvariantBroken, accUpSum, rawUpSum, accDownSum, rawDownSum)
+		markFailed(invErr)
+		return nil, invErr
 	}
 
-	// 6. 生成 Hourly Materialized Aggregations (E5: 复用通用 Additive IntervalAllocator)
-	if err := rebuildHourlyAggregates(ctx, tx, runID); err != nil {
+	// -------------------------------------------------------------
+	// 阶段 F: Build & Batch Write Hourly Materialized Aggregations
+	// -------------------------------------------------------------
+	if err := rebuildHourlyAggregatesBatched(ctx, db, runID); err != nil {
+		markFailed(err)
 		return nil, fmt.Errorf("hourly aggregation rebuild failed: %w", err)
 	}
 
-	// 7. 更新 run 状态为 completed
+	// -------------------------------------------------------------
+	// 阶段 G: Publish Completed (短事务原子发布)
+	// -------------------------------------------------------------
 	completedAt := time.Now().UTC()
 	completedAtStr := completedAt.Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE accounting_runs SET
-			status = 'completed',
-			completed_at = ?
-		WHERE run_id = ?;
-	`, completedAtStr, runID); err != nil {
-		return nil, fmt.Errorf("failed to complete accounting run: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit accounting run: %w", err)
+	if err := execWithTxRetry(ctx, db, 10, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE accounting_runs SET
+				status = 'completed',
+				completed_at = ?
+			WHERE run_id = ?;
+		`, completedAtStr, runID)
+		return err
+	}); err != nil {
+		markFailed(err)
+		return nil, fmt.Errorf("failed to publish completed accounting run: %w", err)
 	}
 
 	return &AccountingRunRecord{
-		RunID:                   runID,
-		AlgorithmVersion:        AccountingAlgorithmVersion,
-		StartedAt:               now,
-		CompletedAt:             &completedAt,
-		Status:                  AccountingRunCompleted,
-		SourceJournalEventCount: eventCount,
-		SourceBoundaryJSON:      string(boundaryJSON),
-		Notes:                   notes,
+		RunID:                    runID,
+		AlgorithmVersion:         AccountingAlgorithmVersion,
+		StartedAt:                now,
+		CompletedAt:              &completedAt,
+		Status:                   AccountingRunCompleted,
+		SourceJournalEventCount:  eventCount,
+		SourceJournalSequenceMax: &boundarySeq,
+		Notes:                    notes,
 	}, nil
 }
 
@@ -144,62 +223,104 @@ type connInfo struct {
 	monitoredUp, monitoredDown int64
 }
 
-// reconcileRelayRelations 实现严格收紧的 Conservative Relay Reconciliation (复用 Phase 1 严密匹配规则)
-func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map[connKey]AccountingClass, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT
-			session_id, epoch_id, connection_id, first_observed_at, last_observed_at,
-			route, latest_attribution_class, process, host, destination_ip, rule, rule_payload, chains_json,
-			monitored_upload_total, monitored_download_total
-		FROM connections;
-	`)
+// reconcileBoundedRelayRelations 从 <= boundarySeq 的不可变 Journal 事件中构建连接事实并进行 Relay 对账
+func reconcileBoundedRelayRelations(ctx context.Context, db *sql.DB, runID string, boundarySeq int64) (map[connKey]AccountingClass, []RelayRelationRecord, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT session_id, epoch_id, connection_id, event_type, observed_at, event_json
+		FROM event_journal
+		WHERE journal_sequence <= ? AND connection_id IS NOT NULL AND connection_id != ''
+		ORDER BY frame_sequence ASC, event_sequence ASC;
+	`, boundarySeq)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 
-	var allConns []connInfo
+	connMap := make(map[connKey]*connInfo)
+
 	for rows.Next() {
-		var c connInfo
-		var firstStr, lastStr, chainsJSON string
-		if err := rows.Scan(
-			&c.key.sessionID, &c.key.epochID, &c.key.connectionID, &firstStr, &lastStr,
-			&c.route, &c.attributionClass, &c.process, &c.host, &c.destIP, &c.rule, &c.rulePayload, &chainsJSON,
-			&c.monitoredUp, &c.monitoredDown,
-		); err != nil {
-			return nil, err
+		var sessID, connID, eventType, obsAtStr, ej string
+		var epochID int
+		if err := rows.Scan(&sessID, &epochID, &connID, &eventType, &obsAtStr, &ej); err != nil {
+			return nil, nil, err
 		}
-		c.firstObs, _ = time.Parse(time.RFC3339Nano, firstStr)
-		c.lastObs, _ = time.Parse(time.RFC3339Nano, lastStr)
-		if chainsJSON != "" {
-			_ = json.Unmarshal([]byte(chainsJSON), &c.chains)
+
+		obsTime, _ := time.Parse(time.RFC3339Nano, obsAtStr)
+		obsTime = obsTime.UTC()
+
+		k := connKey{sessionID: sessID, epochID: epochID, connectionID: connID}
+		c, ok := connMap[k]
+		if !ok {
+			c = &connInfo{key: k, firstObs: obsTime, lastObs: obsTime}
+			connMap[k] = c
 		}
-		allConns = append(allConns, c)
+		if obsTime.Before(c.firstObs) {
+			c.firstObs = obsTime
+		}
+		if obsTime.After(c.lastObs) {
+			c.lastObs = obsTime
+		}
+
+		var ev types.CollectorEvent
+		dec := json.NewDecoder(strings.NewReader(ej))
+		dec.UseNumber()
+		if err := dec.Decode(&ev); err == nil {
+			if ev.Route != "" {
+				c.route = ev.Route
+			}
+			if ev.AttributionClass != "" {
+				c.attributionClass = ev.AttributionClass
+			}
+			if ev.Metadata.Process != "" {
+				c.process = ev.Metadata.Process
+			}
+			if ev.Metadata.Host != "" {
+				c.host = ev.Metadata.Host
+			}
+			if ev.Metadata.DestinationIP != "" {
+				c.destIP = ev.Metadata.DestinationIP
+			}
+			if ev.Rule != "" {
+				c.rule = ev.Rule
+			}
+			if ev.RulePayload != "" {
+				c.rulePayload = ev.RulePayload
+			}
+			if len(ev.Chains) > 0 {
+				c.chains = ev.Chains
+			}
+			if ev.DeltaUpload > 0 || ev.DeltaDownload > 0 {
+				c.monitoredUp += ev.DeltaUpload
+				c.monitoredDown += ev.DeltaDownload
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("error reading journal rows: %w", err)
 	}
 
 	// 按 session + epoch 分组
-	grouped := make(map[string][]connInfo)
-	for _, c := range allConns {
+	grouped := make(map[string][]*connInfo)
+	for _, c := range connMap {
 		groupKey := fmt.Sprintf("%s:%d", c.key.sessionID, c.key.epochID)
 		grouped[groupKey] = append(grouped[groupKey], c)
 	}
 
 	resultClasses := make(map[connKey]AccountingClass)
+	var relationsToInsert []RelayRelationRecord
 
 	for _, conns := range grouped {
-		var candidates []connInfo
-		var logicals []connInfo
+		var candidates []*connInfo
+		var logicals []*connInfo
 
 		for _, c := range conns {
 			hasProcess := strings.TrimSpace(c.process) != ""
 			hasRule := strings.TrimSpace(c.rule) != ""
 
-			// Candidate: 必须具备 Phase 1 确立的 candidate 特征 (缺失 process + 缺失 rule + 具有 proxy chains)
 			isCandidate := c.attributionClass == types.ClassRelayCandidate ||
 				c.attributionClass == types.ClassConfirmedRelayDuplicate ||
 				(!hasProcess && !hasRule && len(c.chains) > 0 && c.route == types.RouteProxy)
 
-			// Logical: 必须是明确应用连接 (具有 process + rule，或 ClassKnownApplication)
 			isLogical := c.attributionClass == types.ClassKnownApplication || (hasProcess && hasRule)
 
 			if isCandidate {
@@ -208,13 +329,12 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 				logicals = append(logicals, c)
 				resultClasses[c.key] = ClassUnique
 			} else {
-				// 未配对的未知非中继连接
 				resultClasses[c.key] = ClassMissingAttribution
 			}
 		}
 
-		candidateMatches := make(map[connKey][]connInfo)
-		logicalMatches := make(map[connKey][]connInfo)
+		candidateMatches := make(map[connKey][]*connInfo)
+		logicalMatches := make(map[connKey][]*connInfo)
 		matchEvidenceMap := make(map[string]map[string]any)
 
 		for _, cand := range candidates {
@@ -222,17 +342,13 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 				candChains := cand.chains
 				logChains := log.chains
 
-				// 1. Structural Relation (与 Phase 1 CheckStructuralRelayPair 一致):
-				//    Candidate chains >= 1, Logical chains > 1 (必须有上层策略选择层级)
 				if len(candChains) == 0 || len(logChains) <= 1 {
 					continue
 				}
-				// 物理出站节点必须一致 (chains[0])
 				if candChains[0] != logChains[0] {
 					continue
 				}
 
-				// 检查 shared structural hops
 				var sharedHops []string
 				logHopMap := make(map[string]bool, len(logChains))
 				for _, hop := range logChains {
@@ -247,7 +363,6 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 					continue
 				}
 
-				// 2. 生命周期实质时间重叠
 				if cand.lastObs.Before(log.firstObs) || cand.firstObs.After(log.lastObs) {
 					continue
 				}
@@ -264,7 +379,6 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 					continue
 				}
 
-				// 3. Minimum traffic 门槛 (与 Phase 1 一致: 单向需 > 500B，杜绝小流量误配)
 				hasTraffic := cand.monitoredUp > 500 || cand.monitoredDown > 500 || log.monitoredUp > 500 || log.monitoredDown > 500
 				if !hasTraffic {
 					continue
@@ -297,7 +411,6 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 					downRatio = float64(downDiff) / float64(maxDown)
 				}
 
-				// 严格保守容差: 相对误差 <= 5% 或 (绝对误差 < 2000 且 相对误差 < 20%)，禁止 100B vs 1000B 因 <=1024B 而误判
 				upMatch := (maxUp > 0 && upRatio <= 0.05) || (upDiff < 2000 && upRatio < 0.20)
 				downMatch := (maxDown > 0 && downRatio <= 0.05) || (downDiff < 2000 && downRatio < 0.20)
 
@@ -331,7 +444,6 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 			}
 		}
 
-		// 判定 1-to-1 confirmed 与 ambiguous / unpaired 并持久化 relation (SQL 错误必须向上传播)
 		for _, cand := range candidates {
 			matchedLogicals := candidateMatches[cand.key]
 
@@ -341,14 +453,21 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 					"decisionReason":  "unpaired_no_matching_logical_connection",
 					"candidateChains": cand.chains,
 					"candidateTotals": map[string]int64{"upload": cand.monitoredUp, "download": cand.monitoredDown},
+					"candidateKey":    fmt.Sprintf("%s:%d:%s", cand.key.sessionID, cand.key.epochID, cand.key.connectionID),
 				}
-				if err := insertRelayRelation(tx, runID, cand.key, nil, RelayUnpaired, evidence); err != nil {
-					return nil, err
-				}
+				evJSON, _ := json.Marshal(evidence)
+				relationsToInsert = append(relationsToInsert, RelayRelationRecord{
+					RunID:                 runID,
+					CandidateSessionID:    cand.key.sessionID,
+					CandidateEpochID:      cand.key.epochID,
+					CandidateConnectionID: cand.key.connectionID,
+					Status:                RelayUnpaired,
+					EvidenceJSON:          string(evJSON),
+					DerivationVersion:     AccountingAlgorithmVersion,
+				})
 			} else if len(matchedLogicals) == 1 {
 				singleLogical := matchedLogicals[0]
 				if len(logicalMatches[singleLogical.key]) == 1 {
-					// 严格 1-to-1 confirmed
 					resultClasses[cand.key] = ClassConfirmedRelayDuplicate
 					pairKey := fmt.Sprintf("%s:%s", cand.key.connectionID, singleLogical.key.connectionID)
 					evidence := matchEvidenceMap[pairKey]
@@ -356,11 +475,23 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 						evidence = make(map[string]any)
 					}
 					evidence["decisionReason"] = "strict_1to1_structural_overlap_match"
-					if err := insertRelayRelation(tx, runID, cand.key, &singleLogical.key, RelayConfirmed, evidence); err != nil {
-						return nil, err
-					}
+					evidence["candidateKey"] = fmt.Sprintf("%s:%d:%s", cand.key.sessionID, cand.key.epochID, cand.key.connectionID)
+					evidence["logicalKey"] = fmt.Sprintf("%s:%d:%s", singleLogical.key.sessionID, singleLogical.key.epochID, singleLogical.key.connectionID)
+					evJSON, _ := json.Marshal(evidence)
+
+					relationsToInsert = append(relationsToInsert, RelayRelationRecord{
+						RunID:                 runID,
+						CandidateSessionID:    cand.key.sessionID,
+						CandidateEpochID:      cand.key.epochID,
+						CandidateConnectionID: cand.key.connectionID,
+						LogicalSessionID:      singleLogical.key.sessionID,
+						LogicalEpochID:        singleLogical.key.epochID,
+						LogicalConnectionID:   singleLogical.key.connectionID,
+						Status:                RelayConfirmed,
+						EvidenceJSON:          string(evJSON),
+						DerivationVersion:     AccountingAlgorithmVersion,
+					})
 				} else {
-					// N-to-1 歧义 -> 不扣减
 					resultClasses[cand.key] = ClassAmbiguousRelay
 					pairKey := fmt.Sprintf("%s:%s", cand.key.connectionID, singleLogical.key.connectionID)
 					evidence := matchEvidenceMap[pairKey]
@@ -368,125 +499,157 @@ func reconcileRelayRelations(ctx context.Context, tx *sql.Tx, runID string) (map
 						evidence = make(map[string]any)
 					}
 					evidence["decisionReason"] = "n_to_1_logical_ambiguity"
-					if err := insertRelayRelation(tx, runID, cand.key, &singleLogical.key, RelayAmbiguous, evidence); err != nil {
-						return nil, err
-					}
+					evidence["candidateKey"] = fmt.Sprintf("%s:%d:%s", cand.key.sessionID, cand.key.epochID, cand.key.connectionID)
+					evidence["logicalKey"] = fmt.Sprintf("%s:%d:%s", singleLogical.key.sessionID, singleLogical.key.epochID, singleLogical.key.connectionID)
+					evJSON, _ := json.Marshal(evidence)
+
+					relationsToInsert = append(relationsToInsert, RelayRelationRecord{
+						RunID:                 runID,
+						CandidateSessionID:    cand.key.sessionID,
+						CandidateEpochID:      cand.key.epochID,
+						CandidateConnectionID: cand.key.connectionID,
+						LogicalSessionID:      singleLogical.key.sessionID,
+						LogicalEpochID:        singleLogical.key.epochID,
+						LogicalConnectionID:   singleLogical.key.connectionID,
+						Status:                RelayAmbiguous,
+						EvidenceJSON:          string(evJSON),
+						DerivationVersion:     AccountingAlgorithmVersion,
+					})
 				}
 			} else {
-				// 1-to-N 歧义 -> 不扣减
 				resultClasses[cand.key] = ClassAmbiguousRelay
 				evidence := map[string]any{
 					"decisionReason":  "1_to_n_candidate_ambiguity",
 					"candidateChains": cand.chains,
 					"candidateTotals": map[string]int64{"upload": cand.monitoredUp, "download": cand.monitoredDown},
 					"matchedCount":    len(matchedLogicals),
+					"candidateKey":    fmt.Sprintf("%s:%d:%s", cand.key.sessionID, cand.key.epochID, cand.key.connectionID),
 				}
-				if err := insertRelayRelation(tx, runID, cand.key, nil, RelayAmbiguous, evidence); err != nil {
-					return nil, err
-				}
+				evJSON, _ := json.Marshal(evidence)
+
+				relationsToInsert = append(relationsToInsert, RelayRelationRecord{
+					RunID:                 runID,
+					CandidateSessionID:    cand.key.sessionID,
+					CandidateEpochID:      cand.key.epochID,
+					CandidateConnectionID: cand.key.connectionID,
+					Status:                RelayAmbiguous,
+					EvidenceJSON:          string(evJSON),
+					DerivationVersion:     AccountingAlgorithmVersion,
+				})
 			}
 		}
 	}
 
-	return resultClasses, nil
+	return resultClasses, relationsToInsert, nil
 }
 
-func insertRelayRelation(tx *sql.Tx, runID string, candKey connKey, logKey *connKey, status RelayRelationStatus, evidence map[string]any) error {
-	if logKey != nil {
-		evidence["logicalKey"] = fmt.Sprintf("%s:%d:%s", logKey.sessionID, logKey.epochID, logKey.connectionID)
-	}
-	evidence["candidateKey"] = fmt.Sprintf("%s:%d:%s", candKey.sessionID, candKey.epochID, candKey.connectionID)
-	evJSON, _ := json.Marshal(evidence)
-
-	var logSess, logConn sql.NullString
-	var logEpoch sql.NullInt64
-	if logKey != nil {
-		logSess = sql.NullString{String: logKey.sessionID, Valid: true}
-		logEpoch = sql.NullInt64{Int64: int64(logKey.epochID), Valid: true}
-		logConn = sql.NullString{String: logKey.connectionID, Valid: true}
+func batchWriteRelayRelations(ctx context.Context, db *sql.DB, relations []RelayRelationRecord) error {
+	if len(relations) == 0 {
+		return nil
 	}
 
-	insertSQL := `
-	INSERT INTO relay_relations (
-		run_id, candidate_session_id, candidate_epoch_id, candidate_connection_id,
-		logical_session_id, logical_epoch_id, logical_connection_id,
-		status, evidence_json, derivation_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-	`
-	_, err := tx.Exec(insertSQL,
-		runID, candKey.sessionID, candKey.epochID, candKey.connectionID,
-		logSess, logEpoch, logConn, string(status), string(evJSON), AccountingAlgorithmVersion,
-	)
-	return err
-}
+	for i := 0; i < len(relations); i += DefaultBatchSize {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 
-// deriveAccountedTraffic 遍历 raw connection_traffic，直接以该 event 自身的完整 snapshot 为事实 (不向旧值 fallback)
-func deriveAccountedTraffic(ctx context.Context, tx *sql.Tx, runID string, relayMap map[connKey]AccountingClass) error {
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO accounted_traffic (
-			run_id, source_event_id, session_id, epoch_id, connection_id, observed_at,
-			interval_start, interval_end, precision, route,
-			raw_upload, raw_download, accounted_upload, accounted_download,
-			accounting_class, process, process_path, host, sniff_host, destination_ip, network,
-			rule, rule_payload, final_proxy, top_policy_group, dimension_derivation_version
-		) VALUES (
-			?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?,
-			?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?
-		);
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
+		end := i + DefaultBatchSize
+		if end > len(relations) {
+			end = len(relations)
+		}
+		batch := relations[i:end]
 
-	// 按权威序列流式读取所有生成流量的 journal 事件 (ConnectionNew / ConnectionDelta)
-	jRows, err := tx.QueryContext(ctx, `
-		SELECT event_id, session_id, epoch_id, frame_sequence, event_sequence, event_type, observed_at, event_json
-		FROM event_journal
-		WHERE event_type IN ('ConnectionNew', 'ConnectionDelta')
-		ORDER BY frame_sequence ASC, event_sequence ASC;
-	`)
-	if err != nil {
-		return err
-	}
-	defer jRows.Close()
+		err := execWithTxRetry(ctx, db, 10, func(tx *sql.Tx) error {
+			stmt, err := tx.PrepareContext(ctx, `
+				INSERT INTO relay_relations (
+					run_id, candidate_session_id, candidate_epoch_id, candidate_connection_id,
+					logical_session_id, logical_epoch_id, logical_connection_id,
+					status, evidence_json, derivation_version
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			`)
+			if err != nil {
+				return err
+			}
+			defer stmt.Close()
 
-	for jRows.Next() {
-		var eventID, sessID, eventType, obsAtStr, ej string
-		var epochID int
-		var frameSeq, eventSeq int64
+			for _, r := range batch {
+				var logSess, logConn sql.NullString
+				var logEpoch sql.NullInt64
+				if r.LogicalConnectionID != "" {
+					logSess = sql.NullString{String: r.LogicalSessionID, Valid: true}
+					logEpoch = sql.NullInt64{Int64: int64(r.LogicalEpochID), Valid: true}
+					logConn = sql.NullString{String: r.LogicalConnectionID, Valid: true}
+				}
 
-		if err := jRows.Scan(&eventID, &sessID, &epochID, &frameSeq, &eventSeq, &eventType, &obsAtStr, &ej); err != nil {
+				if _, err := stmt.ExecContext(ctx,
+					r.RunID, r.CandidateSessionID, r.CandidateEpochID, r.CandidateConnectionID,
+					logSess, logEpoch, logConn, string(r.Status), r.EvidenceJSON, r.DerivationVersion,
+				); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		})
+		if err != nil {
 			return err
 		}
+	}
 
+	return nil
+}
+
+func streamAndBatchWriteAccountedTraffic(ctx context.Context, db *sql.DB, runID string, boundarySeq int64, relayMap map[connKey]AccountingClass) error {
+	// 1. 先完全读取到内存切片并释放读锁 (避免与写事务产生内部死锁)
+	rows, err := db.QueryContext(ctx, `
+		SELECT event_id, session_id, epoch_id, frame_sequence, event_sequence, event_type, observed_at, event_json
+		FROM event_journal
+		WHERE journal_sequence <= ? AND event_type IN ('ConnectionNew', 'ConnectionDelta')
+		ORDER BY frame_sequence ASC, event_sequence ASC;
+	`, boundarySeq)
+	if err != nil {
+		return err
+	}
+
+	type rawJournalItem struct {
+		eventID, sessID, eventType, obsAtStr, ej string
+		epochID                                 int
+		frameSeq, eventSeq                      int64
+	}
+	var rawItems []rawJournalItem
+
+	for rows.Next() {
+		var it rawJournalItem
+		if err := rows.Scan(&it.eventID, &it.sessID, &it.epochID, &it.frameSeq, &it.eventSeq, &it.eventType, &it.obsAtStr, &it.ej); err != nil {
+			rows.Close()
+			return err
+		}
+		rawItems = append(rawItems, it)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("error reading event_journal: %w", err)
+	}
+	rows.Close() // 明确关闭读游标以释放共享锁！
+
+	var allRecords []AccountedTrafficRecord
+
+	for _, it := range rawItems {
 		var ev types.CollectorEvent
-		dec := json.NewDecoder(strings.NewReader(ej))
+		dec := json.NewDecoder(strings.NewReader(it.ej))
 		dec.UseNumber()
 		if err := dec.Decode(&ev); err != nil {
-			return fmt.Errorf("failed to decode event %s: %w", eventID, err)
+			return fmt.Errorf("failed to decode event %s: %w", it.eventID, err)
 		}
 
-		k := connKey{sessionID: sessID, epochID: epochID, connectionID: ev.ConnectionID}
-
+		k := connKey{sessionID: it.sessID, epochID: it.epochID, connectionID: ev.ConnectionID}
 		accClass := relayMap[k]
 		if accClass == "" {
 			accClass = ClassUnique
 		}
 
-		// 严格直接取当前事件自身携带的字段事实 (不向旧值 fallback)
-		proc := ev.Metadata.Process
-		procPath := ev.Metadata.ProcessPath
-		host := ev.Metadata.Host
-		sniffHost := ev.Metadata.SniffHost
-		destIP := ev.Metadata.DestinationIP
-		network := ev.Metadata.Network
-		rule := ev.Rule
-		rulePayload := ev.RulePayload
-		chains := ev.Chains
 		route := ev.Route
 		if route == "" {
 			route = types.RouteUnknown
@@ -501,31 +664,128 @@ func deriveAccountedTraffic(ctx context.Context, tx *sql.Tx, runID string, relay
 			accDown = ev.DeltaDownload
 		}
 
-		var finalProxy, topGroup sql.NullString
+		var finalProxy, topGroup string
 		if route == types.RouteDirect {
-			finalProxy = sql.NullString{String: "DIRECT", Valid: true}
-		} else if len(chains) > 0 {
-			finalProxy = sql.NullString{String: chains[0], Valid: true}
-			topGroup = sql.NullString{String: chains[len(chains)-1], Valid: true}
+			finalProxy = "DIRECT"
+		} else if len(ev.Chains) > 0 {
+			finalProxy = ev.Chains[0]
+			topGroup = ev.Chains[len(ev.Chains)-1]
 		}
 
-		var intStart, intEnd sql.NullString
+		obsTime, _ := time.Parse(time.RFC3339Nano, it.obsAtStr)
+		obsTime = obsTime.UTC()
+
+		var intS, intE *time.Time
 		if len(ev.AttributionInterval) >= 2 {
-			intStart = sql.NullString{String: ev.AttributionInterval[0], Valid: true}
-			intEnd = sql.NullString{String: ev.AttributionInterval[1], Valid: true}
+			t1, err1 := time.Parse(time.RFC3339Nano, ev.AttributionInterval[0])
+			t2, err2 := time.Parse(time.RFC3339Nano, ev.AttributionInterval[1])
+			if err1 == nil && err2 == nil {
+				t1 = t1.UTC()
+				t2 = t2.UTC()
+				intS = &t1
+				intE = &t2
+			}
 		}
+
 		prec := ev.Precision
 		if prec == "" {
 			prec = "exact_snapshot"
 		}
 
-		if _, err := stmt.ExecContext(ctx,
-			runID, eventID, sessID, epochID, ev.ConnectionID, obsAtStr,
-			intStart, intEnd, prec, string(route),
-			ev.DeltaUpload, ev.DeltaDownload, accUp, accDown,
-			string(accClass), proc, procPath, host, sniffHost, destIP, network,
-			rule, rulePayload, finalProxy, topGroup, DimensionDerivationVersion,
-		); err != nil {
+		allRecords = append(allRecords, AccountedTrafficRecord{
+			RunID:                      runID,
+			SourceEventID:              it.eventID,
+			SessionID:                  it.sessID,
+			EpochID:                    it.epochID,
+			ConnectionID:               ev.ConnectionID,
+			ObservedAt:                 obsTime,
+			IntervalStart:              intS,
+			IntervalEnd:                intE,
+			Precision:                  prec,
+			Route:                      route,
+			RawUpload:                  ev.DeltaUpload,
+			RawDownload:                ev.DeltaDownload,
+			AccountedUpload:            accUp,
+			AccountedDownload:          accDown,
+			AccountingClass:            accClass,
+			Process:                    ev.Metadata.Process,
+			ProcessPath:                ev.Metadata.ProcessPath,
+			Host:                       ev.Metadata.Host,
+			SniffHost:                  ev.Metadata.SniffHost,
+			DestinationIP:              ev.Metadata.DestinationIP,
+			Network:                    ev.Metadata.Network,
+			Rule:                       ev.Rule,
+			RulePayload:                ev.RulePayload,
+			FinalProxy:                 finalProxy,
+			TopPolicyGroup:             topGroup,
+			DimensionDerivationVersion: DimensionDerivationVersion,
+		})
+	}
+
+	// 2. 分批写入 accounted_traffic (短事务)
+	for i := 0; i < len(allRecords); i += DefaultBatchSize {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		end := i + DefaultBatchSize
+		if end > len(allRecords) {
+			end = len(allRecords)
+		}
+		batch := allRecords[i:end]
+
+		err := execWithTxRetry(ctx, db, 10, func(tx *sql.Tx) error {
+			stmt, err := tx.PrepareContext(ctx, `
+				INSERT INTO accounted_traffic (
+					run_id, source_event_id, session_id, epoch_id, connection_id, observed_at,
+					interval_start, interval_end, precision, route,
+					raw_upload, raw_download, accounted_upload, accounted_download,
+					accounting_class, process, process_path, host, sniff_host, destination_ip, network,
+					rule, rule_payload, final_proxy, top_policy_group, dimension_derivation_version
+				) VALUES (
+					?, ?, ?, ?, ?, ?,
+					?, ?, ?, ?,
+					?, ?, ?, ?,
+					?, ?, ?, ?, ?, ?, ?,
+					?, ?, ?, ?, ?
+				);
+			`)
+			if err != nil {
+				return err
+			}
+			defer stmt.Close()
+
+			for _, t := range batch {
+				var intStart, intEnd, finalProxy, topGroup sql.NullString
+				if t.IntervalStart != nil {
+					intStart = sql.NullString{String: t.IntervalStart.UTC().Format(time.RFC3339Nano), Valid: true}
+				}
+				if t.IntervalEnd != nil {
+					intEnd = sql.NullString{String: t.IntervalEnd.UTC().Format(time.RFC3339Nano), Valid: true}
+				}
+				if t.FinalProxy != "" {
+					finalProxy = sql.NullString{String: t.FinalProxy, Valid: true}
+				}
+				if t.TopPolicyGroup != "" {
+					topGroup = sql.NullString{String: t.TopPolicyGroup, Valid: true}
+				}
+
+				if _, err := stmt.ExecContext(ctx,
+					t.RunID, t.SourceEventID, t.SessionID, t.EpochID, t.ConnectionID, t.ObservedAt.UTC().Format(time.RFC3339Nano),
+					intStart, intEnd, t.Precision, string(t.Route),
+					t.RawUpload, t.RawDownload, t.AccountedUpload, t.AccountedDownload,
+					string(t.AccountingClass), t.Process, t.ProcessPath, t.Host, t.SniffHost, t.DestinationIP, t.Network,
+					t.Rule, t.RulePayload, finalProxy, topGroup, t.DimensionDerivationVersion,
+				); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		})
+		if err != nil {
 			return err
 		}
 	}
@@ -533,9 +793,9 @@ func deriveAccountedTraffic(ctx context.Context, tx *sql.Tx, runID string, relay
 	return nil
 }
 
-// rebuildHourlyAggregates 使用通用 IntervalAllocator 生成小时级物化视图 (保证绝对可加守恒与非负)
-func rebuildHourlyAggregates(ctx context.Context, tx *sql.Tx, runID string) error {
-	rows, err := tx.QueryContext(ctx, `
+func rebuildHourlyAggregatesBatched(ctx context.Context, db *sql.DB, runID string) error {
+	// 1. 完全读取并计算聚合，然后立即释放读游标
+	rows, err := db.QueryContext(ctx, `
 		SELECT
 			source_event_id, session_id, epoch_id, connection_id, observed_at,
 			interval_start, interval_end, precision, route,
@@ -547,7 +807,6 @@ func rebuildHourlyAggregates(ctx context.Context, tx *sql.Tx, runID string) erro
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
 	type aggKey struct {
 		bucketStart time.Time
@@ -585,6 +844,7 @@ func rebuildHourlyAggregates(ctx context.Context, tx *sql.Tx, runID string) erro
 			&accUp, &accDown, &accClass,
 			&proc, &host, &destIP, &network, &rule, &rulePayload, &finalProxy, &topGroup,
 		); err != nil {
+			rows.Close()
 			return err
 		}
 
@@ -609,7 +869,6 @@ func rebuildHourlyAggregates(ctx context.Context, tx *sql.Tx, runID string) erro
 				isExact:     true,
 			})
 		} else {
-			// 复用 IntervalAllocator (F(b) - F(a))
 			startTime, _ := time.Parse(time.RFC3339Nano, intStart.String)
 			endTime, _ := time.Parse(time.RFC3339Nano, intEnd.String)
 			startTime = startTime.UTC()
@@ -703,28 +962,72 @@ func rebuildHourlyAggregates(ctx context.Context, tx *sql.Tx, runID string) erro
 			}
 		}
 	}
-
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO usage_hourly_dimensions (
-			run_id, bucket_start, dimension_type, dimension_key, route,
-			upload_bytes, download_bytes, connection_count,
-			exact_upload_bytes, exact_download_bytes,
-			estimated_upload_bytes, estimated_download_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-	`)
-	if err != nil {
-		return err
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("error reading accounted_traffic for aggregates: %w", err)
 	}
-	defer stmt.Close()
+	rows.Close() // 明确关闭读游标！
 
+	var aggList []UsageHourlyDimensionRecord
 	for k, v := range aggregates {
-		bucketStr := k.bucketStart.UTC().Format(time.RFC3339Nano)
-		connCount := int64(len(v.distinctConns))
-		if _, err := stmt.ExecContext(ctx,
-			runID, bucketStr, k.dimType, k.dimKey, string(k.route),
-			v.upload, v.download, connCount,
-			v.exactUp, v.exactDown, v.estUp, v.estDown,
-		); err != nil {
+		aggList = append(aggList, UsageHourlyDimensionRecord{
+			RunID:                  runID,
+			BucketStart:            k.bucketStart,
+			DimensionType:          k.dimType,
+			DimensionKey:           k.dimKey,
+			Route:                  k.route,
+			UploadBytes:            v.upload,
+			DownloadBytes:          v.download,
+			ConnectionCount:        int64(len(v.distinctConns)),
+			ExactUploadBytes:       v.exactUp,
+			ExactDownloadBytes:     v.exactDown,
+			EstimatedUploadBytes:   v.estUp,
+			EstimatedDownloadBytes: v.estDown,
+		})
+	}
+
+	// 2. 分批短事务写入 usage_hourly_dimensions
+	for i := 0; i < len(aggList); i += DefaultBatchSize {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		end := i + DefaultBatchSize
+		if end > len(aggList) {
+			end = len(aggList)
+		}
+		batch := aggList[i:end]
+
+		err := execWithTxRetry(ctx, db, 10, func(tx *sql.Tx) error {
+			stmt, err := tx.PrepareContext(ctx, `
+				INSERT INTO usage_hourly_dimensions (
+					run_id, bucket_start, dimension_type, dimension_key, route,
+					upload_bytes, download_bytes, connection_count,
+					exact_upload_bytes, exact_download_bytes,
+					estimated_upload_bytes, estimated_download_bytes
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			`)
+			if err != nil {
+				return err
+			}
+			defer stmt.Close()
+
+			for _, a := range batch {
+				bucketStr := a.BucketStart.UTC().Format(time.RFC3339Nano)
+				if _, err := stmt.ExecContext(ctx,
+					a.RunID, bucketStr, a.DimensionType, a.DimensionKey, string(a.Route),
+					a.UploadBytes, a.DownloadBytes, a.ConnectionCount,
+					a.ExactUploadBytes, a.ExactDownloadBytes, a.EstimatedUploadBytes, a.EstimatedDownloadBytes,
+				); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		})
+		if err != nil {
 			return err
 		}
 	}

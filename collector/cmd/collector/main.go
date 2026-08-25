@@ -23,7 +23,7 @@ import (
 	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
 )
 
-const version = "0.5.0-phase2b1-prototype"
+const version = "0.6.0-phase2b2-runtime"
 
 func printUsage() {
 	fmt.Println("ProxyLens Collector — Read-Only Network Traffic Auditing Collector")
@@ -32,6 +32,8 @@ func printUsage() {
 	fmt.Println("  collector storage inspect [flags]     Inspect persisted connections from SQLite database")
 	fmt.Println("  collector storage gaps [flags]        List recorded monitoring gaps from SQLite database")
 	fmt.Println("  collector storage rebuild [flags]     Rebuild all projections from authoritative event journal")
+	fmt.Println("  collector storage cleanup [flags]     Dry-run or apply safe derived data retention cleanup")
+	fmt.Println("  collector storage integrity [flags]   Run SQLite integrity and foreign key validation")
 	fmt.Println("  collector accounting rebuild [flags]  Reconcile relay deductions and rebuild accounted traffic")
 	fmt.Println("  collector analytics summary [flags]   Show reconciled usage & coverage summary")
 	fmt.Println("  collector analytics top-processes [flags] Show top process traffic breakdown")
@@ -328,13 +330,77 @@ func runStorageCommand(args []string) {
 				idx+1, g.Source, g.StartedAt.Format(time.RFC3339), endStr, durStr, g.Reason)
 		}
 
-	case "rebuild":
-		fmt.Printf("Rebuilding all projections from event_journal in %s...\n", *dbPath)
-		if err := storage.RebuildProjections(ctx, db); err != nil {
-			fmt.Fprintf(os.Stderr, "Rebuild failed: %v\n", err)
+	case "cleanup":
+		applyFlag := fs.Bool("apply", false, "Apply actual deletion of derived data (default: dry-run)")
+		retainComp := fs.Int("retain-completed", 3, "Number of latest completed runs to retain")
+		if err := fs.Parse(subargs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing cleanup flags: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("Projections rebuilt successfully!")
+
+		plan, err := storage.PlanDerivedRetention(ctx, db, *retainComp, 7*24*time.Hour, *dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to compute retention plan: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("================================================================\n")
+		fmt.Printf("Safe Derived Data Retention Plan for %s\n", *dbPath)
+		fmt.Printf("================================================================\n")
+		fmt.Printf("Retain Latest Completed Runs: %d\n", plan.RetainCompletedRuns)
+		fmt.Printf("Runs Marked for Deletion    : %d %v\n", len(plan.RunsToDelete), plan.RunsToDelete)
+		fmt.Printf("Estimated Derived Rows      : Traffic=%d, Aggregates=%d, RelayRelations=%d\n",
+			plan.EstimatedTrafficRows, plan.EstimatedAggregateRows, plan.EstimatedRelayRows)
+		fmt.Printf("Current Storage Size        : DB=%d bytes (%.2f MB), WAL=%d bytes (%.2f MB)\n",
+			plan.DBSizeBytes, float64(plan.DBSizeBytes)/(1024*1024),
+			plan.WALSizeBytes, float64(plan.WALSizeBytes)/(1024*1024))
+		fmt.Printf("Raw Authority Invariant     : event_journal & connection_traffic NEVER deleted\n")
+		fmt.Printf("----------------------------------------------------------------\n")
+
+		if !*applyFlag {
+			fmt.Println("[DRY-RUN] No changes were applied. Specify --apply to execute cleanup.")
+		} else {
+			fmt.Println("[APPLYING] Deleting derived rows for marked runs...")
+			res, err := storage.ApplyDerivedRetention(ctx, db, plan)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[ERROR] Retention cleanup failed: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Cleanup Completed Successfully!\n")
+			fmt.Printf("Deleted Runs: %d, Traffic Rows: %d, Aggregate Rows: %d, Relay Rows: %d\n",
+				res.DeletedRuns, res.DeletedTrafficRows, res.DeletedAggregateRows, res.DeletedRelayRows)
+		}
+		fmt.Printf("================================================================\n")
+
+	case "integrity":
+		var integCheck string
+		if err := db.QueryRowContext(ctx, "PRAGMA integrity_check;").Scan(&integCheck); err != nil {
+			fmt.Fprintf(os.Stderr, "PRAGMA integrity_check error: %v\n", err)
+			os.Exit(1)
+		}
+		fkRows, err := db.QueryContext(ctx, "PRAGMA foreign_key_check;")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "PRAGMA foreign_key_check error: %v\n", err)
+			os.Exit(1)
+		}
+		defer fkRows.Close()
+
+		var fkViolations int
+		for fkRows.Next() {
+			fkViolations++
+		}
+
+		fmt.Printf("================================================================\n")
+		fmt.Printf("SQLite Integrity & Operational Health Report for %s\n", *dbPath)
+		fmt.Printf("================================================================\n")
+		fmt.Printf("PRAGMA integrity_check   : %s\n", integCheck)
+		fmt.Printf("PRAGMA foreign_key_check : %d violations\n", fkViolations)
+		if integCheck == "ok" && fkViolations == 0 {
+			fmt.Println("Health Status            : HEALTHY (Zero corruption / Zero foreign key violations)")
+		} else {
+			fmt.Println("Health Status            : DEGRADED / CORRUPTED")
+		}
+		fmt.Printf("================================================================\n")
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown storage action: %s\n", action)

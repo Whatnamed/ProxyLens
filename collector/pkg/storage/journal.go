@@ -75,7 +75,13 @@ func IngestJournalRecord(ctx context.Context, tx *sql.Tx, ev *types.CollectorEve
 		return false, fmt.Errorf("failed to query cursor: %w", err)
 	}
 
-	// 3. 插入 event_journal
+	// 3. 分配全局唯一单调递增的 journal_sequence
+	var nextSeq int64
+	err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(journal_sequence), 0) + 1 FROM event_journal;").Scan(&nextSeq)
+	if err != nil {
+		return false, fmt.Errorf("failed to allocate journal sequence: %w", err)
+	}
+
 	obsAtStr := ev.Timestamp.UTC().Format(time.RFC3339Nano)
 	ingestedAtStr := time.Now().UTC().Format(time.RFC3339Nano)
 	connID := sql.NullString{String: ev.ConnectionID, Valid: ev.ConnectionID != ""}
@@ -83,12 +89,12 @@ func IngestJournalRecord(ctx context.Context, tx *sql.Tx, ev *types.CollectorEve
 	insertSQL := `
 	INSERT INTO event_journal (
 		event_id, session_id, epoch_id, frame_sequence, event_sequence,
-		event_type, observed_at, connection_id, event_json, event_sha256, ingested_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+		event_type, observed_at, connection_id, event_json, event_sha256, ingested_at, journal_sequence
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`
 	if _, err := tx.ExecContext(ctx, insertSQL,
 		ev.EventID, ev.SessionID, ev.EpochID, ev.FrameSequence, ev.EventSequence,
-		string(ev.Type), obsAtStr, connID, string(rawJSON), shaStr, ingestedAtStr,
+		string(ev.Type), obsAtStr, connID, string(rawJSON), shaStr, ingestedAtStr, nextSeq,
 	); err != nil {
 		return false, fmt.Errorf("failed to insert journal record: %w", err)
 	}

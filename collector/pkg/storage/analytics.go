@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -26,22 +27,25 @@ func (a *AnalyticsService) GetLatestCompletedAccountingRun(ctx context.Context) 
 	row := a.db.QueryRowContext(ctx, `
 		SELECT
 			run_id, algorithm_version, started_at, completed_at, status,
-			source_journal_event_count, source_boundary_json, notes
+			source_journal_event_count, source_journal_sequence_max,
+			source_boundary_json, failed_reason, notes
 		FROM accounting_runs
 		WHERE status = 'completed'
 		ORDER BY started_at DESC LIMIT 1;
 	`)
 
 	var r AccountingRunRecord
-	var compStr, notes sql.NullString
+	var compStr, failedReason, notes sql.NullString
 	var startStr string
+	var boundarySeq sql.NullInt64
 
 	err := row.Scan(
 		&r.RunID, &r.AlgorithmVersion, &startStr, &compStr, &r.Status,
-		&r.SourceJournalEventCount, &r.SourceBoundaryJSON, &notes,
+		&r.SourceJournalEventCount, &boundarySeq,
+		&r.SourceBoundaryJSON, &failedReason, &notes,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNoCompletedAccountingRun
 		}
 		return nil, fmt.Errorf("failed to query latest accounting run: %w", err)
@@ -52,12 +56,59 @@ func (a *AnalyticsService) GetLatestCompletedAccountingRun(ctx context.Context) 
 		t, _ := time.Parse(time.RFC3339Nano, compStr.String)
 		r.CompletedAt = &t
 	}
+	if boundarySeq.Valid {
+		r.SourceJournalSequenceMax = &boundarySeq.Int64
+	}
+	r.FailedReason = failedReason.String
 	r.Notes = notes.String
 
 	return &r, nil
 }
 
-// GetUsageSummary 根据已发布的最新核算数据返回全局用量与质量摘要 (复用 IntervalAllocator，错误向上传播)
+// GetAccountingFreshness 获取最新核算轮次与当前底层 Journal 事实之间的落后差距 (F3)
+func (a *AnalyticsService) GetAccountingFreshness(ctx context.Context) (*AccountingFreshness, error) {
+	run, err := a.GetLatestCompletedAccountingRun(ctx)
+	if err != nil {
+		if errors.Is(err, ErrNoCompletedAccountingRun) {
+			var currentMax int64
+			_ = a.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(journal_sequence), 0) FROM event_journal;").Scan(&currentMax)
+			return &AccountingFreshness{
+				RunID:                     "",
+				SourceJournalSequenceMax:  0,
+				CurrentJournalSequenceMax: currentMax,
+				LagEvents:                 currentMax,
+				IsFresh:                   currentMax == 0,
+			}, nil
+		}
+		return nil, err
+	}
+
+	var currentMax int64
+	if err := a.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(journal_sequence), 0) FROM event_journal;").Scan(&currentMax); err != nil {
+		return nil, fmt.Errorf("failed to query current journal max sequence: %w", err)
+	}
+
+	sourceMax := int64(0)
+	if run.SourceJournalSequenceMax != nil {
+		sourceMax = *run.SourceJournalSequenceMax
+	}
+
+	lag := currentMax - sourceMax
+	if lag < 0 {
+		lag = 0
+	}
+
+	return &AccountingFreshness{
+		RunID:                     run.RunID,
+		SourceJournalSequenceMax:  sourceMax,
+		CurrentJournalSequenceMax: currentMax,
+		LagEvents:                 lag,
+		IsFresh:                   lag == 0,
+		CompletedAt:               run.CompletedAt,
+	}, nil
+}
+
+// GetUsageSummary 根据已发布的最新核算数据返回全局用量与质量摘要 (半开区间 [start, end)，错误向上传播)
 func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter AnalyticsFilter) (*UsageSummary, error) {
 	run, err := a.GetLatestCompletedAccountingRun(ctx)
 	if err != nil {
@@ -111,11 +162,12 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 		var effRawUp, effRawDown, effAccUp, effAccDown int64
 
 		if prec == "exact_snapshot" || !intStart.Valid || !intEnd.Valid {
+			// 半开区间 [qStart, qEnd): start <= obsTime < end (F0.3)
 			inRange := true
 			if qStart != nil && obsTime.Before(*qStart) {
 				inRange = false
 			}
-			if qEnd != nil && obsTime.After(*qEnd) {
+			if qEnd != nil && !obsTime.Before(*qEnd) {
 				inRange = false
 			}
 			if inRange {
@@ -125,7 +177,7 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 				effAccDown = accDown
 			}
 		} else {
-			// 复用 IntervalAllocator
+			// IntervalAllocator: 半开区间 [wStart, wEnd)
 			sTime, _ := time.Parse(time.RFC3339Nano, intStart.String)
 			eTime, _ := time.Parse(time.RFC3339Nano, intEnd.String)
 			sTime = sTime.UTC()
@@ -176,8 +228,11 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 			summary.AmbiguousRelayDownload += effAccDown
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading accounted traffic: %w", err)
+	}
 
-	// 聚合 Sampling Residuals (错误向上传播)
+	// 聚合 Sampling Residuals (半开区间，错误向上传播)
 	var resWhere []string
 	var resArgs []any
 	if filter.StartTime != nil {
@@ -185,7 +240,7 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 		resArgs = append(resArgs, filter.StartTime.UTC().Format(time.RFC3339Nano))
 	}
 	if filter.EndTime != nil {
-		resWhere = append(resWhere, "observed_at <= ?")
+		resWhere = append(resWhere, "observed_at < ?")
 		resArgs = append(resArgs, filter.EndTime.UTC().Format(time.RFC3339Nano))
 	}
 	resWhereSQL := ""
@@ -199,7 +254,7 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 		return nil, fmt.Errorf("failed to query sampling residuals: %w", err)
 	}
 
-	// 聚合 Controller Gap 物理流量 (复用 IntervalAllocator 精确分摊，杜绝整段冒充当前窗口)
+	// 聚合 Controller Gap 物理流量 (复用 IntervalAllocator，错误向上传播)
 	gapRows, err := a.db.QueryContext(ctx, `
 		SELECT started_at, ended_at, global_gap_upload_delta, global_gap_download_delta
 		FROM monitoring_gaps
@@ -242,18 +297,26 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 			summary.ControllerGapPhysicalDownload += NewIntervalAllocator(gStart, gEnd, gDown.Int64).Allocate(wStart, wEnd)
 		}
 	}
+	if err := gapRows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading monitoring gaps: %w", err)
+	}
 
-	// 计算 Coverage (错误向上传播)
+	// 计算 Coverage 与 Freshness (错误向上传播)
 	cov, err := a.GetCoverage(ctx, filter.StartTime, filter.EndTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute coverage: %w", err)
 	}
 	summary.Coverage = cov
 
+	freshness, err := a.GetAccountingFreshness(ctx)
+	if err == nil {
+		summary.Freshness = freshness
+	}
+
 	return &summary, nil
 }
 
-// GetTopDimensions 通用多维聚合排行查询 (全窗口 Distinct 连接数与 IntervalAllocator 精确时间分摊)
+// GetTopDimensions 通用多维聚合排行查询 (全窗口 Distinct 连接数与 IntervalAllocator 半开区间精确分摊)
 func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string, filter AnalyticsFilter) ([]TopDimensionItem, error) {
 	run, err := a.GetLatestCompletedAccountingRun(ctx)
 	if err != nil {
@@ -342,11 +405,12 @@ func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string,
 		var isExact bool
 
 		if prec == "exact_snapshot" || !intStart.Valid || !intEnd.Valid {
+			// 半开区间 [qStart, qEnd)
 			inRange := true
 			if qStart != nil && obsTime.Before(*qStart) {
 				inRange = false
 			}
-			if qEnd != nil && obsTime.After(*qEnd) {
+			if qEnd != nil && !obsTime.Before(*qEnd) {
 				inRange = false
 			}
 			if inRange {
@@ -399,6 +463,9 @@ func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string,
 		connFullKey := fmt.Sprintf("%s:%d:%s", sessID, epochID, connID)
 		agg.distinctConns[connFullKey] = true
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading top dimensions: %w", err)
+	}
 
 	var results []TopDimensionItem
 	for k, v := range aggMap {
@@ -408,7 +475,7 @@ func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string,
 			UploadBytes:            v.up,
 			DownloadBytes:          v.down,
 			TotalBytes:             v.up + v.down,
-			ConnectionCount:        int64(len(v.distinctConns)), // 全窗口 Distinct 连接数
+			ConnectionCount:        int64(len(v.distinctConns)),
 			ExactUploadBytes:       v.exactUp,
 			ExactDownloadBytes:     v.exactDown,
 			EstimatedUploadBytes:   v.estUp,
@@ -431,36 +498,36 @@ func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string,
 	return results, nil
 }
 
-// GetTopProcesses 查询进程消耗排行
 func (a *AnalyticsService) GetTopProcesses(ctx context.Context, filter AnalyticsFilter) ([]TopDimensionItem, error) {
 	return a.GetTopDimensions(ctx, "process", filter)
 }
 
-// GetTopHosts 查询域名/目标排行
 func (a *AnalyticsService) GetTopHosts(ctx context.Context, filter AnalyticsFilter) ([]TopDimensionItem, error) {
 	return a.GetTopDimensions(ctx, "host", filter)
 }
 
-// GetTopRules 查询分流规则排行
 func (a *AnalyticsService) GetTopRules(ctx context.Context, filter AnalyticsFilter) ([]TopDimensionItem, error) {
 	return a.GetTopDimensions(ctx, "rule", filter)
 }
 
-// GetTopFinalProxies 查询最终出站节点排行 (来自历史 chains[0])
 func (a *AnalyticsService) GetTopFinalProxies(ctx context.Context, filter AnalyticsFilter) ([]TopDimensionItem, error) {
 	return a.GetTopDimensions(ctx, "final_proxy", filter)
 }
 
-// GetProtocolBreakdown 查询网络协议分布 (TCP / UDP)
 func (a *AnalyticsService) GetProtocolBreakdown(ctx context.Context, filter AnalyticsFilter) ([]TopDimensionItem, error) {
 	return a.GetTopDimensions(ctx, "network", filter)
 }
 
-// GetCoverage 计算指定时间窗口内的监控覆盖度与缺口并集 (支持 Trailing Offline & Future Clip & Provenance)
+// GetCoverage 计算指定时间窗口内的监控覆盖度与缺口并集 (支持心跳超时 liveness 动态判定，F4)
 func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Time) (*CoverageSummary, error) {
 	var firstSessStartStr sql.NullString
 	err := a.db.QueryRowContext(ctx, "SELECT MIN(started_at) FROM collector_sessions;").Scan(&firstSessStartStr)
-	if err != nil || !firstSessStartStr.Valid || firstSessStartStr.String == "" {
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("failed to query initial session start: %w", err)
+		}
+	}
+	if !firstSessStartStr.Valid || firstSessStartStr.String == "" {
 		return &CoverageSummary{
 			RequestedStart: start,
 			RequestedEnd:   end,
@@ -497,14 +564,12 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 		return summary, nil
 	}
 
-	// 如果请求终点超出当前时间，截断到 now 并记录 FutureDuration
 	effEnd := reqEnd
 	if effEnd.After(now) {
 		summary.FutureDurationMs = effEnd.Sub(now).Milliseconds()
 		effEnd = now
 	}
 
-	// 检查 requested 是否完全早于 known scope
 	if effEnd.Before(knownScopeStart) || effEnd.Equal(knownScopeStart) {
 		summary.OutsideKnownScopeMs = effEnd.Sub(reqStart).Milliseconds()
 		summary.CoverageRatio = nil
@@ -524,11 +589,11 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 		effectiveWindowMs = 1
 	}
 
-	// 2. 读取所有与 [effStart, effEnd] 重叠的数据库记录 Gaps
+	// 2. 读取所有与 [effStart, effEnd) 重叠的数据库记录 Gaps
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT source, started_at, ended_at, reason
 		FROM monitoring_gaps
-		WHERE (ended_at >= ? OR ended_at IS NULL) AND started_at <= ?;
+		WHERE (ended_at > ? OR ended_at IS NULL) AND started_at < ?;
 	`, effStart.Format(time.RFC3339Nano), effEnd.Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query gaps for coverage: %w", err)
@@ -577,14 +642,22 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 			})
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading monitoring gaps for coverage: %w", err)
+	}
 
-	// 3. Trailing Offline Gap: 检查最新 session 是否处于停止/中断状态
-	var latestStatus, latestEndedStr, latestLastEventStr sql.NullString
+	// 3. 最新 Session 状态与心跳 Liveness 动态推导 (F4)
+	var latestStatus, latestEndedStr, latestLastEventStr, latestHeartbeatStr sql.NullString
+	var heartbeatIntervalMs sql.NullInt64
 	err = a.db.QueryRowContext(ctx, `
-		SELECT status, ended_at, last_event_at
+		SELECT status, ended_at, last_event_at, last_heartbeat_at, heartbeat_interval_ms
 		FROM collector_sessions
 		ORDER BY started_at DESC LIMIT 1;
-	`).Scan(&latestStatus, &latestEndedStr, &latestLastEventStr)
+	`).Scan(&latestStatus, &latestEndedStr, &latestLastEventStr, &latestHeartbeatStr, &heartbeatIntervalMs)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("failed to query latest collector session: %w", err)
+	}
+
 	if err == nil && latestStatus.Valid {
 		if latestStatus.String == string(SessionStatusClosedClean) || latestStatus.String == string(SessionStatusInterrupted) {
 			trailStartStr := latestEndedStr.String
@@ -606,6 +679,39 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 							start: tClipStart, end: effEnd,
 							source: "collector_session_boundary",
 							reason: "collector_stopped_or_offline_trailing",
+						})
+					}
+				}
+			}
+		} else if latestStatus.String == string(SessionStatusRunning) {
+			// 如果处于 Running 状态，检查心跳是否超时 (F4.4)
+			if latestHeartbeatStr.Valid && latestHeartbeatStr.String != "" {
+				lastHb, _ := time.Parse(time.RFC3339Nano, latestHeartbeatStr.String)
+				lastHb = lastHb.UTC()
+				hbIntMs := int64(5000)
+				if heartbeatIntervalMs.Valid && heartbeatIntervalMs.Int64 > 0 {
+					hbIntMs = heartbeatIntervalMs.Int64
+				}
+				graceMs := hbIntMs * 3
+				if graceMs < 15000 {
+					graceMs = 15000
+				}
+				graceDur := time.Duration(graceMs) * time.Millisecond
+
+				staleThreshold := lastHb.Add(graceDur)
+				if now.After(staleThreshold) {
+					// 心跳已超时！判定产生 runtime liveness gap
+					gapStart := staleThreshold
+					if gapStart.Before(effStart) {
+						gapStart = effStart
+					}
+					if effEnd.After(gapStart) {
+						dur := effEnd.Sub(gapStart).Milliseconds()
+						offGapMs += dur
+						rawIntervals = append(rawIntervals, rawInterval{
+							start: gapStart, end: effEnd,
+							source: "collector_runtime_liveness",
+							reason: "collector_heartbeat_stale",
 						})
 					}
 				}
@@ -638,7 +744,6 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 
 		last := &merged[len(merged)-1]
 		if !it.start.After(last.EndedAt) {
-			// 重叠合并，同时保留 provenance 列表
 			if it.end.After(last.EndedAt) {
 				last.EndedAt = it.end
 				last.DurationMs = last.EndedAt.Sub(last.StartedAt).Milliseconds()
@@ -660,7 +765,6 @@ func (a *AnalyticsService) GetCoverage(ctx context.Context, start, end *time.Tim
 
 	summary.MergedGaps = merged
 
-	// 5. 计算已覆盖与未覆盖时间
 	var uncoveredMs int64
 	for _, m := range merged {
 		uncoveredMs += m.DurationMs

@@ -11,6 +11,7 @@ var (
 	ErrProjectionContractViolation = errors.New("projection contract violation")
 	ErrNoCompletedAccountingRun   = errors.New("no completed accounting run available")
 	ErrAccountingInvariantBroken   = errors.New("accounting invariant violation")
+	ErrAccountingAlreadyRunning    = errors.New("another accounting rebuild is currently in progress")
 )
 
 // SessionStatus 表示 Collector 运行会话状态
@@ -24,15 +25,17 @@ const (
 
 // CollectorSessionRecord 对应 collector_sessions 表
 type CollectorSessionRecord struct {
-	SessionID         string        `json:"sessionId"`
-	StartedAt         time.Time     `json:"startedAt"`
-	EndedAt           *time.Time    `json:"endedAt,omitempty"`
-	LastEventAt       *time.Time    `json:"lastEventAt,omitempty"`
-	LastFrameSequence int64         `json:"lastFrameSequence"`
-	Status            SessionStatus `json:"status"`
-	CollectorVersion  string        `json:"collectorVersion,omitempty"`
-	CreatedAt         time.Time     `json:"createdAt"`
-	UpdatedAt         time.Time     `json:"updatedAt"`
+	SessionID           string        `json:"sessionId"`
+	StartedAt           time.Time     `json:"startedAt"`
+	EndedAt             *time.Time    `json:"endedAt,omitempty"`
+	LastEventAt         *time.Time    `json:"lastEventAt,omitempty"`
+	LastFrameSequence   int64         `json:"lastFrameSequence"`
+	Status              SessionStatus `json:"status"`
+	CollectorVersion    string        `json:"collectorVersion,omitempty"`
+	LastHeartbeatAt     *time.Time    `json:"lastHeartbeatAt,omitempty"`
+	HeartbeatIntervalMs int           `json:"heartbeatIntervalMs,omitempty"`
+	CreatedAt           time.Time     `json:"createdAt"`
+	UpdatedAt           time.Time     `json:"updatedAt"`
 }
 
 // ConnectionRecord 对应 connections 维度表投影
@@ -164,7 +167,7 @@ type ConnectionFilter struct {
 }
 
 // -------------------------------------------------------------
-// E2 / E3: Reconciled Accounting Models
+// E2 / E3 / F1: Reconciled Accounting Models
 // -------------------------------------------------------------
 
 type AccountingRunStatus string
@@ -176,14 +179,16 @@ const (
 )
 
 type AccountingRunRecord struct {
-	RunID                   string              `json:"runId"`
-	AlgorithmVersion        string              `json:"algorithmVersion"`
-	StartedAt               time.Time           `json:"startedAt"`
-	CompletedAt             *time.Time          `json:"completedAt,omitempty"`
-	Status                  AccountingRunStatus `json:"status"`
-	SourceJournalEventCount int64               `json:"sourceJournalEventCount"`
-	SourceBoundaryJSON      string              `json:"sourceBoundaryJson"`
-	Notes                   string              `json:"notes,omitempty"`
+	RunID                    string              `json:"runId"`
+	AlgorithmVersion         string              `json:"algorithmVersion"`
+	StartedAt                time.Time           `json:"startedAt"`
+	CompletedAt              *time.Time          `json:"completedAt,omitempty"`
+	Status                   AccountingRunStatus `json:"status"`
+	SourceJournalEventCount  int64               `json:"sourceJournalEventCount"`
+	SourceJournalSequenceMax *int64              `json:"sourceJournalSequenceMax,omitempty"`
+	SourceBoundaryJSON       string              `json:"sourceBoundaryJson"`
+	FailedReason             string              `json:"failedReason,omitempty"`
+	Notes                    string              `json:"notes,omitempty"`
 }
 
 type RelayRelationStatus string
@@ -210,39 +215,39 @@ type RelayRelationRecord struct {
 type AccountingClass string
 
 const (
-	ClassUnique                   AccountingClass = "unique"
-	ClassConfirmedRelayDuplicate  AccountingClass = "confirmed_relay_duplicate"
-	ClassAmbiguousRelay           AccountingClass = "ambiguous_relay"
-	ClassMissingAttribution       AccountingClass = "missing_attribution"
+	ClassUnique                  AccountingClass = "unique"
+	ClassConfirmedRelayDuplicate AccountingClass = "confirmed_relay_duplicate"
+	ClassAmbiguousRelay          AccountingClass = "ambiguous_relay"
+	ClassMissingAttribution      AccountingClass = "missing_attribution"
 )
 
 type AccountedTrafficRecord struct {
-	RunID          string          `json:"runId"`
-	SourceEventID  string          `json:"sourceEventId"`
-	SessionID      string          `json:"sessionId"`
-	EpochID        int             `json:"epochId"`
-	ConnectionID   string          `json:"connectionId"`
-	ObservedAt     time.Time       `json:"observedAt"`
-	IntervalStart  *time.Time      `json:"intervalStart,omitempty"`
-	IntervalEnd    *time.Time      `json:"intervalEnd,omitempty"`
-	Precision      string          `json:"precision"`
-	Route          types.RouteType `json:"route"`
-	RawUpload      int64           `json:"rawUpload"`
-	RawDownload    int64           `json:"rawDownload"`
-	AccountedUpload int64          `json:"accountedUpload"`
-	AccountedDownload int64        `json:"accountedDownload"`
-	AccountingClass AccountingClass `json:"accountingClass"`
-	Process        string          `json:"process,omitempty"`
-	ProcessPath    string          `json:"processPath,omitempty"`
-	Host           string          `json:"host,omitempty"`
-	SniffHost      string          `json:"sniffHost,omitempty"`
-	DestinationIP  string          `json:"destinationIp,omitempty"`
-	Network        string          `json:"network,omitempty"`
-	Rule           string          `json:"rule,omitempty"`
-	RulePayload    string          `json:"rulePayload,omitempty"`
-	FinalProxy     string          `json:"finalProxy,omitempty"`
-	TopPolicyGroup string          `json:"topPolicyGroup,omitempty"`
-	DimensionDerivationVersion string `json:"dimensionDerivationVersion"`
+	RunID                      string          `json:"runId"`
+	SourceEventID              string          `json:"sourceEventId"`
+	SessionID                  string          `json:"sessionId"`
+	EpochID                    int             `json:"epochId"`
+	ConnectionID               string          `json:"connectionId"`
+	ObservedAt                 time.Time       `json:"observedAt"`
+	IntervalStart              *time.Time      `json:"intervalStart,omitempty"`
+	IntervalEnd                *time.Time      `json:"intervalEnd,omitempty"`
+	Precision                  string          `json:"precision"`
+	Route                      types.RouteType `json:"route"`
+	RawUpload                  int64           `json:"rawUpload"`
+	RawDownload                int64           `json:"rawDownload"`
+	AccountedUpload            int64           `json:"accountedUpload"`
+	AccountedDownload          int64           `json:"accountedDownload"`
+	AccountingClass            AccountingClass `json:"accountingClass"`
+	Process                    string          `json:"process,omitempty"`
+	ProcessPath                string          `json:"processPath,omitempty"`
+	Host                       string          `json:"host,omitempty"`
+	SniffHost                  string          `json:"sniffHost,omitempty"`
+	DestinationIP              string          `json:"destinationIp,omitempty"`
+	Network                    string          `json:"network,omitempty"`
+	Rule                       string          `json:"rule,omitempty"`
+	RulePayload                string          `json:"rulePayload,omitempty"`
+	FinalProxy                 string          `json:"finalProxy,omitempty"`
+	TopPolicyGroup             string          `json:"topPolicyGroup,omitempty"`
+	DimensionDerivationVersion string          `json:"dimensionDerivationVersion"`
 }
 
 // -------------------------------------------------------------
@@ -265,37 +270,51 @@ type UsageHourlyDimensionRecord struct {
 }
 
 // -------------------------------------------------------------
-// E4 / E6 / E7: Query, Summary & Coverage Models
+// F3: Accounting Freshness Model
+// -------------------------------------------------------------
+
+type AccountingFreshness struct {
+	RunID                     string     `json:"runId"`
+	SourceJournalSequenceMax  int64      `json:"sourceJournalSequenceMax"`
+	CurrentJournalSequenceMax int64      `json:"currentJournalSequenceMax"`
+	LagEvents                 int64      `json:"lagEvents"`
+	IsFresh                   bool       `json:"isFresh"`
+	CompletedAt               *time.Time `json:"completedAt,omitempty"`
+}
+
+// -------------------------------------------------------------
+// E4 / E6 / E7 / F3: Query, Summary & Coverage Models
 // -------------------------------------------------------------
 
 type UsageSummary struct {
-	RawObservedUpload            int64     `json:"rawObservedUpload"`
-	RawObservedDownload          int64     `json:"rawObservedDownload"`
-	UniqueObservedUpload         int64     `json:"uniqueObservedUpload"`
-	UniqueObservedDownload       int64     `json:"uniqueObservedDownload"`
+	RawObservedUpload             int64                `json:"rawObservedUpload"`
+	RawObservedDownload           int64                `json:"rawObservedDownload"`
+	UniqueObservedUpload          int64                `json:"uniqueObservedUpload"`
+	UniqueObservedDownload        int64                `json:"uniqueObservedDownload"`
 
-	ProxyUpload                  int64     `json:"proxyUpload"`
-	ProxyDownload                int64     `json:"proxyDownload"`
-	DirectUpload                 int64     `json:"directUpload"`
-	DirectDownload               int64     `json:"directDownload"`
-	RejectUpload                 int64     `json:"rejectUpload"`
-	RejectDownload               int64     `json:"rejectDownload"`
-	UnknownRouteUpload           int64     `json:"unknownRouteUpload"`
-	UnknownRouteDownload         int64     `json:"unknownRouteDownload"`
+	ProxyUpload                   int64                `json:"proxyUpload"`
+	ProxyDownload                 int64                `json:"proxyDownload"`
+	DirectUpload                  int64                `json:"directUpload"`
+	DirectDownload                int64                `json:"directDownload"`
+	RejectUpload                  int64                `json:"rejectUpload"`
+	RejectDownload                int64                `json:"rejectDownload"`
+	UnknownRouteUpload            int64                `json:"unknownRouteUpload"`
+	UnknownRouteDownload          int64                `json:"unknownRouteDownload"`
 
-	MissingAttributionUpload     int64     `json:"missingAttributionUpload"`
-	MissingAttributionDownload   int64     `json:"missingAttributionDownload"`
-	AmbiguousRelayUpload         int64     `json:"ambiguousRelayUpload"`
-	AmbiguousRelayDownload       int64     `json:"ambiguousRelayDownload"`
+	MissingAttributionUpload      int64                `json:"missingAttributionUpload"`
+	MissingAttributionDownload    int64                `json:"missingAttributionDownload"`
+	AmbiguousRelayUpload          int64                `json:"ambiguousRelayUpload"`
+	AmbiguousRelayDownload        int64                `json:"ambiguousRelayDownload"`
 
-	SamplingResidualUpload       int64     `json:"samplingResidualUpload"`
-	SamplingResidualDownload     int64     `json:"samplingResidualDownload"`
+	SamplingResidualUpload        int64                `json:"samplingResidualUpload"`
+	SamplingResidualDownload      int64                `json:"samplingResidualDownload"`
 
-	ControllerGapPhysicalUpload  int64     `json:"controllerGapPhysicalUpload"`
-	ControllerGapPhysicalDownload int64    `json:"controllerGapPhysicalDownload"`
+	ControllerGapPhysicalUpload   int64                `json:"controllerGapPhysicalUpload"`
+	ControllerGapPhysicalDownload int64                `json:"controllerGapPhysicalDownload"`
 
-	Coverage                     *CoverageSummary `json:"coverage,omitempty"`
-	AccountingVersion            string           `json:"accountingVersion"`
+	Coverage                      *CoverageSummary     `json:"coverage,omitempty"`
+	Freshness                     *AccountingFreshness `json:"freshness,omitempty"`
+	AccountingVersion             string               `json:"accountingVersion"`
 }
 
 type MergedGap struct {
@@ -309,22 +328,22 @@ type MergedGap struct {
 }
 
 type CoverageSummary struct {
-	RequestedStart            *time.Time  `json:"requestedStart,omitempty"`
-	RequestedEnd              *time.Time  `json:"requestedEnd,omitempty"`
-	KnownScopeStart           *time.Time  `json:"knownScopeStart,omitempty"`
-	EffectiveScopeStart       *time.Time  `json:"effectiveScopeStart,omitempty"`
-	EffectiveScopeEnd         *time.Time  `json:"effectiveScopeEnd,omitempty"`
+	RequestedStart             *time.Time  `json:"requestedStart,omitempty"`
+	RequestedEnd               *time.Time  `json:"requestedEnd,omitempty"`
+	KnownScopeStart            *time.Time  `json:"knownScopeStart,omitempty"`
+	EffectiveScopeStart        *time.Time  `json:"effectiveScopeStart,omitempty"`
+	EffectiveScopeEnd          *time.Time  `json:"effectiveScopeEnd,omitempty"`
 
-	CoveredDurationMs         int64       `json:"coveredDurationMs"`
-	UncoveredDurationMs       int64       `json:"uncoveredDurationMs"`
-	OutsideKnownScopeMs       int64       `json:"outsideKnownScopeMs"`
-	FutureDurationMs          int64       `json:"futureDurationMs"`
+	CoveredDurationMs          int64       `json:"coveredDurationMs"`
+	UncoveredDurationMs        int64       `json:"uncoveredDurationMs"`
+	OutsideKnownScopeMs        int64       `json:"outsideKnownScopeMs"`
+	FutureDurationMs           int64       `json:"futureDurationMs"`
 
-	CoverageRatio             *float64    `json:"coverageRatio,omitempty"` // nil if outside known scope
-	ControllerGapDurationMs   int64       `json:"controllerGapDurationMs"`
-	CollectorOfflineDurationMs int64      `json:"collectorOfflineDurationMs"`
+	CoverageRatio              *float64    `json:"coverageRatio,omitempty"` // nil if outside known scope
+	ControllerGapDurationMs    int64       `json:"controllerGapDurationMs"`
+	CollectorOfflineDurationMs int64       `json:"collectorOfflineDurationMs"`
 
-	MergedGaps                []MergedGap `json:"mergedGaps"`
+	MergedGaps                 []MergedGap `json:"mergedGaps"`
 }
 
 type TopDimensionItem struct {
@@ -345,4 +364,28 @@ type AnalyticsFilter struct {
 	EndTime   *time.Time
 	Route     types.RouteType // "PROXY", "DIRECT", "REJECT", "" (ALL)
 	Limit     int
+}
+
+// -------------------------------------------------------------
+// F5: Safe Derived Retention Models
+// -------------------------------------------------------------
+
+type RetentionPlan struct {
+	RetainCompletedRuns     int           `json:"retainCompletedRuns"`
+	RetainFailedRunsMaxAge  time.Duration `json:"retainFailedRunsMaxAge"`
+	RunsToDelete            []string      `json:"runsToDelete"`
+	EstimatedRelayRows      int64         `json:"estimatedRelayRows"`
+	EstimatedTrafficRows    int64         `json:"estimatedTrafficRows"`
+	EstimatedAggregateRows  int64         `json:"estimatedAggregateRows"`
+	DBSizeBytes             int64         `json:"dbSizeBytes"`
+	WALSizeBytes            int64         `json:"walSizeBytes"`
+}
+
+type RetentionResult struct {
+	Plan              RetentionPlan `json:"plan"`
+	DeletedRuns       int           `json:"deletedRuns"`
+	DeletedRelayRows  int64         `json:"deletedRelayRows"`
+	DeletedTrafficRows int64        `json:"deletedTrafficRows"`
+	DeletedAggregateRows int64      `json:"deletedAggregateRows"`
+	AppliedAt         time.Time     `json:"appliedAt"`
 }

@@ -308,8 +308,8 @@ func TestStorageFullMigrationChainV1ToV5(t *testing.T) {
 	if err := upgradedDB.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations").Scan(&maxVer); err != nil {
 		t.Fatalf("Query max version failed: %v", err)
 	}
-	if maxVer != 5 {
-		t.Fatalf("Expected database schema to be upgraded to version 5, got %d", maxVer)
+	if maxVer != 7 {
+		t.Fatalf("Expected database schema to be upgraded to version 7, got %d", maxVer)
 	}
 }
 
