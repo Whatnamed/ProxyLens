@@ -127,6 +127,7 @@ async function main() {
   const tauriEnv = {
     ...process.env,
     PROXYLENS_DB_PATH: dbPath,
+    PROXYLENS_E2E_MODE: '1',
     RUST_BACKTRACE: '1'
   };
 
@@ -138,6 +139,11 @@ async function main() {
   let sidecarUrl = null;
   let sidecarHost = '127.0.0.1';
   let sidecarPort = 0;
+  let webviewE2EPromiseResolve, webviewE2EPromiseReject;
+  const webviewE2EPromise = new Promise((res, rej) => {
+    webviewE2EPromiseResolve = res;
+    webviewE2EPromiseReject = rej;
+  });
 
   const readyPromise = new Promise((resolve, reject) => {
     tauriProc.stdout.on('data', (d) => {
@@ -151,7 +157,13 @@ async function main() {
             sidecarUrl = match[1];
             sidecarPort = parseInt(match[2], 10);
             resolve({ url: sidecarUrl, port: sidecarPort });
-            return;
+          }
+        }
+        if (trimmed.includes('PROXYLENS_WEBVIEW_E2E_READY')) {
+          if (trimmed.includes('meta=1 summary=1 connections=1')) {
+            webviewE2EPromiseResolve(true);
+          } else {
+            webviewE2EPromiseReject(new Error(`WebView E2E probe reported partial failure: ${trimmed}`));
           }
         }
       }
@@ -168,6 +180,15 @@ async function main() {
   const sidecarStartupMs = Date.now() - t0Start;
   console.log(`  ✔ Tauri successfully spawned bundled Go Sidecar in ${sidecarStartupMs} ms:`);
   console.log(`    Sidecar Port: ${sidecarInfo.port}`);
+
+  // 等待 WebView 内部发起的真实鉴权 E2E 探针通过
+  const e2eTimeout = setTimeout(() => {
+    webviewE2EPromiseReject(new Error('Timeout waiting 12s for React WebView to complete E2E probe'));
+  }, 12000);
+
+  await webviewE2EPromise;
+  clearTimeout(e2eTimeout);
+  console.log('  ✔ React WebView -> Tauri Session -> Bundled Sidecar Authenticated E2E probe PASSED (meta=1, summary=1, connections=1)!');
 
   // 5. 验证 Tauri 内部 Sidecar 端口的基础响应
   console.log('\n[5/7] Verifying unauthenticated security & healthz on Tauri Sidecar...');

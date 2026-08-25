@@ -12,7 +12,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
-        .invoke_handler(tauri::generate_handler![commands::get_query_api_session])
+        .invoke_handler(tauri::generate_handler![
+            commands::get_query_api_session,
+            commands::report_e2e_probe
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             let db_res = sidecar::resolve_db_path();

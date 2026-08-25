@@ -6,20 +6,27 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 3A Complete — UI Platform Foundation & Query API Integration Finalized (Ready for Phase 3B Visual System & Primary Dashboard)`
-- **代码状态**：Phase 3A 桌面平台底座、Go 本地只读查询 API、安全 Loopback 会话桥接与 React 平台层已全部落地并验证通过：
-  1. **Tauri v2 桌面原生外壳与官方 Sidecar Resolver (`ui/src-tauri`)**：集成 Tauri v2 与 `tauri_plugin_shell`，使用 `app.shell().sidecar("proxylens-query-api")` 动态解析 bundled 架构二进制，配合 `tokio::time::timeout` 5s 异步非阻塞超时与安全 CSP 策略；
-  2. **Go Local Query API (`collector/cmd/proxylens-query-api`, `pkg/api`)**：独立只读查询服务，严格绑定 `127.0.0.1` 随机临时端口，开启 `mode=ro + query_only=ON` 双防御与精确 Schema 匹配校验，标准输出首行吐出 `proxylens-query-api-ready` JSON 握手信号；
-  3. **单次会话高熵 Bearer Token 鉴权 (>=256-bit)**：每次 Tauri 启动动态生成，通过 anonymous stdin pipe 传输给 Sidecar（绝不通过 argv 暴露在进程列表），仅驻留于 Rust 与前端内存中，不落盘、不记日志、不在 URL 中传递；
-  4. **严格 CORS / Origin 白名单与错误隔离**：拒绝通配符 `*`，精确限制仅允许本地 Tauri 与 Vite 开发源；底层 SQLite 错误仅记录至内部日志，HTTP 仅返回结构化安全错误代码；
-  5. **连接三元组权威检索与完整事件流**：`/api/v1/connections/{sessionId}/{epochId}/{connectionId}` 严格按 `(session_id, epoch_id, connection_id)` 检索，返回最新 Run 下全部 `accountingEvents[]` 时序事件流与聚合 `accountingSummary`；
-  6. **Sidecar 零耦合生命周期管理**：Tauri 启动时拉起 Query API，关闭时销毁 Query API，**独立后台运行的 Collector 保持健康常驻（完全解耦不受影响）**；
-  7. **真实 Tauri Executable E2E 冒烟实测 (`run-phase3a-smoke.mjs`)**：
-     - 真实启动 Release 编译的 `proxylens-desktop.exe` 桌面程序；
-     - Tauri 自动拉起 bundled Go Sidecar 并就绪耗时: **663 ms**；
-     - 终止 Tauri 进程后 Go Sidecar 随之退出: **NO ORPHAN SIDECAR VERIFIED**；
-     - 独立后台常驻 Collector 在全生命周期中保持健康运行: **VERIFIED UNINTERRUPTED**；
-  8. **测试套件覆盖**: 全部 55 个 Go 测试 (test: 9, state: 10, storage: 34, api: 2) + 18 个 Phase 0 回归测试 100% PASS；React 前端与 Tauri 原生 Release 可执行程序编译与 E2E 强制全编译测试 100% PASS。
+- **当前阶段**：`Phase 3A Complete, Pre-UI Readiness & Contract Freeze Complete (NEXT: Phase 3B — Actual ProxyLens Audit UI Design)`
+- **平台与契约状态**：
+  > **The platform and data contracts are ready. No production visual UI has been designed or implemented yet.**
+  
+  1. **React WebView -> Tauri Session -> Bundled Sidecar 真实鉴权 E2E 验证**:
+     - 每次 smoke 强制重新编译 Release 二进制与前端 Vite bundle；
+     - 真实启动 `proxylens-desktop.exe`，React WebView 内部自动通过 `get_query_api_session()` 桥接 Bearer Token；
+     - 前端安全请求 `/meta` + `/summary` + `/connections` 并通过 `report_e2e_probe` 输出纯安全非敏感标记，验证完整产品闭环：**100% PASS**；
+  2. **UI 信息架构与语义展示契约冻结 (IA & Semantic Contracts Frozen)**:
+     - 建立并冻结 [`docs/ui-information-architecture-v1.md`](docs/ui-information-architecture-v1.md)（Overview, History, Connection Detail, Coverage, System Status）；
+     - 建立并冻结 [`docs/ui-semantic-presentation-v1.md`](docs/ui-semantic-presentation-v1.md)（UTC vs 本地时区、IEC 二进制单位、Exact vs Estimated 明确区分、可解释未知细分）；
+     - 建立并冻结 [`docs/ui-api-coverage-matrix-v1.md`](docs/ui-api-coverage-matrix-v1.md)（证明现有 10 个端点 100% 满足 Phase 3B Overview 主看板，趋势图等非必需接口明确标记为 `DEFER UNTIL VISUAL DESIGN REQUIRES IT`）；
+  3. **确定性合成 UI 开发数据集生成器 (`tools/ui-fixture/`)**:
+     - 支持 `healthy`（多进程/多节点/节点切换/分流）、`gaps`（controller/collector缺口）、`stale`（新鲜度滞后）与 `empty` 4 种 profile；
+     - 严格合成匿名数据，杜绝泄露真实用户凭据与私密流量历史；
+  4. **Pre-UI 查询性能 Sanity 实测 (`run-pre-ui-query-sanity.mjs`)**:
+     - 针对 Today / 7d / 30d 窗口下的全部 Overview 查询端点进行冷热请求测量；
+     - 实测延迟全部在 **1 ~ 8 ms** 之间，响应载荷在 0.6KB ~ 10KB 之间，**ZERO PERFORMANCE BLOCKERS**；
+  5. **前端非视觉语义 Utility 库与单测 (`ui/src/utils/`)**:
+     - 落地 `formatBytes`, `getQuickWindow`, `mapApiError` 语义函数，7 个自动化单测 100% PASS；
+  6. **测试套件覆盖**: 全部 55 个 Go 测试 (test: 9, state: 10, storage: 34, api: 2) + 18 个 Phase 0 回归测试 + 7 个前端 Utility 单元测试 100% PASS。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64) / 12th Gen Intel Core i5-12400 (12 cores)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中

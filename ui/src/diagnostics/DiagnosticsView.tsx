@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { QueryApiClient } from '../api/client';
 import { ConnectionRecord } from '../api/types';
 import {
@@ -21,6 +22,47 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
   const topProcQuery = useTopProcessesQuery(client, 5);
   const coverageQuery = useCoverageQuery(client);
   const connsQuery = useConnectionsQuery(client, 5, 0);
+
+  const probeReportedRef = useRef(false);
+
+  useEffect(() => {
+    if (!client || !isTauri || probeReportedRef.current) return;
+
+    // 执行 WebView -> Tauri -> authenticated Sidecar E2E 探针自检 (B2)
+    const runE2EProbe = async () => {
+      try {
+        const meta = await client.getMeta();
+        const summary = await client.getSummary();
+        const conns = await client.getConnections({ limit: 1 });
+
+        const metaOk = !!(meta && meta.dbState === 'READY');
+        const summaryOk = !!(summary && summary.accountingVersion);
+        const connectionsOk = !!(conns && Array.isArray(conns.items));
+
+        probeReportedRef.current = true;
+        await invoke('report_e2e_probe', {
+          report: {
+            metaOk,
+            summaryOk,
+            connectionsOk,
+            error: null
+          }
+        });
+      } catch (err: any) {
+        probeReportedRef.current = true;
+        await invoke('report_e2e_probe', {
+          report: {
+            metaOk: false,
+            summaryOk: false,
+            connectionsOk: false,
+            error: err?.message || String(err)
+          }
+        });
+      }
+    };
+
+    runE2EProbe();
+  }, [client, isTauri]);
 
   return (
     <div className="diag-container">
