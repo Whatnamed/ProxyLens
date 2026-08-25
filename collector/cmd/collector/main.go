@@ -23,7 +23,7 @@ import (
 	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
 )
 
-const version = "0.4.0-phase2-prototype"
+const version = "0.5.0-phase2b1-prototype"
 
 func printUsage() {
 	fmt.Println("ProxyLens Collector — Read-Only Network Traffic Auditing Collector")
@@ -32,6 +32,12 @@ func printUsage() {
 	fmt.Println("  collector storage inspect [flags]     Inspect persisted connections from SQLite database")
 	fmt.Println("  collector storage gaps [flags]        List recorded monitoring gaps from SQLite database")
 	fmt.Println("  collector storage rebuild [flags]     Rebuild all projections from authoritative event journal")
+	fmt.Println("  collector accounting rebuild [flags]  Reconcile relay deductions and rebuild accounted traffic")
+	fmt.Println("  collector analytics summary [flags]   Show reconciled usage & coverage summary")
+	fmt.Println("  collector analytics top-processes [flags] Show top process traffic breakdown")
+	fmt.Println("  collector analytics top-hosts [flags] Show top destination host breakdown")
+	fmt.Println("  collector analytics top-proxies [flags] Show top outbound proxy node breakdown")
+	fmt.Println("  collector analytics coverage [flags]  Show time window monitoring coverage analysis")
 	fmt.Println("  collector replay <fixture.ndjson>     Deterministic offline replay against test fixture")
 	fmt.Println("  collector benchmark <fixture.ndjson>  Run realistic/stress benchmark on snapshot frames")
 	fmt.Println("  collector version                     Print collector version")
@@ -61,6 +67,10 @@ func main() {
 		runCollector(subargs)
 	case "storage":
 		runStorageCommand(subargs)
+	case "accounting":
+		runAccountingCommand(subargs)
+	case "analytics":
+		runAnalyticsCommand(subargs)
 	case "replay":
 		runReplay(subargs)
 	case "benchmark":
@@ -101,7 +111,7 @@ func runCollector(args []string) {
 	sessionID := fmt.Sprintf("sess-%d", time.Now().UnixNano())
 
 	fmt.Println("================================================================")
-	fmt.Println("ProxyLens Production Collector (Phase 2 Prototype)")
+	fmt.Println("ProxyLens Production Collector (Phase 2B1 Accounting & Aggregation)")
 	fmt.Println("================================================================")
 	fmt.Printf("Session ID              : %s\n", sessionID)
 	fmt.Println(cfg.String())
@@ -287,9 +297,13 @@ func runStorageCommand(args []string) {
 			if hostOrIP == "" {
 				hostOrIP = c.Metadata.DestinationIP
 			}
-			fmt.Printf("[%2d] Process: %-16s | Target: %-24s | Route: %-6s | Class: %-18s | Up: %8d B | Down: %8d B | State: %s\n",
+			obsStatus := "ACTIVE"
+			if !c.ObservationActive {
+				obsStatus = fmt.Sprintf("ENDED(%s)", c.ObservationEndReason)
+			}
+			fmt.Printf("[%2d] Process: %-16s | Target: %-24s | Route: %-6s | Class: %-18s | Up: %8d B | Down: %8d B | Obs: %s\n",
 				idx+1, c.Metadata.Process, hostOrIP, c.Route, c.LatestAttributionClass,
-				c.MonitoredUploadTotal, c.MonitoredDownloadTotal, c.State)
+				c.MonitoredUploadTotal, c.MonitoredDownloadTotal, obsStatus)
 		}
 
 	case "gaps":
@@ -325,6 +339,148 @@ func runStorageCommand(args []string) {
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown storage action: %s\n", action)
 		os.Exit(1)
+	}
+}
+
+func runAccountingCommand(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: collector accounting rebuild --db <path> [--notes <str>]")
+		os.Exit(1)
+	}
+
+	action := args[0]
+	subargs := args[1:]
+
+	fs := flag.NewFlagSet("collector accounting "+action, flag.ContinueOnError)
+	dbPath := fs.String("db", "", "Path to SQLite database file")
+	notes := fs.String("notes", "manual cli rebuild", "Notes for accounting run")
+
+	if err := fs.Parse(subargs); err != nil || *dbPath == "" || action != "rebuild" {
+		fmt.Fprintf(os.Stderr, "Usage: collector accounting rebuild --db <path> [--notes <str>]\n")
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	db, err := storage.OpenDB(ctx, *dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open SQLite database: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	fmt.Printf("Running versioned reconciled accounting & hourly aggregations on %s...\n", *dbPath)
+	run, err := storage.RebuildAccounting(ctx, db, *notes)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[FATAL ACCOUNTING ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Accounting completed successfully!\n")
+	fmt.Printf("Run ID                  : %s\n", run.RunID)
+	fmt.Printf("Algorithm Version       : %s\n", run.AlgorithmVersion)
+	fmt.Printf("Source Events Processed : %d\n", run.SourceJournalEventCount)
+	fmt.Printf("Status                  : %s\n", run.Status)
+}
+
+func runAnalyticsCommand(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: collector analytics <summary|top-processes|top-hosts|top-proxies|coverage> --db <path> [flags]")
+		os.Exit(1)
+	}
+
+	action := args[0]
+	subargs := args[1:]
+
+	fs := flag.NewFlagSet("collector analytics "+action, flag.ContinueOnError)
+	dbPath := fs.String("db", "", "Path to SQLite database file")
+	fromStr := fs.String("from", "", "Optional RFC3339 start time")
+	toStr := fs.String("to", "", "Optional RFC3339 end time")
+	routeFilter := fs.String("route", "", "Optional route filter (PROXY|DIRECT|REJECT)")
+	limit := fs.Int("limit", 10, "Top N limit")
+
+	if err := fs.Parse(subargs); err != nil || *dbPath == "" {
+		fmt.Fprintf(os.Stderr, "Usage: collector analytics %s --db <path> [flags]\n", action)
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	db, err := storage.OpenDB(ctx, *dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open SQLite database: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	svc := storage.NewAnalyticsService(db)
+
+	var filter storage.AnalyticsFilter
+	if *fromStr != "" {
+		t, err := time.Parse(time.RFC3339, *fromStr)
+		if err == nil { filter.StartTime = &t }
+	}
+	if *toStr != "" {
+		t, err := time.Parse(time.RFC3339, *toStr)
+		if err == nil { filter.EndTime = &t }
+	}
+	filter.Route = types.RouteType(*routeFilter)
+	filter.Limit = *limit
+
+	switch action {
+	case "summary":
+		summary, err := svc.GetUsageSummary(ctx, filter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to get usage summary: %v\n", err)
+			os.Exit(1)
+		}
+		summaryJSON, _ := json.MarshalIndent(summary, "", "  ")
+		fmt.Println(string(summaryJSON))
+
+	case "top-processes":
+		items, err := svc.GetTopProcesses(ctx, filter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Query failed: %v\n", err)
+			os.Exit(1)
+		}
+		printTopItems("Top Processes", items)
+
+	case "top-hosts":
+		items, err := svc.GetTopHosts(ctx, filter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Query failed: %v\n", err)
+			os.Exit(1)
+		}
+		printTopItems("Top Destination Hosts", items)
+
+	case "top-proxies":
+		items, err := svc.GetTopFinalProxies(ctx, filter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Query failed: %v\n", err)
+			os.Exit(1)
+		}
+		printTopItems("Top Outbound Proxies", items)
+
+	case "coverage":
+		cov, err := svc.GetCoverage(ctx, filter.StartTime, filter.EndTime)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Coverage query failed: %v\n", err)
+			os.Exit(1)
+		}
+		covJSON, _ := json.MarshalIndent(cov, "", "  ")
+		fmt.Println(string(covJSON))
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown analytics action: %s\n", action)
+		os.Exit(1)
+	}
+}
+
+func printTopItems(title string, items []storage.TopDimensionItem) {
+	fmt.Println("================================================================")
+	fmt.Printf("%s (%d entries):\n", title, len(items))
+	fmt.Println("================================================================")
+	for i, item := range items {
+		fmt.Printf("[%2d] Key: %-28s | Route: %-6s | Total: %8d B (Up: %6d, Down: %6d) | Conns: %3d\n",
+			i+1, item.Key, item.Route, item.TotalBytes, item.UploadBytes, item.DownloadBytes, item.ConnectionCount)
 	}
 }
 
