@@ -117,8 +117,9 @@ func OpenReadOnlyDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("%w: sqlite file not found at %s", ErrDBUnavailable, dbPath)
 	}
 
-	// 2. 使用 mode=ro + query_only=ON 双重防御配置 DSN
-	dsn := fmt.Sprintf("%s?mode=ro&_pragma=query_only=ON&_pragma=busy_timeout=10000&_pragma=foreign_keys=ON&_pragma=synchronous=NORMAL", dbPath)
+	// 2. 使用标准 SQLite File URI (mode=ro + query_only=ON 双重防御) 配置 DSN
+	cleanPath := filepath.ToSlash(filepath.Clean(dbPath))
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only=ON&_pragma=busy_timeout=10000&_pragma=foreign_keys=ON&_pragma=synchronous=NORMAL", cleanPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to open sqlite connection: %v", ErrDBUnavailable, err)

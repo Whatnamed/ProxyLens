@@ -142,6 +142,8 @@ func (s *Server) handleConnectionDetailRouter(w http.ResponseWriter, r *http.Req
 		accEvents, err := s.querySvc.ListAccountedTrafficForConnection(r.Context(), sessionID, epochID, connectionID)
 		if err != nil {
 			s.logInternalError("ListAccountedTrafficForConnection failed", err)
+			s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to query accounted traffic events")
+			return
 		}
 
 		// 聚合生成 Accounting Summary (如果存在事件)

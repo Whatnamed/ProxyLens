@@ -697,9 +697,11 @@ func TestOpenReadOnlyDBSemanticsAndMutationRejection(t *testing.T) {
 		t.Fatalf("Expected write operation to fail on read-only DB connection, but it succeeded")
 	}
 
+	// 4. 深度防御回归: 即使恶意执行 PRAGMA query_only=OFF，底层 mode=ro 仍必须物理拦截写入
+	_, _ = roDB.ExecContext(ctx, "PRAGMA query_only=OFF;")
 	_, err = roDB.ExecContext(ctx, "INSERT INTO schema_migrations (version, name, applied_at) VALUES (999, 'bad', 'now');")
 	if err == nil {
-		t.Fatalf("Expected INSERT to fail on read-only DB connection, but it succeeded")
+		t.Fatalf("Expected INSERT to fail on mode=ro read-only DB connection even after PRAGMA query_only=OFF, but it succeeded")
 	}
 }
 

@@ -272,3 +272,139 @@ func TestAPIServerAuthCORSAndEndpoints(t *testing.T) {
 		t.Errorf("Coverage failed: %d", w.Code)
 	}
 }
+
+func TestConnectionDetailCompositeIdentityIsolation(t *testing.T) {
+	dir, err := os.MkdirTemp("", "proxylens-composite-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	dbPath := filepath.Join(dir, "composite.db")
+	ctx := context.Background()
+
+	// 1. 在 Session A, Epoch 1 中发射 shared-id 连接 (Chrome)
+	sinkA, err := storage.OpenSQLiteSink(ctx, dbPath, "sess-A", "v1.0.0-test")
+	if err != nil {
+		t.Fatalf("OpenSQLiteSink A failed: %v", err)
+	}
+	t0 := time.Now().UTC().Add(-1 * time.Hour)
+	_ = sinkA.Emit(&types.CollectorEvent{
+		EventID: "ev-a-1", SessionID: "sess-A", EpochID: 1, FrameSequence: 1, EventSequence: 1,
+		Type: types.EventConnectionNew, Timestamp: t0, ConnectionID: "shared-conn-123",
+		Route: types.RouteProxy, AttributionClass: types.ClassKnownApplication,
+		Metadata: types.RawMetadata{
+			Process: "chrome.exe", Host: "google.com", DestinationIP: "142.250.190.46", Network: "tcp",
+		},
+		Rule: "DomainSuffix", RulePayload: "google.com",
+		Chains: []string{"Node-HK-01", "ProxyGroup"},
+		DeltaUpload: 1000, DeltaDownload: 5000,
+	})
+	_ = sinkA.EndSession(ctx, "sess-A", storage.SessionStatusClosedClean)
+	_ = sinkA.Close()
+
+	// 2. 在 Session B, Epoch 2 中发射同一个 shared-id 连接 (Curl)
+	sinkB, err := storage.OpenSQLiteSink(ctx, dbPath, "sess-B", "v1.0.0-test")
+	if err != nil {
+		t.Fatalf("OpenSQLiteSink B failed: %v", err)
+	}
+	_ = sinkB.Emit(&types.CollectorEvent{
+		EventID: "ev-b-1", SessionID: "sess-B", EpochID: 2, FrameSequence: 1, EventSequence: 1,
+		Type: types.EventConnectionNew, Timestamp: t0.Add(10 * time.Minute), ConnectionID: "shared-conn-123",
+		Route: types.RouteDirect, AttributionClass: types.ClassKnownApplication,
+		Metadata: types.RawMetadata{
+			Process: "curl.exe", Host: "github.com", DestinationIP: "140.82.112.3", Network: "tcp",
+		},
+		Rule: "DirectRule", RulePayload: "Direct",
+		DeltaUpload: 300, DeltaDownload: 700,
+	})
+	_ = sinkB.EndSession(ctx, "sess-B", storage.SessionStatusClosedClean)
+	_ = sinkB.Close()
+
+	// 3. 执行核算重建
+	db, err := storage.OpenDB(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	if _, err := storage.RebuildAccounting(ctx, db, "composite test run"); err != nil {
+		_ = db.Close()
+		t.Fatalf("RebuildAccounting failed: %v", err)
+	}
+	_ = db.Close()
+
+	// 4. 只读 API 查询
+	roDB, err := storage.OpenReadOnlyDB(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnlyDB failed: %v", err)
+	}
+	defer roDB.Close()
+
+	testToken := "test-composite-token-32-chars"
+	server, err := NewServer(ServerConfig{
+		DB:         roDB,
+		DBPath:     dbPath,
+		Token:      testToken,
+		AppVersion: "0.7.0-test",
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server.registerRoutes(mux)
+	handler := server.AuthAndCORSMiddleware(mux)
+
+	// 4.1 请求 Session A / Epoch 1 / shared-conn-123
+	reqA := httptest.NewRequest(http.MethodGet, "/api/v1/connections/sess-A/1/shared-conn-123", nil)
+	reqA.Header.Set("Authorization", "Bearer "+testToken)
+	wA := httptest.NewRecorder()
+	handler.ServeHTTP(wA, reqA)
+	if wA.Code != http.StatusOK {
+		t.Fatalf("Request A failed: %d (%s)", wA.Code, wA.Body.String())
+	}
+	var resA ConnectionDetailResponse
+	if err := json.NewDecoder(wA.Body).Decode(&resA); err != nil {
+		t.Fatalf("Decode A failed: %v", err)
+	}
+	if resA.Connection.Metadata.Process != "chrome.exe" {
+		t.Errorf("Expected Session A connection process chrome.exe, got %s", resA.Connection.Metadata.Process)
+	}
+	if len(resA.AccountingEvents) != 1 || resA.AccountingEvents[0].Process != "chrome.exe" {
+		t.Errorf("Expected Session A accountingEvents to contain exactly chrome.exe, got %+v", resA.AccountingEvents)
+	}
+	if resA.AccountingSummary == nil || resA.AccountingSummary.LatestProcess != "chrome.exe" {
+		t.Errorf("Expected Session A summary process chrome.exe, got %+v", resA.AccountingSummary)
+	}
+
+	// 4.2 请求 Session B / Epoch 2 / shared-conn-123
+	reqB := httptest.NewRequest(http.MethodGet, "/api/v1/connections/sess-B/2/shared-conn-123", nil)
+	reqB.Header.Set("Authorization", "Bearer "+testToken)
+	wB := httptest.NewRecorder()
+	handler.ServeHTTP(wB, reqB)
+	if wB.Code != http.StatusOK {
+		t.Fatalf("Request B failed: %d (%s)", wB.Code, wB.Body.String())
+	}
+	var resB ConnectionDetailResponse
+	if err := json.NewDecoder(wB.Body).Decode(&resB); err != nil {
+		t.Fatalf("Decode B failed: %v", err)
+	}
+	if resB.Connection.Metadata.Process != "curl.exe" {
+		t.Errorf("Expected Session B connection process curl.exe, got %s", resB.Connection.Metadata.Process)
+	}
+	if len(resB.AccountingEvents) != 1 || resB.AccountingEvents[0].Process != "curl.exe" {
+		t.Errorf("Expected Session B accountingEvents to contain exactly curl.exe, got %+v", resB.AccountingEvents)
+	}
+	if resB.AccountingSummary == nil || resB.AccountingSummary.LatestProcess != "curl.exe" {
+		t.Errorf("Expected Session B summary process curl.exe, got %+v", resB.AccountingSummary)
+	}
+
+	// 4.3 请求不存在的交叉组合 (sess-A, epoch 2, shared-conn-123) -> 必须 404
+	reqCross := httptest.NewRequest(http.MethodGet, "/api/v1/connections/sess-A/2/shared-conn-123", nil)
+	reqCross.Header.Set("Authorization", "Bearer "+testToken)
+	wCross := httptest.NewRecorder()
+	handler.ServeHTTP(wCross, reqCross)
+	if wCross.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for non-matching composite identity, got %d", wCross.Code)
+	}
+}
+

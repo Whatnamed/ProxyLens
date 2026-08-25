@@ -27,28 +27,23 @@ type ReadySignal struct {
 func main() {
 	dbPath := flag.String("db", "", "Absolute path to ProxyLens SQLite database")
 	listenAddr := flag.String("listen", "127.0.0.1:0", "Listen address (must be loopback, e.g. 127.0.0.1:0)")
-	tokenFlag := flag.String("token", "", "Session token (optional via argv, preferred via stdin)")
 	flag.Parse()
 
 	if *dbPath == "" {
-		fmt.Fprintf(os.Stderr, "Usage: proxylens-query-api --db <path> [--listen 127.0.0.1:0] [--token <token>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: proxylens-query-api --db <path> [--listen 127.0.0.1:0]\n(Note: session token must be provided via stdin first line)\n")
 		os.Exit(1)
 	}
 
 	stdinScanner := bufio.NewScanner(os.Stdin)
 	var sessionToken string
 
-	if *tokenFlag != "" {
-		sessionToken = *tokenFlag
-	} else {
-		// 安全通道: 从 stdin 第一行读取 token，避免 argv 泄露给系统进程列表
-		if stdinScanner.Scan() {
-			sessionToken = strings.TrimSpace(stdinScanner.Text())
-		}
-		if sessionToken == "" {
-			fmt.Fprintf(os.Stderr, "[FATAL SECURITY ERROR] No session token provided via stdin or --token\n")
-			os.Exit(1)
-		}
+	// 安全通道: 严格且仅从 stdin 第一行读取 token，杜绝 argv 泄露给系统进程列表
+	if stdinScanner.Scan() {
+		sessionToken = strings.TrimSpace(stdinScanner.Text())
+	}
+	if sessionToken == "" {
+		fmt.Fprintf(os.Stderr, "[FATAL SECURITY ERROR] No session token provided via stdin pipe\n")
+		os.Exit(1)
 	}
 
 	// 1. 安全检查: 必须绑定 Loopback

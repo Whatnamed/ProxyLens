@@ -226,6 +226,9 @@ func (q *QueryService) ListConnections(ctx context.Context, filter ConnectionFil
 
 		records = append(records, &rec)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error in ListConnections: %w", err)
+	}
 
 	return records, nil
 }
@@ -272,6 +275,9 @@ func (q *QueryService) ListConnectionTraffic(ctx context.Context, sessionID stri
 			tr.IntervalEnd = &t
 		}
 		list = append(list, &tr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error in ListConnectionTraffic: %w", err)
 	}
 
 	return list, nil
@@ -351,6 +357,9 @@ func (q *QueryService) ListMonitoringGaps(ctx context.Context, startTime, endTim
 
 		gaps = append(gaps, &g)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error in ListMonitoringGaps: %w", err)
+	}
 
 	return gaps, nil
 }
@@ -410,6 +419,9 @@ func (q *QueryService) ListDiagnosticResiduals(ctx context.Context, startTime, e
 		r.ObservedAt, _ = time.Parse(time.RFC3339Nano, obsAtStr)
 		r.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAtStr)
 		residuals = append(residuals, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error in ListDiagnosticResiduals: %w", err)
 	}
 
 	return residuals, nil
@@ -515,6 +527,9 @@ func (q *QueryService) ListAccountedTrafficForConnection(ctx context.Context, se
 		rec.TopPolicyGroup = topGroup.String
 
 		records = append(records, &rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error in ListAccountedTrafficForConnection: %w", err)
 	}
 
 	return records, nil

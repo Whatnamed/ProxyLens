@@ -17,9 +17,9 @@
   7. **真实 Tauri Executable E2E 冒烟实测 (`run-phase3a-smoke.mjs`)**：
      - 真实启动 Release 编译的 `proxylens-desktop.exe` 桌面程序；
      - Tauri 自动拉起 bundled Go Sidecar 并就绪耗时: **663 ms**；
-     - 终止 Tauri 进程后 Go Sidecar 随之干净退出: **VERIFIED CLEAN EXIT**；
+     - 终止 Tauri 进程后 Go Sidecar 随之退出: **NO ORPHAN SIDECAR VERIFIED**；
      - 独立后台常驻 Collector 在全生命周期中保持健康运行: **VERIFIED UNINTERRUPTED**；
-  8. **测试套件覆盖**: 全部 54 个 Go 测试 (test: 9, state: 10, storage: 34, api: 1) + 18 个 Phase 0 回归测试 100% PASS；React 前端与 Tauri 原生 Release 可执行程序编译与 E2E 测试 100% PASS。
+  8. **测试套件覆盖**: 全部 55 个 Go 测试 (test: 9, state: 10, storage: 34, api: 2) + 18 个 Phase 0 回归测试 100% PASS；React 前端与 Tauri 原生 Release 可执行程序编译与 E2E 强制全编译测试 100% PASS。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64) / 12th Gen Intel Core i5-12400 (12 cores)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
