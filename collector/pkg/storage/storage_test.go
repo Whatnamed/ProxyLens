@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -116,6 +117,177 @@ func TestStorageFullLifecycleAndReopen(t *testing.T) {
 	}
 	if traffic[0].DeltaUpload != 500 || traffic[0].DeltaDownload != 1500 {
 		t.Errorf("Traffic delta mismatch: %+v", traffic[0])
+	}
+}
+
+func TestStorageMigrationV1ToV2Upgrade(t *testing.T) {
+	ctx := context.Background()
+	dbPath, cleanup := createTestDB(t)
+	defer cleanup()
+
+	// 1. 手动直接执行 001_initial.sql 创建 v1 数据库
+	rawDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open raw sqlite db: %v", err)
+	}
+
+	v1Content, err := migrationFS.ReadFile("migrations/001_initial.sql")
+	if err != nil {
+		t.Fatalf("Failed to read v1 migration file: %v", err)
+	}
+	if _, err := rawDB.ExecContext(ctx, string(v1Content)); err != nil {
+		t.Fatalf("Failed to execute v1 migration: %v", err)
+	}
+
+	// 记录 schema_migrations version 1
+	if _, err := rawDB.ExecContext(ctx, "INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, '001_initial.sql', '2026-08-25T00:00:00Z')"); err != nil {
+		t.Fatalf("Failed to record v1 migration: %v", err)
+	}
+
+	// 插入一条 v1 schema 的 connection 与 traffic 数据 (无 frame_sequence / event_sequence)
+	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := rawDB.ExecContext(ctx, `
+		INSERT INTO connections (
+			session_id, epoch_id, connection_id, first_observed_at, last_observed_at,
+			state, preexisting_at_start, possible_unobserved_tail, process, host,
+			route, latest_attribution_class, quality_flags_json, created_at, updated_at
+		) VALUES (
+			'sess-v1', 1, 'c-v1-old', ?, ?,
+			'active', 0, 0, 'curl.exe', 'v1.example.com',
+			'DIRECT', 'known_application', '{}', ?, ?
+		);
+	`, nowStr, nowStr, nowStr, nowStr); err != nil {
+		t.Fatalf("Failed to insert v1 connection: %v", err)
+	}
+
+	if _, err := rawDB.ExecContext(ctx, `
+		INSERT INTO connection_traffic (
+			event_id, session_id, epoch_id, connection_id, observed_at, precision,
+			delta_upload, delta_download, observed_upload_counter, observed_download_counter,
+			monitored_upload_total, monitored_download_total, created_at
+		) VALUES (
+			'ev-v1-old', 'sess-v1', 1, 'c-v1-old', ?, 'exact_snapshot',
+			100, 200, 100, 200, 100, 200, ?
+		);
+	`, nowStr, nowStr); err != nil {
+		t.Fatalf("Failed to insert v1 traffic: %v", err)
+	}
+	_ = rawDB.Close()
+
+	// 2. 通过 OpenDB 运行自动迁移至 v2
+	upgradedDB, err := OpenDB(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB failed on v1 database: %v", err)
+	}
+	defer upgradedDB.Close()
+
+	// 验证 schema_migrations 包含 version 2
+	var maxVer int
+	if err := upgradedDB.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations").Scan(&maxVer); err != nil {
+		t.Fatalf("Query max version failed: %v", err)
+	}
+	if maxVer < 2 {
+		t.Fatalf("Expected database upgraded to at least version 2, got version %d", maxVer)
+	}
+
+	// 3. 验证旧数据保留且 frame_sequence/event_sequence 为默认值 0
+	qs := NewQueryService(upgradedDB)
+	trafficList, err := qs.ListConnectionTraffic(ctx, "sess-v1", 1, "c-v1-old")
+	if err != nil {
+		t.Fatalf("ListConnectionTraffic failed after upgrade: %v", err)
+	}
+	if len(trafficList) != 1 {
+		t.Fatalf("Expected 1 old traffic record, got %d", len(trafficList))
+	}
+	if trafficList[0].FrameSequence != 0 || trafficList[0].EventSequence != 0 {
+		t.Errorf("Expected default sequences 0 for v1 data, got frame=%d, seq=%d", trafficList[0].FrameSequence, trafficList[0].EventSequence)
+	}
+
+	// 4. 验证在新 schema 下新写入正常
+	sink := NewSQLiteEventSink(upgradedDB, "sess-v1", dbPath)
+	evNewDelta := &types.CollectorEvent{
+		EventID:         "ev-v2-new",
+		SessionID:       "sess-v1",
+		EpochID:         1,
+		FrameSequence:   5,
+		EventSequence:   2,
+		Type:            types.EventConnectionDelta,
+		Timestamp:       time.Now(),
+		ConnectionID:    "c-v1-old",
+		DeltaUpload:     50,
+		DeltaDownload:   80,
+		ObservedUploadCounter: 150,
+		ObservedDownloadCounter: 280,
+		MonitoredCumulativeUpload: 150,
+		MonitoredCumulativeDownload: 280,
+	}
+	if err := sink.Emit(evNewDelta); err != nil {
+		t.Fatalf("Emit new delta on upgraded schema failed: %v", err)
+	}
+
+	trafficListAfter, err := qs.ListConnectionTraffic(ctx, "sess-v1", 1, "c-v1-old")
+	if err != nil || len(trafficListAfter) != 2 {
+		t.Fatalf("Expected 2 traffic records after upgrade emit, got %d, err: %v", len(trafficListAfter), err)
+	}
+	if trafficListAfter[1].FrameSequence != 5 || trafficListAfter[1].EventSequence != 2 {
+		t.Errorf("Sequence mismatch on new record: frame=%d, seq=%d", trafficListAfter[1].FrameSequence, trafficListAfter[1].EventSequence)
+	}
+}
+
+func TestStorageExplicitEndSessionInterruptedRestartGap(t *testing.T) {
+	ctx := context.Background()
+	dbPath, cleanup := createTestDB(t)
+	defer cleanup()
+
+	// 1. Session 1 启动并显式以 SessionStatusInterrupted 结束
+	sink1, err := OpenSQLiteSink(ctx, dbPath, "sess-interrupted-explicit-1", "v1.0.0-test")
+	if err != nil {
+		t.Fatalf("Open sink1 failed: %v", err)
+	}
+
+	t0 := time.Now().Add(-5 * time.Second)
+	ev := &types.CollectorEvent{
+		EventID:       "ev-int-1",
+		SessionID:     "sess-interrupted-explicit-1",
+		EpochID:       1,
+		FrameSequence: 1,
+		EventSequence: 1,
+		Type:          types.EventConnectionBootstrap,
+		Timestamp:     t0,
+		ConnectionID:  "c-int",
+		Metadata:      types.RawMetadata{Process: "curl.exe"},
+	}
+	if err := sink1.Emit(ev); err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+
+	if err := sink1.EndSession(ctx, "sess-interrupted-explicit-1", SessionStatusInterrupted); err != nil {
+		t.Fatalf("EndSession(interrupted) failed: %v", err)
+	}
+	_ = sink1.Close()
+
+	// 2. Session 2 启动，必须识别 prevStatus == interrupted 并生成 offline gap
+	sink2, err := OpenSQLiteSink(ctx, dbPath, "sess-interrupted-explicit-2", "v1.0.0-test")
+	if err != nil {
+		t.Fatalf("Open sink2 failed: %v", err)
+	}
+	defer sink2.Close()
+
+	qs := NewQueryService(sink2.db)
+	gaps, err := qs.ListMonitoringGaps(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("ListMonitoringGaps failed: %v", err)
+	}
+
+	var foundInterruptedGap bool
+	for _, g := range gaps {
+		if g.Source == "collector_session_boundary" && g.Reason == "collector_unclean_shutdown_or_process_termination" {
+			foundInterruptedGap = true
+		}
+	}
+
+	if !foundInterruptedGap {
+		t.Errorf("Expected offline boundary gap to be generated when restarting after explicit EndSession(interrupted)!")
 	}
 }
 

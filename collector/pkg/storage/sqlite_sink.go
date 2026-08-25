@@ -71,7 +71,7 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 	if err == nil {
 		// 存在前序会话
 		if prevStatus == string(SessionStatusRunning) {
-			// 前序会话非正常退出 (Interrupted)
+			// 前序会话非正常退出 (未显式关闭，状态仍为 running)
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE collector_sessions SET status = 'interrupted', ended_at = ?, updated_at = ? WHERE session_id = ?
 			`, nowStr, nowStr, prevSessionID); err != nil {
@@ -92,6 +92,26 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 			`
 			if _, err := tx.ExecContext(ctx, insertGapSQL, gapID, sessionID, gapStart, nowStr, gapReason, nowStr); err != nil {
 				return fmt.Errorf("failed to insert offline boundary gap: %w", err)
+			}
+		} else if prevStatus == string(SessionStatusInterrupted) {
+			// 前序会话已被标记为 interrupted (例如显式 EndSession(interrupted))
+			gapStart := prevEndedStr.String
+			if gapStart == "" {
+				gapStart = prevLastEventStr.String
+			}
+			if gapStart == "" {
+				gapStart = nowStr
+			}
+			gapID := fmt.Sprintf("gap-offline-%s-%s", prevSessionID, sessionID)
+			gapReason := "collector_unclean_shutdown_or_process_termination"
+
+			insertGapSQL := `
+			INSERT INTO monitoring_gaps (
+				gap_id, source, session_id, started_at, ended_at, reason, precision, created_at
+			) VALUES (?, 'collector_session_boundary', ?, ?, ?, ?, 'interval', ?);
+			`
+			if _, err := tx.ExecContext(ctx, insertGapSQL, gapID, sessionID, gapStart, nowStr, gapReason, nowStr); err != nil {
+				return fmt.Errorf("failed to insert interrupted boundary gap: %w", err)
 			}
 		} else if prevStatus == string(SessionStatusClosedClean) {
 			// 前序会话正常退出，推导 collector_not_running 离线缺口

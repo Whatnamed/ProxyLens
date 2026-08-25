@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,8 +39,8 @@ func TestSubprocessCrashKillAndReopenSmoke(t *testing.T) {
 		t.Fatalf("Failed to start collector subprocess 1: %v", err)
 	}
 
-	// 等待 2 秒让其初始化 session 与落盘
-	time.Sleep(2 * time.Second)
+	// 等待 2.5 秒让子进程写入初始化 session 与落盘事件
+	time.Sleep(2500 * time.Millisecond)
 
 	// 2. 强行 Kill 子进程 1 (模拟崩溃/SIGKILL)
 	if err := cmd1.Process.Kill(); err != nil {
@@ -47,10 +48,28 @@ func TestSubprocessCrashKillAndReopenSmoke(t *testing.T) {
 	}
 	_ = cmd1.Wait()
 
+	// 3. 在启动子进程 2 前，通过只读连接确认在崩溃前至少已有一条 committed journal 记录
+	readDB, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("Failed to open read db after kill: %v", err)
+	}
+	var preCrashJournalCount int
+	var preCrashEventID string
+	err = readDB.QueryRow("SELECT COUNT(*), COALESCE(MAX(event_id), '') FROM event_journal").Scan(&preCrashJournalCount, &preCrashEventID)
+	if err != nil {
+		_ = readDB.Close()
+		t.Fatalf("Failed to query pre-crash journal: %v", err)
+	}
+	_ = readDB.Close()
+
+	if preCrashJournalCount == 0 || preCrashEventID == "" {
+		t.Fatalf("Expected at least 1 committed journal event before crash, got %d", preCrashJournalCount)
+	}
+
 	// 等待 1 秒
 	time.Sleep(1 * time.Second)
 
-	// 3. 启动子进程 2 恢复
+	// 4. 启动子进程 2 恢复
 	cmd2 := exec.Command(collectorBin, "run", "--controller", "http://127.0.0.1:9090", "--connections-interval", "250", "--db", dbPath)
 	stdinPipe, err := cmd2.StdinPipe()
 	if err != nil {
@@ -69,13 +88,20 @@ func TestSubprocessCrashKillAndReopenSmoke(t *testing.T) {
 	_, _ = stdinPipe.Write([]byte("STOP\n"))
 	_ = cmd2.Wait()
 
-	// 4. 打开数据库检验崩溃恢复和 Gap 生成
+	// 5. 打开数据库检验崩溃恢复、Gap 生成以及 preCrashEventID 依然完整保留
 	ctx := context.Background()
 	db, err := storage.OpenDB(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("Failed to reopen database after subprocess crash: %v", err)
 	}
 	defer db.Close()
+
+	// 断言崩溃前已提交的 event 依然完整保留
+	var postReopenEventCount int
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM event_journal WHERE event_id = ?", preCrashEventID).Scan(&postReopenEventCount)
+	if err != nil || postReopenEventCount != 1 {
+		t.Errorf("Committed event %s before crash missing after reopen! count=%d, err=%v", preCrashEventID, postReopenEventCount, err)
+	}
 
 	qs := storage.NewQueryService(db)
 	gaps, err := qs.ListMonitoringGaps(ctx, nil, nil)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
 )
@@ -51,11 +52,13 @@ func RebuildProjections(ctx context.Context, db *sql.DB) error {
 		eventJSONs = append(eventJSONs, ej)
 	}
 
-	// 3. 逐一应用投影
+	// 3. 逐一应用投影 (使用 json.Decoder + UseNumber 保持大整数精度)
 	for _, rawJSON := range eventJSONs {
 		var ev types.CollectorEvent
-		if err := json.Unmarshal([]byte(rawJSON), &ev); err != nil {
-			return fmt.Errorf("failed to unmarshal journal event during rebuild: %w", err)
+		decoder := json.NewDecoder(strings.NewReader(rawJSON))
+		decoder.UseNumber()
+		if err := decoder.Decode(&ev); err != nil {
+			return fmt.Errorf("failed to decode journal event during rebuild: %w", err)
 		}
 
 		if err := ApplyEventProjection(ctx, tx, &ev); err != nil {
