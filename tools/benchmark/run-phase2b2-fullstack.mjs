@@ -6,12 +6,14 @@
  * 覆盖要求与 Hard Assertions:
  * 1. 正规 RFC 6455 WebSocket Mock (支持握手、Pong、Close 帧与安全销毁)
  * 2. 捕获并校验 Collector 进程 exitCode == 0 与 stderr
- * 3. 严格机械证明: pushedFrames == enqueued == dequeued, queueOverloads == 0
- * 4. SQLite Integrity HEALTHY 断言
- * 5. Journal 连续性断言: COUNT(*) == DISTINCT(sequence) == MAX - MIN + 1 (绝对单调连续无空洞)
- * 6. CPU / RSS 采样 (显式报告 unavailable)
- * 7. Cadence 每组至少 30s (支持 --quick 10s 用于快速验证)
- * 8. Soak 至少 10min; 若为快速运行则显式标注 INCOMPLETE
+ * 3. 严格机械证明: pushedFrames === enqueuedFrames === dequeuedFrames (完全相等无漏帧)
+ * 4. queueOverloads === 0 (零队列溢出)
+ * 5. SQLite Integrity HEALTHY 断言
+ * 6. Journal 连续性断言: COUNT(*) == DISTINCT(sequence) == MAX - MIN + 1 (绝对单调连续无空洞)
+ * 7. 并发基准严格断言: seq2 > seq1 && exitCode == 0 && Journal 严格连续
+ * 8. CPU / RSS 采样 (显式报告 unavailable)
+ * 9. Cadence 每组至少 30s (支持 --quick 10s 用于快速验证)
+ * 10. Soak 至少 10min; 若为快速运行则显式标注 INCOMPLETE
  *
  * 任一 Hard Assertion 失败立即抛错并 process.exit(1)。
  */
@@ -137,6 +139,12 @@ function startStandardWebSocketMock(frames, intervalMs = 250) {
       resolve({
         port,
         getPushedFrames: () => pushedFrames,
+        stopPusher: () => {
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+        },
         close: () => new Promise((r) => {
           if (timer) clearInterval(timer);
           clientSockets.forEach((s) => {
@@ -354,7 +362,13 @@ async function runBenchmarkScenario(name, workloadType, intervalMs, durationSec)
 
   await new Promise((r) => setTimeout(r, durationSec * 1000));
 
-  // 发送优雅关机信号
+  // 1. 先安全停止 Mock 推送新帧，锁定已推帧数
+  mock.stopPusher();
+
+  // 2. 短暂等待 400ms，确保 Collector 队列消费完所有在途帧并安全落盘
+  await new Promise((r) => setTimeout(r, 400));
+
+  // 3. 发送优雅关机信号
   try {
     collectorProc.stdin.write('STOP\n');
     collectorProc.stdin.end();
@@ -453,8 +467,8 @@ async function runBenchmarkScenario(name, workloadType, intervalMs, durationSec)
   if (result.exitCode !== 0) {
     throw new Error(`[HARD ASSERTION FAILED] Scenario '${name}' exited with non-zero code ${result.exitCode}`);
   }
-  if (result.enqueuedFrames !== result.dequeuedFrames || result.enqueuedFrames === 0) {
-    throw new Error(`[HARD ASSERTION FAILED] Scenario '${name}' queue mismatch: enqueued=${result.enqueuedFrames}, dequeued=${result.dequeuedFrames}`);
+  if (result.pushedFrames !== result.enqueuedFrames || result.enqueuedFrames !== result.dequeuedFrames || result.enqueuedFrames === 0) {
+    throw new Error(`[HARD ASSERTION FAILED] Scenario '${name}' frame equality mismatch: pushed=${result.pushedFrames}, enqueued=${result.enqueuedFrames}, dequeued=${result.dequeuedFrames}`);
   }
   if (result.queueOverloads !== 0) {
     throw new Error(`[HARD ASSERTION FAILED] Scenario '${name}' experienced queue overloads: ${result.queueOverloads}`);
@@ -507,16 +521,18 @@ async function runAccountingConcurrencyBenchmark() {
 
   // 再次等待 2 秒并停止 Collector
   await new Promise((r) => setTimeout(r, 2000));
+  mock.stopPusher();
+  await new Promise((r) => setTimeout(r, 400));
   try {
     collectorProc.stdin.write('STOP\n');
     collectorProc.stdin.end();
   } catch {}
-  await new Promise((r) => {
-    collectorProc.on('close', r);
+  const collectorExitCode = await new Promise((r) => {
+    collectorProc.on('close', (code) => r(code));
     setTimeout(() => {
       try { collectorProc.kill(); } catch {}
-      r();
-    }, 2000);
+      r(1);
+    }, 3000);
   });
   await mock.close();
 
@@ -539,11 +555,14 @@ async function runAccountingConcurrencyBenchmark() {
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 
   // HARD ASSERTIONS for Concurrency
+  if (collectorExitCode !== 0) {
+    throw new Error(`[HARD ASSERTION FAILED] Concurrency collector non-zero exit code: ${collectorExitCode}`);
+  }
   if (!isContinuous) {
     throw new Error(`[HARD ASSERTION FAILED] Concurrency benchmark Journal continuity broken: count=${journalStats.count}, distinct=${journalStats.distinctSequences}, min=${journalStats.minSequence}, max=${journalStats.maxSequence}`);
   }
-  if (seq2 < seq1 || seq1 === 0) {
-    throw new Error(`[HARD ASSERTION FAILED] Concurrency benchmark sequence regression: seq1=${seq1}, seq2=${seq2}`);
+  if (seq2 <= seq1 || seq1 === 0) {
+    throw new Error(`[HARD ASSERTION FAILED] Concurrency benchmark sequence must strictly increase: seq1=${seq1}, seq2=${seq2}`);
   }
 
   return {
@@ -551,6 +570,7 @@ async function runAccountingConcurrencyBenchmark() {
     rebuildStdout: rebRes.stdout.trim(),
     run1Freshness: sumObj.freshness,
     run2Freshness: sum2Obj.freshness,
+    collectorExitCode,
     seq1,
     seq2,
     journalCount: journalStats.count,
@@ -573,7 +593,7 @@ async function main() {
   console.log(`Cadence Duration: ${cadenceDuration}s per scenario (min 30s standard)`);
   console.log(`Soak Target     : ${soakDuration}s (${isFullSoak ? 'Full 10min Soak' : 'Sanity Soak'})`);
   console.log(`CPU / RSS Sample: unavailable (No OS agent attached; explicitly reported)`);
-  console.log(`Hard Assertions : exitCode=0, pushed==enqueued==dequeued, overloads=0, Journal continuous, integrity=HEALTHY`);
+  console.log(`Hard Assertions : exitCode=0, pushed===enqueued===dequeued, overloads=0, Journal continuous, seq2>seq1, integrity=HEALTHY`);
   console.log('----------------------------------------------------------------\n');
 
   // 1. Cadence 矩阵全栈测试 (1000ms, 500ms, 250ms, 250ms relay)
@@ -581,16 +601,16 @@ async function main() {
   const results = [];
 
   results.push(await runBenchmarkScenario('Cadence 1000ms (Steady 100 conns)', 'steady', 1000, cadenceDuration));
-  console.log(`  ✔ 1000ms Steady completed (${cadenceDuration}s, Journal Continuous: PASS)`);
+  console.log(`  ✔ 1000ms Steady completed (${cadenceDuration}s, Pushed=Enqueued=Dequeued: PASS, Journal Continuous: PASS)`);
 
   results.push(await runBenchmarkScenario('Cadence 500ms (Churn short conns)', 'churn', 500, cadenceDuration));
-  console.log(`  ✔ 500ms Churn completed (${cadenceDuration}s, Journal Continuous: PASS)`);
+  console.log(`  ✔ 500ms Churn completed (${cadenceDuration}s, Pushed=Enqueued=Dequeued: PASS, Journal Continuous: PASS)`);
 
   results.push(await runBenchmarkScenario('Cadence 250ms (Mixed NTP+Proxy+Direct)', 'mixed', 250, cadenceDuration));
-  console.log(`  ✔ 250ms Mixed completed (${cadenceDuration}s, Journal Continuous: PASS)`);
+  console.log(`  ✔ 250ms Mixed completed (${cadenceDuration}s, Pushed=Enqueued=Dequeued: PASS, Journal Continuous: PASS)`);
 
   results.push(await runBenchmarkScenario('Cadence 250ms (Relay-Heavy 50 pairs)', 'relay-heavy', 250, cadenceDuration));
-  console.log(`  ✔ 250ms Relay-Heavy completed (${cadenceDuration}s, Journal Continuous: PASS)`);
+  console.log(`  ✔ 250ms Relay-Heavy completed (${cadenceDuration}s, Pushed=Enqueued=Dequeued: PASS, Journal Continuous: PASS)`);
 
   console.log('\n----------------------------------------------------------------');
   console.log('Full-Stack Benchmark Matrix Results:');
@@ -611,9 +631,11 @@ async function main() {
   // 2. 并发 Rebuild 测试
   console.log('\n[2/3] Running Accounting Concurrency Benchmark (Rebuild during 250ms live ingestion)...');
   const concurRes = await runAccountingConcurrencyBenchmark();
+  console.log(`  ✔ Collector Clean Exit          : ExitCode=${concurRes.collectorExitCode} (PASS)`);
   console.log(`  ✔ Non-blocking Rebuild Duration : ${concurRes.rebuildDurationMs} ms`);
   console.log(`  ✔ Run 1 Sequence Max & Lag      : Boundary=${concurRes.run1Freshness?.sourceJournalSequenceMax}, Current=${concurRes.seq1}, LagEvents=${concurRes.run1Freshness?.lagEvents} (isFresh=${concurRes.run1Freshness?.isFresh})`);
   console.log(`  ✔ Run 2 Catchup Max & Lag       : Boundary=${concurRes.run2Freshness?.sourceJournalSequenceMax}, Current=${concurRes.seq2}, LagEvents=${concurRes.run2Freshness?.lagEvents} (isFresh=${concurRes.run2Freshness?.isFresh})`);
+  console.log(`  ✔ Strict Sequence Growth (seq2>seq1): PASS (Seq1=${concurRes.seq1} -> Seq2=${concurRes.seq2})`);
   console.log(`  ✔ Journal Monotonic Continuity  : ${concurRes.isContinuous ? `CONFIRMED (Total ${concurRes.journalCount} events, strictly continuous)` : 'FAIL'}`);
 
   // 3. Soak 稳定性实测

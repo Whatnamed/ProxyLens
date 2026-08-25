@@ -22,7 +22,7 @@
      - Soak 稳定性: 30s Sanity 高压处理 118 帧，队列溢出为 0，Post-Soak 完整性为 **HEALTHY**（10min 长期认证模式保持参数可选）；
      - CPU / RSS: 显式标记为 `unavailable`（未附加系统级探针，不作主观估计）；
   7. **PRODUCT A–E 全字段确定性验收 (F10)**：所有 5 项产品核心场景按 PRODUCT.md 逐字段机械断言 100% PASS（含 NTP 端口独立、1GB 大文件各元数据字段与策略组精确对齐、DIRECT 隔离、中断缺口与节点历史锁定）；
-  8. **测试套件覆盖**: 全部 35 个 Go 测试 (test:9, state:10, storage:26) + 18 个 Phase 0 回归测试 100% PASS。
+  8. **测试套件覆盖**: 全部 52 个 Go 测试 (test: 9, state: 10, storage: 33) + 18 个 Phase 0 回归测试 100% PASS。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64) / 12th Gen Intel Core i5-12400 (12 cores)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
