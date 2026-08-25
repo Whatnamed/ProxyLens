@@ -400,7 +400,7 @@ func TestProductAcceptanceDeterministic(t *testing.T) {
 	// -------------------------------------------------------------
 	// 场景 A: 后台 NTP 审计 (PRODUCT.md 5.1)
 	// 操作: Windows 后台/杀毒软件向 us.pool.ntp.org:123 发起 UDP 同步
-	// 验收: 记录完整连接 (进程名 HipsDaemon.exe, 目标 us.pool.ntp.org:123, UDP, 规则 NETWORK,udp, 策略链路, 节点, 流量)
+	// 验收: 记录完整连接 (进程名 HipsDaemon.exe, 目标 us.pool.ntp.org, 端口 123, UDP, 规则 NETWORK,udp, 策略链路, 节点, 流量)
 	// -------------------------------------------------------------
 	_ = sink.Emit(&types.CollectorEvent{
 		EventID: "ntp-1", SessionID: "sess-acceptance-1", EpochID: 1, FrameSequence: 1, EventSequence: 1,
@@ -408,7 +408,7 @@ func TestProductAcceptanceDeterministic(t *testing.T) {
 		Route: types.RouteProxy, AttributionClass: types.ClassKnownApplication,
 		Metadata: types.RawMetadata{
 			Process: "HipsDaemon.exe", ProcessPath: "C:\\Program Files\\Security\\HipsDaemon.exe",
-			Host: "us.pool.ntp.org:123", DestinationIP: "198.51.100.1", DestinationPort: "123", Network: "udp",
+			Host: "us.pool.ntp.org", DestinationIP: "198.51.100.1", DestinationPort: "123", Network: "udp",
 		},
 		Rule: "NETWORK,udp", RulePayload: "udp",
 		Chains: []string{"Node-US-NTP", "ProxyGroup"},
@@ -523,7 +523,13 @@ func TestProductAcceptanceDeterministic(t *testing.T) {
 
 	svc := NewAnalyticsService(db)
 
-	// [机械断言 A: NTP]
+	// [机械断言 A: NTP 逐字段严格机械断言]
+	var ntpDestPort string
+	err = db.QueryRowContext(ctx, "SELECT destination_port FROM connections WHERE connection_id = 'c-ntp-audit';").Scan(&ntpDestPort)
+	if err != nil {
+		t.Fatalf("Scene A assertion failed: destination_port not found in connections: %v", err)
+	}
+
 	var ntpRecord AccountedTrafficRecord
 	err = db.QueryRowContext(ctx, `
 		SELECT connection_id, process, process_path, host, destination_ip, network, rule, rule_payload, final_proxy, raw_upload, raw_download
@@ -533,17 +539,44 @@ func TestProductAcceptanceDeterministic(t *testing.T) {
 		&ntpRecord.DestinationIP, &ntpRecord.Network, &ntpRecord.Rule, &ntpRecord.RulePayload,
 		&ntpRecord.FinalProxy, &ntpRecord.RawUpload, &ntpRecord.RawDownload)
 	if err != nil {
-		t.Fatalf("Scene A assertion failed: NTP connection not found: %v", err)
+		t.Fatalf("Scene A assertion failed: NTP connection not found in accounted_traffic: %v", err)
 	}
-	if ntpRecord.Process != "HipsDaemon.exe" || ntpRecord.Host != "us.pool.ntp.org:123" || ntpRecord.Network != "udp" || ntpRecord.Rule != "NETWORK,udp" || ntpRecord.FinalProxy != "Node-US-NTP" {
-		t.Errorf("Scene A NTP fields mismatch: %+v", ntpRecord)
+	if ntpRecord.Process != "HipsDaemon.exe" || ntpRecord.Host != "us.pool.ntp.org" || ntpDestPort != "123" || ntpRecord.Network != "udp" || ntpRecord.Rule != "NETWORK,udp" || ntpRecord.FinalProxy != "Node-US-NTP" || ntpRecord.RawUpload != 48 || ntpRecord.RawDownload != 48 {
+		t.Errorf("Scene A NTP fields mismatch: %+v (port=%s)", ntpRecord, ntpDestPort)
 	}
 
-	// [机械断言 B: 大文件代理下载 1GiB 归属明确，无 Unknown 盲区]
+	// [机械断言 B: 大文件代理下载 1GiB 逐字段严格机械断言]
+	var proxyLargeDestPort string
+	err = db.QueryRowContext(ctx, "SELECT destination_port FROM connections WHERE connection_id = 'c-proxy-large';").Scan(&proxyLargeDestPort)
+	if err != nil {
+		t.Fatalf("Scene B assertion failed: destination_port not found in connections: %v", err)
+	}
+
+	var proxyLargeRecord AccountedTrafficRecord
+	err = db.QueryRowContext(ctx, `
+		SELECT connection_id, process, process_path, host, destination_ip, network, rule, rule_payload, final_proxy, top_policy_group, raw_download, accounted_download
+		FROM accounted_traffic
+		WHERE connection_id = 'c-proxy-large' LIMIT 1;
+	`).Scan(&proxyLargeRecord.ConnectionID, &proxyLargeRecord.Process, &proxyLargeRecord.ProcessPath,
+		&proxyLargeRecord.Host, &proxyLargeRecord.DestinationIP,
+		&proxyLargeRecord.Network, &proxyLargeRecord.Rule, &proxyLargeRecord.RulePayload,
+		&proxyLargeRecord.FinalProxy, &proxyLargeRecord.TopPolicyGroup,
+		&proxyLargeRecord.RawDownload, &proxyLargeRecord.AccountedDownload)
+	if err != nil {
+		t.Fatalf("Scene B assertion failed: large proxy record not found: %v", err)
+	}
+	if proxyLargeRecord.Process != "downloader.exe" || proxyLargeRecord.ProcessPath != "C:\\Tools\\downloader.exe" ||
+		proxyLargeRecord.Host != "cdn.speedtest.net" || proxyLargeDestPort != "443" ||
+		proxyLargeRecord.Rule != "Speedtest" || proxyLargeRecord.RulePayload != "cdn.speedtest.net" ||
+		proxyLargeRecord.FinalProxy != "Node-HK-01" || proxyLargeRecord.TopPolicyGroup != "Proxy-Auto" ||
+		proxyLargeRecord.RawDownload != oneGiB || proxyLargeRecord.AccountedDownload != oneGiB {
+		t.Errorf("Scene B large proxy fields mismatch: %+v (port=%s)", proxyLargeRecord, proxyLargeDestPort)
+	}
+
 	summary, err := svc.GetUsageSummary(ctx, AnalyticsFilter{})
 	if err != nil { t.Fatalf("GetUsageSummary failed: %v", err) }
 	if summary.ProxyDownload < oneGiB {
-		t.Errorf("Scene B assertion failed: expected ProxyDownload >= 1GiB, got %d", summary.ProxyDownload)
+		t.Errorf("Scene B summary assertion failed: expected ProxyDownload >= 1GiB, got %d", summary.ProxyDownload)
 	}
 	var unknownCount int64
 	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM accounted_traffic WHERE run_id = (SELECT run_id FROM accounting_runs WHERE status='completed' LIMIT 1) AND accounting_class = 'missing_attribution';").Scan(&unknownCount)

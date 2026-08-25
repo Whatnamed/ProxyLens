@@ -48,8 +48,23 @@ func OpenSQLiteSink(ctx context.Context, dbPath string, sessionID string, collec
 	return sink, nil
 }
 
+func (s *SQLiteEventSink) stopHeartbeat() {
+	s.mu.Lock()
+	done := s.heartbeatDone
+	s.heartbeatDone = nil
+	s.mu.Unlock()
+
+	if done != nil {
+		close(done)
+		s.heartbeatWg.Wait()
+	}
+}
+
 // BeginSession 初始化 Collector 会话并检测前序会话异常与生成离线 Gap (启动心跳)
 func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, collectorVersion string) error {
+	// 1. 在获取主互斥锁之前，先安全停止并 join 前序可能运行的心跳协程，杜绝持锁等待导致的死锁
+	s.stopHeartbeat()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -164,12 +179,7 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 		return err
 	}
 
-	// 3. 启动后台轻量心跳循环 (正确 stop/join 前序心跳 goroutine)
-	if s.heartbeatDone != nil {
-		close(s.heartbeatDone)
-		s.heartbeatWg.Wait()
-		s.heartbeatDone = nil
-	}
+	// 3. 启动后台轻量心跳循环
 	s.heartbeatDone = make(chan struct{})
 	s.heartbeatWg.Add(1)
 	go s.heartbeatLoop(sessionID, s.heartbeatDone)
@@ -323,15 +333,8 @@ func (s *SQLiteEventSink) EndSession(ctx context.Context, sessionID string, stat
 
 // Close 关闭 Sink 并释放资源
 func (s *SQLiteEventSink) Close() error {
-	s.mu.Lock()
-	if s.heartbeatDone != nil {
-		close(s.heartbeatDone)
-		s.heartbeatDone = nil
-	}
-	s.mu.Unlock()
-
-	// 等待心跳协程彻底退出，防止在关闭数据库连接后并发写
-	s.heartbeatWg.Wait()
+	// 先安全停止并等待心跳协程彻底退出，防止在关闭数据库连接后并发写
+	s.stopHeartbeat()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

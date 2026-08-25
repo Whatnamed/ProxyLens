@@ -113,7 +113,7 @@ func runCollector(args []string) {
 	sessionID := fmt.Sprintf("sess-%d", time.Now().UnixNano())
 
 	fmt.Println("================================================================")
-	fmt.Println("ProxyLens Production Collector (Phase 2B1 Accounting & Aggregation)")
+	fmt.Println("ProxyLens Production Collector (Phase 2B2 Runtime Validation & Storage Operations)")
 	fmt.Println("================================================================")
 	fmt.Printf("Session ID              : %s\n", sessionID)
 	fmt.Println(cfg.String())
@@ -455,6 +455,10 @@ func runStorageCommand(args []string) {
 		var fkViolations int
 		for fkRows.Next() {
 			fkViolations++
+		}
+		if err := fkRows.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "PRAGMA foreign_key_check iteration error: %v\n", err)
+			os.Exit(1)
 		}
 
 		fmt.Printf("================================================================\n")

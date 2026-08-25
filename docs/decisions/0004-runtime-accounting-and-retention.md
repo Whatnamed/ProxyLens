@@ -38,37 +38,38 @@
 
 ### 3.2 显式 Freshness / Staleness API (F3)
 - 实现 `GetAccountingFreshness(ctx)`：
-  - `SourceMaxSequence`: 当前有效核算 run 所覆盖的最大序列；
-  - `CurrentMaxSequence`: `event_journal` 中的实际最新最大序列；
+  - `SourceJournalSequenceMax`: 当前有效核算 run 所覆盖的最大序列；
+  - `CurrentJournalSequenceMax`: `event_journal` 中的实际最新最大序列；
   - `LagEvents`: 当前落后事件数；
   - `IsFresh`: 当且仅当 `LagEvents == 0` 时为 true。
 - `GetUsageSummary` 在响应中携带该 Freshness 状态。
 
 ### 3.3 Collector 运行时心跳与动态 Liveness Gap 判定 (F4)
-- `SQLiteEventSink` 运行轻量后台心跳循环（5s 间隔），更新 `last_heartbeat_at`；
+- `SQLiteEventSink` 运行轻量后台心跳循环（5s 间隔），更新 `last_heartbeat_at`，具备锁外 safe stop/join 机制；
 - `GetCoverage` 在查询处于 `running` 状态的会话时，若 `now - last_heartbeat_at > max(3 * interval, 15s)`，动态派生 `collector_runtime_liveness: collector_heartbeat_stale` 监控缺口，防止挂起会话伪装为 100% 覆盖。
 
 ### 3.4 纯派生层保留策略 (Safe Derived Retention, F5)
-- 保留策略仅清理旧的已完成或失败的派生 runs（`accounting_runs`、`accounted_traffic`、`relay_relations`、`usage_hourly_dimensions`）；
+- 保留策略仅清理旧的已完成或失败的派生 runs（`accounting_runs`、`accounted_traffic`、`relay_relations`、`usage_hourly_dimensions`），按 1000 行/批短事务删除并让锁；
 - 保留策略 **100% 严禁删除 raw authority 数据**（`event_journal`、`collector_sessions`、`connection_traffic`、`monitoring_gaps` 等）；
 - 提供 `collector storage cleanup --dry-run` 与 `--apply` 两种操作模式。
 
 ### 3.5 WAL 运维配置与 Integrity Check (F6, F11)
 - SQLite 统一连接配置 `_pragma=busy_timeout=10000&_pragma=foreign_keys=ON&_pragma=synchronous=NORMAL`；
 - 首次初始化时持久化 `PRAGMA journal_mode=WAL`，避免多进程重复升级模式导致的排他锁冲突；
-- CLI 提供 `collector storage integrity --db <path>` 执行 `PRAGMA integrity_check` 与 `PRAGMA foreign_key_check`。
+- CLI 提供 `collector storage integrity --db <path>` 执行 `PRAGMA integrity_check` 与 `PRAGMA foreign_key_check`（含 `rows.Err()` 校验）。
 
 ---
 
 ## 4. Consequences & Verification
 
-- **基准测试矩阵**:
-  - 1000ms Steady (100 conns): 10.1s, DB=2960 KB, WAL=0 KB, Coverage=96.9%, Integrity=PASS;
-  - 500ms Churn: 10.1s, DB=3948 KB, WAL=0 KB, Coverage=97.4%, Integrity=PASS;
-  - 250ms Mixed (NTP+Proxy+Direct): 10.1s, DB=3648 KB, WAL=0 KB, Coverage=97.2%, Integrity=PASS;
-  - 250ms Relay-Heavy (50 pairs): 10.1s, DB=11308 KB, WAL=0 KB, Coverage=94.9%, Integrity=PASS.
-- **并发核算性能**: 在 250ms 高频写入下，Rebuild 耗时 **278 ms**，Freshness 正确反映 `LagEvents=38, isFresh=false`，随后追平至 `isFresh=true, LagEvents=0`。
-- **Soak 稳定性**: 30 秒高压全栈连续处理 125 帧无内存泄漏、无锁超时，数据库完整性检验为 **HEALTHY**。
-- **PRODUCT A–E 确定性验收**: 全部 5 项产品核心场景验收全部通过。
+- **基准测试矩阵 (标准 >=30s 实测)**:
+  - 1000ms Steady (100 conns, 30s): 30 帧, DB=8536.0 KB, Peak WAL=4124.1 KB, Coverage=97.9%, Integrity=PASS;
+  - 500ms Churn (50 conns, 30s): 60 帧, DB=8120.0 KB, Peak WAL=4164.3 KB, Coverage=98.9%, Integrity=PASS;
+  - 250ms Mixed (NTP+Proxy+Direct, 30s): 117 帧, DB=7008.0 KB, Peak WAL=4116.0 KB, Coverage=98.7%, Integrity=PASS;
+  - 250ms Relay-Heavy (50 pairs, 30s): 118 帧, DB=32804.0 KB, Peak WAL=4140.1 KB, Coverage=95.2%, Integrity=PASS;
+  - CPU / RSS: 标为 `unavailable`（未附加系统探针，不作主观估计）。
+- **并发核算性能**: 在 250ms 高频写入下，Non-blocking Rebuild 耗时 **213 ms**，Freshness 正确反映 `LagEvents=101, isFresh=false`，随后追平至 `isFresh=true, LagEvents=0`，全局序列严格单调递增。
+- **Soak 稳定性**: 30 秒高压全栈连续处理 118 帧，队列溢出为 0，数据库完整性检验为 **HEALTHY**（10min 长期认证模式保持可选参数）。
+- **PRODUCT A–E 确定性全字段验收**: 全部 5 项产品核心场景按 PRODUCT.md 逐字段机械断言 100% 通过。
 
 Phase 2 存储、核算与运行时验证阶段正式圆满完成，系统已具备进入 Phase 3 Audit UI 开发的全部条件。

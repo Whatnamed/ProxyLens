@@ -6,22 +6,23 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 2 Complete — Storage, Accounting & Runtime Validation Finalized (Ready for Phase 3 UI)`
-- **代码状态**：Phase 2B2 运行时验证、非阻塞核算边界、心跳存活检测、派生层安全保留策略与全栈性能/验收实测已完全落地并验证通过：
-  1. **非阻塞绑定序列核算重建 (F1 / F2, ADR 0004)**：引入全局单调自增 `journal_sequence` 与 `accounting_runs.source_journal_sequence_max`；阶段 A 仅用 <5ms 短事务锁定边界，阶段 B~F 采用分批（1000 行/批）退避重试短事务写入，彻底杜绝 Collector 实时采集被阻塞；
+- **当前阶段**：`Phase 2 Complete — Storage, Accounting & Runtime Validation Finalized (Ready for Phase 3 Audit UI)`
+- **代码状态**：Phase 2 存储、版本化核算、运行时生命周期与安全保留策略已全部落地并验证通过：
+  1. **非阻塞绑定序列核算重建 (F1 / F2, ADR 0004)**：引入全局单调自增 `journal_sequence` 与 `accounting_runs.source_journal_sequence_max`；阶段 A 仅用 <5ms 短事务锁定边界，阶段 B~F 采用分批（1000 行/批）退避重试短事务写入并主动让锁，实时采集在 250ms 高频写入下零阻塞；
   2. **显式 Freshness / Staleness API (F3)**：实现 `GetAccountingFreshness(ctx)`，精准返回 `LagEvents` 与 `IsFresh` 状态，并在 `GetUsageSummary` 中提供；
-  3. **Collector 心跳与运行时存活检测 (F4)**：`SQLiteEventSink` 运行 5s 后台轻量心跳；`GetCoverage` 在会话处于 `running` 但心跳超时时动态派生 `collector_runtime_liveness: collector_heartbeat_stale` 监控缺口；
-  4. **安全派生层保留策略 (F5, Safe Derived Retention)**：实现 `PlanDerivedRetention` 与 `ApplyDerivedRetention`，仅清理旧 completed/failed 派生运行，**100% 保证 raw authority 数据（Journal, Sessions, Gaps）永不被删除**；
-  5. **WAL 运维与 SQLite 完整性保障 (F6 / F11)**：DSN 统一配置 `synchronous=NORMAL`, `busy_timeout=10000`, 并在 CLI 提供 `collector storage integrity` 执行 `PRAGMA integrity_check` 与 `foreign_key_check`；
-  6. **全栈性能基准矩阵 (F7 / F8 / F9)**：
-     - 1000ms Steady (100 conns): 10.1s, DB=2960 KB, WAL=0 KB, Coverage=96.9%, Integrity=PASS;
-     - 500ms Churn (50 conns): 10.1s, DB=3948 KB, WAL=0 KB, Coverage=97.4%, Integrity=PASS;
-     - 250ms Mixed (NTP+Proxy+Direct): 10.1s, DB=3648 KB, WAL=0 KB, Coverage=97.2%, Integrity=PASS;
-     - 250ms Relay-Heavy (50 pairs): 10.1s, DB=11308 KB, WAL=0 KB, Coverage=94.9%, Integrity=PASS;
-     - 并发 Rebuild: 在持续 250ms 写入期间，Non-blocking Rebuild 耗时 **278 ms**，Freshness 正确识别并追平；
-     - 30s 高压 Soak: 连续处理 125 帧，内存平稳，数据库完整性检验为 **HEALTHY**；
-  7. **PRODUCT A–E 确定性验收 (F10)**：所有 5 项产品核心场景全部通过确定性单元测试验证；
-  8. **测试套件覆盖**: 全部 33 个 Go 测试 + 18 个 Phase 0 回归测试 100% PASS。
+  3. **Collector 心跳与运行时存活检测 (F4)**：`SQLiteEventSink` 运行 5s 后台轻量心跳并具备安全 stop/join 机制；`GetCoverage` 在会话处于 `running` 但心跳超时时动态派生 `collector_runtime_liveness: collector_heartbeat_stale` 监控缺口；
+  4. **安全派生层保留策略 (F5, Safe Derived Retention)**：实现 `PlanDerivedRetention` 与 `ApplyDerivedRetention`，采用 1000 行/批短事务清理旧 completed/failed 派生运行，**100% 保证 raw authority 数据（Journal, Sessions, Gaps）永不被删除**；
+  5. **WAL 运维与 SQLite 完整性保障 (F6 / F11)**：DSN 统一配置 `synchronous=NORMAL`, `busy_timeout=10000`, 并在 CLI 提供 `collector storage integrity` 执行 `PRAGMA integrity_check` 与 `foreign_key_check`（含 `rows.Err()` 校验）；
+  6. **全栈性能基准实测矩阵 (F7 / F8 / F9, 标准 >=30s 每组实测)**：
+     - 1000ms Steady (100 conns, 30s): 30 帧, DB=8536.0 KB, Peak WAL=4124.1 KB, Coverage=97.9%, Integrity=PASS;
+     - 500ms Churn (50 conns, 30s): 60 帧, DB=8120.0 KB, Peak WAL=4164.3 KB, Coverage=98.9%, Integrity=PASS;
+     - 250ms Mixed (NTP+Proxy+Direct, 30s): 117 帧, DB=7008.0 KB, Peak WAL=4116.0 KB, Coverage=98.7%, Integrity=PASS;
+     - 250ms Relay-Heavy (50 pairs, 30s): 118 帧, DB=32804.0 KB, Peak WAL=4140.1 KB, Coverage=95.2%, Integrity=PASS;
+     - 并发 Rebuild 耗时: 持续 250ms 写入下 Non-blocking Rebuild 耗时 **213 ms**，Freshness 正确识别 `LagEvents=101, isFresh=false`，追平后 `isFresh=true, LagEvents=0`，全局序列单调自增（Zero Loss）；
+     - Soak 稳定性: 30s Sanity 高压处理 118 帧，队列溢出为 0，Post-Soak 完整性为 **HEALTHY**（10min 长期认证模式保持参数可选）；
+     - CPU / RSS: 显式标记为 `unavailable`（未附加系统级探针，不作主观估计）；
+  7. **PRODUCT A–E 全字段确定性验收 (F10)**：所有 5 项产品核心场景按 PRODUCT.md 逐字段机械断言 100% PASS（含 NTP 端口独立、1GB 大文件各元数据字段与策略组精确对齐、DIRECT 隔离、中断缺口与节点历史锁定）；
+  8. **测试套件覆盖**: 全部 34 个 Go 测试 + 18 个 Phase 0 回归测试 100% PASS。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64) / 12th Gen Intel Core i5-12400 (12 cores)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
@@ -60,15 +61,16 @@
 
 ### 实现选型 (Phase 3 决策项)
 
-- UI 技术选型：Tauri + React/Vue vs 本地 Web UI (Go 内置轻量静态服务 + REST API)；
-- 审计智能与规则诊断交互设计 (Audit Intelligence, Top-K 规则误命中、节点归属分布图表)。
+- UI 技术选型：Tauri + React/Vue vs 本地轻量 Web UI (Go 内置轻量静态服务 + REST API)；
+- UI 与 Collector 通信契约：共享 SQLite 只读连接 vs 本地轻量 IPC / HTTP 查询端点。
 
 ---
 
 ## Next Step
 
-进入 **Phase 3 — Audit Intelligence & Local UI (MVP 可视化审计看板)**：
-1. UI 架构选型与轻量 API 端点对接；
-2. 实现会话与时间窗口选择器、监控覆盖率状态栏；
-3. 实现出站代理节点、分流规则命中与进程流量排行榜看板；
-4. 实现多跳中继去重可解释性下钻与证据展示。
+进入 **Phase 3 — Audit UI (MVP 可视化审计看板)**：
+1. UI 技术路线选型与轻量 API 端点对接；
+2. 会话与时间窗口选择器、监控覆盖率状态栏；
+3. 出站代理节点、分流规则命中与进程流量排行榜看板；
+4. 多跳中继去重可解释性下钻与证据展示。
+*(注：Audit Intelligence 智能规则诊断与异常发现将在 Phase 4 开展)*
