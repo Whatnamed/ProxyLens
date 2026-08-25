@@ -20,6 +20,32 @@ type migrationFile struct {
 	sql     string
 }
 
+// GetMaxBinaryMigrationVersion 获取当前二进制中内嵌的最高 migration 版本号
+func GetMaxBinaryMigrationVersion() int {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return 0
+	}
+	maxVer := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		parts := strings.SplitN(entry.Name(), "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		version, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+		if version > maxVer {
+			maxVer = version
+		}
+	}
+	return maxVer
+}
+
 // RunMigrations 自动应用所有未执行的 SQL 迁移并对未知更高版本 fail closed
 func RunMigrations(ctx context.Context, db *sql.DB) error {
 	entries, err := migrationFS.ReadDir("migrations")

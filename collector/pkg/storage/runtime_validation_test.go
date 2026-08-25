@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -658,3 +659,47 @@ func TestProductAcceptanceDeterministic(t *testing.T) {
 		t.Errorf("Scene E assertion failed: Afternoon proxy should be Node-JP-02, got %+v", topProxiesAfternoon)
 	}
 }
+
+// 7. OpenReadOnlyDB 语义、结构化错误与写操作拒绝测试 (G5)
+func TestOpenReadOnlyDBSemanticsAndMutationRejection(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. 不存在的文件 -> 必须返回 ErrDBUnavailable
+	_, err := OpenReadOnlyDB(ctx, filepath.Join(os.TempDir(), "non-existent-proxylens.db"))
+	if err == nil || !errors.Is(err, ErrDBUnavailable) {
+		t.Fatalf("Expected ErrDBUnavailable for non-existent file, got %v", err)
+	}
+
+	// 2. 正常初始化的 DB -> 必须以只读模式打开且支持 SELECT
+	dbPath, cleanup := createRuntimeTestDB(t)
+	defer cleanup()
+
+	initDB, err := OpenDB(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	_ = initDB.Close()
+
+	roDB, err := OpenReadOnlyDB(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnlyDB failed: %v", err)
+	}
+	defer roDB.Close()
+
+	var count int
+	if err := roDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations;").Scan(&count); err != nil {
+		t.Fatalf("Read-only query failed: %v", err)
+	}
+
+	// 3. 验证执行写操作 (INSERT/CREATE/UPDATE) 必须被 SQLite 拒绝
+	_, err = roDB.ExecContext(ctx, "CREATE TABLE should_fail (id INT);")
+	if err == nil {
+		t.Fatalf("Expected write operation to fail on read-only DB connection, but it succeeded")
+	}
+
+	_, err = roDB.ExecContext(ctx, "INSERT INTO schema_migrations (version, name, applied_at) VALUES (999, 'bad', 'now');")
+	if err == nil {
+		t.Fatalf("Expected INSERT to fail on read-only DB connection, but it succeeded")
+	}
+}
+

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -58,6 +59,9 @@ func (q *QueryService) GetConnection(ctx context.Context, sessionID string, epoc
 		&rec.MonitoredUploadTotal, &rec.MonitoredDownloadTotal,
 	)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrConnectionNotFound
+		}
 		return nil, err
 	}
 
@@ -410,3 +414,104 @@ func (q *QueryService) ListDiagnosticResiduals(ctx context.Context, startTime, e
 
 	return residuals, nil
 }
+
+// GetLatestSession 查询最近启动的 Collector 会话信息
+func (q *QueryService) GetLatestSession(ctx context.Context) (*CollectorSessionRecord, error) {
+	row := q.db.QueryRowContext(ctx, `
+		SELECT
+			session_id, started_at, ended_at, status, collector_version,
+			last_event_at, last_heartbeat_at, heartbeat_interval_ms, created_at, updated_at
+		FROM collector_sessions
+		ORDER BY started_at DESC LIMIT 1;
+	`)
+
+	var sess CollectorSessionRecord
+	var startStr, createdStr, updatedStr string
+	var endedStr, lastEventStr, lastHbStr sql.NullString
+
+	err := row.Scan(
+		&sess.SessionID, &startStr, &endedStr, &sess.Status, &sess.CollectorVersion,
+		&lastEventStr, &lastHbStr, &sess.HeartbeatIntervalMs, &createdStr, &updatedStr,
+	)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
+	sess.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
+	sess.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedStr)
+	if endedStr.Valid {
+		t, _ := time.Parse(time.RFC3339Nano, endedStr.String)
+		sess.EndedAt = &t
+	}
+	if lastEventStr.Valid {
+		t, _ := time.Parse(time.RFC3339Nano, lastEventStr.String)
+		sess.LastEventAt = &t
+	}
+	if lastHbStr.Valid {
+		t, _ := time.Parse(time.RFC3339Nano, lastHbStr.String)
+		sess.LastHeartbeatAt = &t
+	}
+
+	return &sess, nil
+}
+
+// GetAccountedTrafficForConnection 查询单条连接在最新有效核算 Run 中的核算记录
+func (q *QueryService) GetAccountedTrafficForConnection(ctx context.Context, connectionID string) (*AccountedTrafficRecord, error) {
+	row := q.db.QueryRowContext(ctx, `
+		SELECT
+			run_id, source_event_id, session_id, epoch_id, connection_id, observed_at,
+			interval_start, interval_end, precision, route, raw_upload, raw_download,
+			accounted_upload, accounted_download, accounting_class, process, process_path,
+			host, sniff_host, destination_ip, network, rule, rule_payload, final_proxy,
+			top_policy_group, dimension_derivation_version
+		FROM accounted_traffic
+		WHERE connection_id = ?
+		  AND run_id = (SELECT run_id FROM accounting_runs WHERE status = 'completed' ORDER BY started_at DESC LIMIT 1)
+		LIMIT 1;
+	`, connectionID)
+
+	var rec AccountedTrafficRecord
+	var obsAtStr string
+	var intStart, intEnd, proc, procPath, host, sniffHost, destIP, net, rule, rulePayload, finalProxy, topGroup sql.NullString
+
+	err := row.Scan(
+		&rec.RunID, &rec.SourceEventID, &rec.SessionID, &rec.EpochID, &rec.ConnectionID, &obsAtStr,
+		&intStart, &intEnd, &rec.Precision, &rec.Route, &rec.RawUpload, &rec.RawDownload,
+		&rec.AccountedUpload, &rec.AccountedDownload, &rec.AccountingClass, &proc, &procPath,
+		&host, &sniffHost, &destIP, &net, &rule, &rulePayload, &finalProxy,
+		&topGroup, &rec.DimensionDerivationVersion,
+	)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	rec.ObservedAt, _ = time.Parse(time.RFC3339Nano, obsAtStr)
+	if intStart.Valid {
+		t, _ := time.Parse(time.RFC3339Nano, intStart.String)
+		rec.IntervalStart = &t
+	}
+	if intEnd.Valid {
+		t, _ := time.Parse(time.RFC3339Nano, intEnd.String)
+		rec.IntervalEnd = &t
+	}
+	rec.Process = proc.String
+	rec.ProcessPath = procPath.String
+	rec.Host = host.String
+	rec.SniffHost = sniffHost.String
+	rec.DestinationIP = destIP.String
+	rec.Network = net.String
+	rec.Rule = rule.String
+	rec.RulePayload = rulePayload.String
+	rec.FinalProxy = finalProxy.String
+	rec.TopPolicyGroup = topGroup.String
+
+	return &rec, nil
+}
+

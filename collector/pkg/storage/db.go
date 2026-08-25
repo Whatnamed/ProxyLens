@@ -100,3 +100,62 @@ func execWithTxRetry(ctx context.Context, db *sql.DB, maxRetries int, fn func(tx
 	}
 	return fmt.Errorf("transaction failed after %d retries: %w", maxRetries, lastErr)
 }
+
+var (
+	ErrDBUnavailable      = fmt.Errorf("database unavailable: file does not exist or cannot be accessed")
+	ErrSchemaIncompatible = fmt.Errorf("database schema incompatible")
+)
+
+// OpenReadOnlyDB 以严格只读模式打开指定 SQLite 数据库并验证模式兼容性，绝不执行迁移或写操作
+func OpenReadOnlyDB(ctx context.Context, dbPath string) (*sql.DB, error) {
+	if dbPath == "" {
+		return nil, fmt.Errorf("%w: dbPath cannot be empty", ErrDBUnavailable)
+	}
+
+	// 1. 检查文件物理存在性
+	if fi, err := os.Stat(dbPath); err != nil || fi.IsDir() {
+		return nil, fmt.Errorf("%w: sqlite file not found at %s", ErrDBUnavailable, dbPath)
+	}
+
+	// 2. 使用 query_only=ON 配置 DSN
+	dsn := fmt.Sprintf("%s?_pragma=query_only=ON&_pragma=busy_timeout=10000&_pragma=foreign_keys=ON&_pragma=synchronous=NORMAL", dbPath)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to open sqlite connection: %v", ErrDBUnavailable, err)
+	}
+
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(time.Hour)
+
+	// 3. 快速模式兼容性检验 (只读 SELECT)
+	var tableExists int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations';").Scan(&tableExists); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: failed to query sqlite_master: %v", ErrDBUnavailable, err)
+	}
+	if tableExists == 0 {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: schema_migrations table does not exist", ErrSchemaIncompatible)
+	}
+
+	maxBinary := GetMaxBinaryMigrationVersion()
+	var maxDBVersion sql.NullInt64
+	if err := db.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations;").Scan(&maxDBVersion); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: failed to query max schema version: %v", ErrSchemaIncompatible, err)
+	}
+
+	if !maxDBVersion.Valid || maxDBVersion.Int64 <= 0 {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: no applied migrations recorded", ErrSchemaIncompatible)
+	}
+
+	if maxDBVersion.Int64 > int64(maxBinary) {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: db schema version (%d) is newer than binary supported max (%d)", ErrSchemaIncompatible, maxDBVersion.Int64, maxBinary)
+	}
+
+	return db, nil
+}
+

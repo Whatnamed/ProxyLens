@@ -12,6 +12,7 @@ var (
 	ErrNoCompletedAccountingRun   = errors.New("no completed accounting run available")
 	ErrAccountingInvariantBroken   = errors.New("accounting invariant violation")
 	ErrAccountingAlreadyRunning    = errors.New("another accounting rebuild is currently in progress")
+	ErrConnectionNotFound          = errors.New("connection not found")
 )
 
 // SessionStatus 表示 Collector 运行会话状态
