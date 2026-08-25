@@ -56,18 +56,17 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   - UI 随开随用，关闭 UI 完全不影响后台采集；
   - Controller 不可用时通过指数退避 + Jitter 自动恢复。
 
-### Storage
+### Storage (已确认生产架构)
 
-需要保存：
-
-- 历史连接及其发生当时的元数据；
-- 连接流量；
-- 监控缺口；
-- 后续必要的聚合数据或索引。
-
-当前**首选候选**是本地 SQLite，并优先评估 WAL 模式是否适合 Collector 单写、UI 并发读取的模式。
-
-SQLite + WAL 目前不是不可修改的最终决定。Phase 1 / Phase 2 需要用真实负载验证其写入、查询和恢复行为后再正式确认。
+- **实现引擎**: **SQLite + WAL**（纯 Go 驱动 `modernc.org/sqlite`，`PRAGMA synchronous=NORMAL;`，详见 `docs/decisions/0002-storage-engine.md` 与 `docs/decisions/0003-reconciled-accounting.md`）；
+- **双事实权威源 (Dual Authority Model)**:
+  - **网络观测事实权威 (Network Observation Authority)**: `event_journal`（包含所有 CollectorEvent 原始 JSON 与 SHA256 签名）；
+  - **采集器生命周期权威 (Collector Lifecycle Authority)**: `collector_sessions`（记录启停、状态与崩溃边界）；
+  - **派生查询/核算/聚合视图 (Derived Views)**: 由 `event_journal` 与 `collector_sessions` 100% 确定性可重建；
+- **三层数据结构**:
+  1. **原始事实层 (Immutable Raw Evidence)**: `event_journal`, `connection_traffic`；
+  2. **版本化核算层 (Versioned Reconciled Accounting)**: `accounting_runs`, `relay_relations`, `accounted_traffic`；
+  3. **分时聚合层 (Materialized Hourly Aggregates)**: `usage_hourly_dimensions`。
 
 ### UI
 

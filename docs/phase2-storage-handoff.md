@@ -133,7 +133,59 @@ Collector 通过解耦的 `sink.EventSink` 接口输出强类型事件。事件�
 
 ---
 
+---
+
 ## 3. Sink 故障与 Fail-Stop 语义
 
 - `StateEngine` 在每次调用 `sink.Emit()` 时均检查返回的 error；
 - 一旦底层存储写入失败（如磁盘满、SQLite 锁死），`StateEngine` 立即终止状态推进并返回错误，Worker 立即触发 Context 取消并停止处理后续所有快照帧，主进程以非 0 状态码退出，确保数据状态绝不向前漂移。
+
+---
+
+## 4. Phase 2B1 存储分层与消费模型 (Layered Storage Model)
+
+Phase 2B1 确立了三层存储分层架构与双事实权威体系：
+
+```text
+┌───────────────────────────────────────────────────────────┐
+│              Dual Authority Source of Truth               │
+│  - Network Observation Authority : event_journal (SHA256) │
+│  - Collector Lifecycle Authority : collector_sessions     │
+└─────────────────────────────┬─────────────────────────────┘
+                              │ 100% Deterministic Rebuild
+                              ▼
+┌───────────────────────────────────────────────────────────┐
+│ Layer 1: Immutable Raw Evidence                           │
+│  - event_journal                                          │
+│  - connection_traffic                                     │
+│  - connections (Observation Lifecycle: ended_at / reason) │
+└─────────────────────────────┬─────────────────────────────┘
+                              │ Reconciled Accounting Run
+                              ▼
+┌───────────────────────────────────────────────────────────┐
+│ Layer 2: Versioned Reconciled Accounting (ADR 0003)       │
+│  - accounting_runs (status: running -> completed)         │
+│  - relay_relations (confirmed 1-to-1, ambiguous, unpaired)│
+│  - accounted_traffic (accounted_upload/download, routes)  │
+└─────────────────────────────┬─────────────────────────────┘
+                              │ Materialization
+                              ▼
+┌───────────────────────────────────────────────────────────┐
+│ Layer 3: Materialized Hourly Aggregations & Query API     │
+│  - usage_hourly_dimensions (9 dimensions, byte conserved) │
+│  - AnalyticsService (Summary, Top rankings, Coverage)     │
+└───────────────────────────────────────────────────────────┘
+```
+
+### 4.1 连接观察生命周期语义 (Observation Lifecycle Semantics)
+- `observation_ended_at` 与 `observation_end_reason` 共同定义连接是否仍在被观察；
+- `disappeared_from_snapshot`: 正常从快照中消失；
+- `epoch_boundary`: 计数器重置 / Epoch Break 导致旧 Epoch 连接结束观察；
+- `collector_session_closed`: 采集器正常停止（`closed_clean`）导致连接结束观察；
+- `collector_session_interrupted`: 采集器异常终止或重启后补齐的中断结束（时间权威回溯至前序 session 的 `last_event_at` 或 `ended_at`）。
+
+### 4.2 流量与聚合安全准则
+1. **歧义中继永不扣减**：遇到 1-to-N 或 N-to-1 候选关系，标记为 `ambiguous_relay`，`accounted = raw`；
+2. **分时分配绝对守恒**：跨小时区间分摊采用向下取整并由首个桶补偿余数，杜绝浮点精度丢失；
+3. **出站节点历史真实**：`final_proxy` 与 `top_policy_group` 仅由事件发生时的 `chains` 派生，绝不读取当前活动选择组状态重写历史；
+4. **监控覆盖率精准求并**：重叠的 Controller 缺口与 Collector 离线缺口通过区间求并集（Interval Union）计算真实未覆盖时长。

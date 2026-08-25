@@ -130,11 +130,19 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 - [x] 实现轻量 `QueryService` 并提供 `collector storage inspect / gaps / rebuild` CLI 命令；
 - [x] 端到端实测验证通过（NTP、短请求、持续下载持久化与离线 Gap 推导 100% PASS）。
 
-### Phase 2B — Aggregations, Authoritative Accounting & Full-Stack Benchmark [NEXT]
-- [ ] 多维分时聚合表（按 Process、Host、Outbound Node 聚合分时用量）；
-- [ ] 全局时序下的权威 Relay 重新对账与 Residual 校验；
-- [ ] 数据保留与清理策略 (Retention & Periodic WAL Checkpoint)；
-- [ ] 全栈端到端写入性能与长效 Soak 基准测试。
+### Phase 2B1 — Accounting, Lifecycle Semantics & Hourly Aggregations [COMPLETED]
+- [x] 规范连接观察生命周期字段（`observation_ended_at` / `reason` / `event_id`），支持 Disappeared、Epoch Break、Clean Stop 与 Interrupted 恢复；
+- [x] 实现版本化核算架构（`accounting_runs`、`relay_relations`、`accounted_traffic`，ADR 0003）；
+- [x] 实现保守中继对账算法（Conservative Relay Reconciliation v1，歧义不扣流量）；
+- [x] 实现单层物化分时聚合（`usage_hourly_dimensions`，9 大核心维度，整数纳秒向下取整 + 确定性余数补偿，整数字节绝对守恒）；
+- [x] 实现监控覆盖率区间并集模型（`CoverageSummary`，Interval Union，Known Scope 隔离）；
+- [x] 交付面向 UI 的稳定 `AnalyticsService` 与 `collector accounting rebuild`、`collector analytics` 系列 CLI 命令。
+
+### Phase 2B2 — Lifecycle Ops, Full-Stack Benchmarks & PRODUCT Acceptance [NEXT]
+- [ ] 数据保留与清理策略 (Retention Policy & Automated Cleanup)；
+- [ ] 周期性 SQLite WAL checkpoint 调度器；
+- [ ] 全栈端到端写入性能基准（针对真实高负载）与长效 Soak 稳定性实测；
+- [ ] 运行 PRODUCT.md A-E 场景持久化与核算最终验收。
 
 ### Acceptance
 
