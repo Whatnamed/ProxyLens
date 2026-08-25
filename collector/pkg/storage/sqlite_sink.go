@@ -277,14 +277,13 @@ func (s *SQLiteEventSink) Emit(ev *types.CollectorEvent) error {
 }
 
 // EndSession 显式结束当前会话并原子关闭未闭合连接
+// EndSession 结束 Collector 会话并持久化最终状态
 func (s *SQLiteEventSink) EndSession(ctx context.Context, sessionID string, status SessionStatus) error {
+	// 1. 在获取主互斥锁之前，先安全停止并 join 心跳协程，杜绝持锁等待导致的死锁
+	s.stopHeartbeat()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if s.heartbeatDone != nil {
-		close(s.heartbeatDone)
-		s.heartbeatDone = nil
-	}
 
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339Nano)

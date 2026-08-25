@@ -52,7 +52,7 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   - 记录 Controller / Collector 监控缺口（Monitoring Gaps 与 Counter Epoch Breaks）；
   - 通过有界队列（Bounded Queue）背压机制输出确定性事件流（详见 `docs/collector-rfc.md` 与 `docs/phase2-storage-handoff.md`）。
 - **运行特征**:
-  - 轻量后台常驻（内存占用稳定受控在 < 15MB，状态完全回收无基数泄漏，全栈写入基准在 Phase 2 端到端测量）；
+  - 轻量后台常驻（采用有界内存队列与活跃连接表回收机制）；
   - UI 随开随用，关闭 UI 完全不影响后台采集；
   - Controller 不可用时通过指数退避 + Jitter 自动恢复。
 

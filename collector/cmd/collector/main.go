@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -270,8 +271,9 @@ func runStorageCommand(args []string) {
 		fs := flag.NewFlagSet("collector storage inspect", flag.ContinueOnError)
 		dbPath := fs.String("db", "", "Path to SQLite database file")
 		latestN := fs.Int("latest", 20, "Number of latest records to display")
+		jsonOutput := fs.Bool("json", false, "Output in JSON format including journal continuity stats")
 		if err := fs.Parse(subargs); err != nil || *dbPath == "" {
-			fmt.Fprintf(os.Stderr, "Usage: collector storage inspect --db <path> [--latest <n>]\n")
+			fmt.Fprintf(os.Stderr, "Usage: collector storage inspect --db <path> [--latest <n>] [--json]\n")
 			os.Exit(1)
 		}
 
@@ -283,14 +285,48 @@ func runStorageCommand(args []string) {
 		}
 		defer db.Close()
 
+		var journalCount, distinctSeqCount int64
+		var minSeq, maxSeq sql.NullInt64
+		_ = db.QueryRowContext(ctx, "SELECT COUNT(*), COUNT(DISTINCT journal_sequence), MIN(journal_sequence), MAX(journal_sequence) FROM event_journal;").Scan(
+			&journalCount, &distinctSeqCount, &minSeq, &maxSeq,
+		)
+
+		isContinuous := false
+		if journalCount > 0 && minSeq.Valid && maxSeq.Valid {
+			if maxSeq.Int64-minSeq.Int64+1 == journalCount && journalCount == distinctSeqCount {
+				isContinuous = true
+			}
+		}
+
 		qs := storage.NewQueryService(db)
 		conns, err := qs.ListConnections(ctx, storage.ConnectionFilter{Limit: *latestN})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Query failed: %v\n", err)
 			os.Exit(1)
 		}
+
+		if *jsonOutput {
+			res := map[string]interface{}{
+				"dbPath":           *dbPath,
+				"connectionsCount": len(conns),
+				"journalStats": map[string]interface{}{
+					"count":             journalCount,
+					"distinctSequences": distinctSeqCount,
+					"minSequence":       minSeq.Int64,
+					"maxSequence":       maxSeq.Int64,
+					"isContinuous":      isContinuous,
+				},
+				"connections": conns,
+			}
+			b, _ := json.MarshalIndent(res, "", "  ")
+			fmt.Println(string(b))
+			return
+		}
+
 		fmt.Printf("================================================================\n")
 		fmt.Printf("Persisted Connections in %s (Showing latest %d records):\n", *dbPath, len(conns))
+		fmt.Printf("Journal Events: %d (Distinct Seq: %d, Min: %d, Max: %d, Continuous: %v)\n",
+			journalCount, distinctSeqCount, minSeq.Int64, maxSeq.Int64, isContinuous)
 		fmt.Printf("================================================================\n")
 		for idx, c := range conns {
 			hostOrIP := c.Metadata.Host

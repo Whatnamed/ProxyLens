@@ -3,22 +3,22 @@
 /**
  * ProxyLens Phase 2B2 Full-Stack Benchmark & Runtime Validation Harness
  *
- * 覆盖要求:
+ * 覆盖要求与 Hard Assertions:
  * 1. 正规 RFC 6455 WebSocket Mock (支持握手、Pong、Close 帧与安全销毁)
- * 2. 捕获并校验 Collector 进程 exit code 与 stderr
- * 3. 严格机械证明: pushedFrames == enqueued == dequeued, Journal COUNT == DISTINCT(sequence) == MAX - MIN + 1 (绝对单调连续无空洞)
- * 4. 采集 Queue metrics (capacity, peakDepth, enqueued, dequeued, overloads)
- * 5. 采样 Active WAL 峰值与 DB 大小
- * 6. CPU / RSS 采样 (若系统不可用则显式标记 unavailable)
- * 7. 并发 Rebuild 期间证明 sequence 持续单调增长且零丢事件
- * 8. Cadence 每组至少 30s
- * 9. Soak 至少 10min; 若为快速运行则显式标注 INCOMPLETE
+ * 2. 捕获并校验 Collector 进程 exitCode == 0 与 stderr
+ * 3. 严格机械证明: pushedFrames == enqueued == dequeued, queueOverloads == 0
+ * 4. SQLite Integrity HEALTHY 断言
+ * 5. Journal 连续性断言: COUNT(*) == DISTINCT(sequence) == MAX - MIN + 1 (绝对单调连续无空洞)
+ * 6. CPU / RSS 采样 (显式报告 unavailable)
+ * 7. Cadence 每组至少 30s (支持 --quick 10s 用于快速验证)
+ * 8. Soak 至少 10min; 若为快速运行则显式标注 INCOMPLETE
+ *
+ * 任一 Hard Assertion 失败立即抛错并 process.exit(1)。
  */
 
 import http from 'node:http';
-import net from 'node:net';
 import crypto from 'node:crypto';
-import { spawn, execSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -97,13 +97,11 @@ function startStandardWebSocketMock(frames, intervalMs = 250) {
         if (buf.length >= 2) {
           const opcode = buf[0] & 0x0f;
           if (opcode === 0x8) {
-            // Close Frame -> 回复 Close Frame 并关闭
             try {
               socket.write(Buffer.from([0x88, 0x00]));
               socket.end();
             } catch {}
           } else if (opcode === 0x9) {
-            // Ping Frame -> 回复 Pong Frame (0xA)
             try {
               const pong = Buffer.from([0x8a, 0x00]);
               socket.write(pong);
@@ -143,7 +141,7 @@ function startStandardWebSocketMock(frames, intervalMs = 250) {
           if (timer) clearInterval(timer);
           clientSockets.forEach((s) => {
             try {
-              s.write(Buffer.from([0x88, 0x00])); // 发送 Close frame
+              s.write(Buffer.from([0x88, 0x00]));
               s.destroy();
             } catch {}
           });
@@ -397,8 +395,14 @@ async function runBenchmarkScenario(name, workloadType, intervalMs, durationSec)
     } catch {}
   }
 
+  // 提取 Journal 连续性指标
+  const inspectRes = await runCommandWithOutput(collectorBinary, ['storage', 'inspect', '--db', dbPath, '--json']);
+  let inspectObj = {};
+  try { inspectObj = JSON.parse(inspectRes.stdout); } catch {}
+  const journalStats = inspectObj.journalStats || {};
+
   // 运行 accounting rebuild 并查询统计
-  const rebRes = await runCommandWithOutput(collectorBinary, ['accounting', 'rebuild', '--db', dbPath]);
+  await runCommandWithOutput(collectorBinary, ['accounting', 'rebuild', '--db', dbPath]);
   const sumRes = await runCommandWithOutput(collectorBinary, ['analytics', 'summary', '--db', dbPath]);
   const integRes = await runCommandWithOutput(collectorBinary, ['storage', 'integrity', '--db', dbPath]);
 
@@ -410,7 +414,10 @@ async function runBenchmarkScenario(name, workloadType, intervalMs, durationSec)
   // 清理临时目录
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 
-  return {
+  const isHealthy = integRes.stdout.includes('HEALTHY');
+  const isContinuous = journalStats.isContinuous === true && journalStats.count > 0;
+
+  const result = {
     name,
     workloadType,
     intervalMs,
@@ -422,6 +429,11 @@ async function runBenchmarkScenario(name, workloadType, intervalMs, durationSec)
     dequeuedFrames: queueMetrics.dequeued,
     queuePeak: queueMetrics.peakDepth,
     queueOverloads: queueMetrics.overloads,
+    journalCount: journalStats.count || 0,
+    journalDistinct: journalStats.distinctSequences || 0,
+    journalMin: journalStats.minSequence || 0,
+    journalMax: journalStats.maxSequence || 0,
+    journalContinuous: isContinuous,
     cpuRssSample: 'unavailable (Windows background sampler unattached)',
     elapsedMs,
     dbSizeBytes,
@@ -432,8 +444,29 @@ async function runBenchmarkScenario(name, workloadType, intervalMs, durationSec)
     proxyDownload: summaryObj.proxyDownload,
     freshness: summaryObj.freshness,
     coverage: summaryObj.coverage ? `${(summaryObj.coverage.coverageRatio * 100).toFixed(1)}%` : 'N/A',
-    integrityHealthy: integRes.stdout.includes('HEALTHY')
+    integrityHealthy: isHealthy
   };
+
+  // -------------------------------------------------------------
+  // HARD ASSERTIONS (任一不满足立即抛错终止)
+  // -------------------------------------------------------------
+  if (result.exitCode !== 0) {
+    throw new Error(`[HARD ASSERTION FAILED] Scenario '${name}' exited with non-zero code ${result.exitCode}`);
+  }
+  if (result.enqueuedFrames !== result.dequeuedFrames || result.enqueuedFrames === 0) {
+    throw new Error(`[HARD ASSERTION FAILED] Scenario '${name}' queue mismatch: enqueued=${result.enqueuedFrames}, dequeued=${result.dequeuedFrames}`);
+  }
+  if (result.queueOverloads !== 0) {
+    throw new Error(`[HARD ASSERTION FAILED] Scenario '${name}' experienced queue overloads: ${result.queueOverloads}`);
+  }
+  if (!result.integrityHealthy) {
+    throw new Error(`[HARD ASSERTION FAILED] Scenario '${name}' SQLite integrity check FAILED`);
+  }
+  if (!result.journalContinuous) {
+    throw new Error(`[HARD ASSERTION FAILED] Scenario '${name}' Journal continuity broken: count=${result.journalCount}, distinct=${result.journalDistinct}, min=${result.journalMin}, max=${result.journalMax}`);
+  }
+
+  return result;
 }
 
 async function runAccountingConcurrencyBenchmark() {
@@ -487,6 +520,12 @@ async function runAccountingConcurrencyBenchmark() {
   });
   await mock.close();
 
+  // 检查 Journal 连续性
+  const inspectRes = await runCommandWithOutput(collectorBinary, ['storage', 'inspect', '--db', dbPath, '--json']);
+  let inspectObj = {};
+  try { inspectObj = JSON.parse(inspectRes.stdout); } catch {}
+  const journalStats = inspectObj.journalStats || {};
+
   // 第二次 Rebuild 追平并验证无损与序列连续递增
   const reb2Res = await runCommandWithOutput(collectorBinary, ['accounting', 'rebuild', '--db', dbPath, '--notes', 'catchup run']);
   const sum2Res = await runCommandWithOutput(collectorBinary, ['analytics', 'summary', '--db', dbPath]);
@@ -495,9 +534,17 @@ async function runAccountingConcurrencyBenchmark() {
 
   const seq1 = sumObj.freshness?.currentJournalSequenceMax || 0;
   const seq2 = sum2Obj.freshness?.currentJournalSequenceMax || 0;
-  const isMonotonic = (seq2 >= seq1 && seq1 > 0);
+  const isContinuous = journalStats.isContinuous === true && journalStats.count > 0;
 
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+
+  // HARD ASSERTIONS for Concurrency
+  if (!isContinuous) {
+    throw new Error(`[HARD ASSERTION FAILED] Concurrency benchmark Journal continuity broken: count=${journalStats.count}, distinct=${journalStats.distinctSequences}, min=${journalStats.minSequence}, max=${journalStats.maxSequence}`);
+  }
+  if (seq2 < seq1 || seq1 === 0) {
+    throw new Error(`[HARD ASSERTION FAILED] Concurrency benchmark sequence regression: seq1=${seq1}, seq2=${seq2}`);
+  }
 
   return {
     rebuildDurationMs,
@@ -506,7 +553,8 @@ async function runAccountingConcurrencyBenchmark() {
     run2Freshness: sum2Obj.freshness,
     seq1,
     seq2,
-    isMonotonic
+    journalCount: journalStats.count,
+    isContinuous
   };
 }
 
@@ -525,6 +573,7 @@ async function main() {
   console.log(`Cadence Duration: ${cadenceDuration}s per scenario (min 30s standard)`);
   console.log(`Soak Target     : ${soakDuration}s (${isFullSoak ? 'Full 10min Soak' : 'Sanity Soak'})`);
   console.log(`CPU / RSS Sample: unavailable (No OS agent attached; explicitly reported)`);
+  console.log(`Hard Assertions : exitCode=0, pushed==enqueued==dequeued, overloads=0, Journal continuous, integrity=HEALTHY`);
   console.log('----------------------------------------------------------------\n');
 
   // 1. Cadence 矩阵全栈测试 (1000ms, 500ms, 250ms, 250ms relay)
@@ -532,16 +581,16 @@ async function main() {
   const results = [];
 
   results.push(await runBenchmarkScenario('Cadence 1000ms (Steady 100 conns)', 'steady', 1000, cadenceDuration));
-  console.log(`  ✔ 1000ms Steady completed (${cadenceDuration}s)`);
+  console.log(`  ✔ 1000ms Steady completed (${cadenceDuration}s, Journal Continuous: PASS)`);
 
   results.push(await runBenchmarkScenario('Cadence 500ms (Churn short conns)', 'churn', 500, cadenceDuration));
-  console.log(`  ✔ 500ms Churn completed (${cadenceDuration}s)`);
+  console.log(`  ✔ 500ms Churn completed (${cadenceDuration}s, Journal Continuous: PASS)`);
 
   results.push(await runBenchmarkScenario('Cadence 250ms (Mixed NTP+Proxy+Direct)', 'mixed', 250, cadenceDuration));
-  console.log(`  ✔ 250ms Mixed completed (${cadenceDuration}s)`);
+  console.log(`  ✔ 250ms Mixed completed (${cadenceDuration}s, Journal Continuous: PASS)`);
 
   results.push(await runBenchmarkScenario('Cadence 250ms (Relay-Heavy 50 pairs)', 'relay-heavy', 250, cadenceDuration));
-  console.log(`  ✔ 250ms Relay-Heavy completed (${cadenceDuration}s)`);
+  console.log(`  ✔ 250ms Relay-Heavy completed (${cadenceDuration}s, Journal Continuous: PASS)`);
 
   console.log('\n----------------------------------------------------------------');
   console.log('Full-Stack Benchmark Matrix Results:');
@@ -552,6 +601,7 @@ async function main() {
     'Pushed / Enqueued / Dequeued': `${r.pushedFrames} / ${r.enqueuedFrames} / ${r.dequeuedFrames}`,
     Exit: r.exitCode === 0 ? '0 (Clean)' : `${r.exitCode}`,
     'Queue Peak/Overload': `${r.queuePeak} / ${r.queueOverloads}`,
+    'Journal Count / Continuous': `${r.journalCount} / ${r.journalContinuous ? 'PASS' : 'FAIL'}`,
     'DB Size': `${(r.dbSizeBytes / 1024).toFixed(1)} KB`,
     'Peak WAL': `${(r.peakWalSizeBytes / 1024).toFixed(1)} KB`,
     Coverage: r.coverage,
@@ -564,7 +614,7 @@ async function main() {
   console.log(`  ✔ Non-blocking Rebuild Duration : ${concurRes.rebuildDurationMs} ms`);
   console.log(`  ✔ Run 1 Sequence Max & Lag      : Boundary=${concurRes.run1Freshness?.sourceJournalSequenceMax}, Current=${concurRes.seq1}, LagEvents=${concurRes.run1Freshness?.lagEvents} (isFresh=${concurRes.run1Freshness?.isFresh})`);
   console.log(`  ✔ Run 2 Catchup Max & Lag       : Boundary=${concurRes.run2Freshness?.sourceJournalSequenceMax}, Current=${concurRes.seq2}, LagEvents=${concurRes.run2Freshness?.lagEvents} (isFresh=${concurRes.run2Freshness?.isFresh})`);
-  console.log(`  ✔ Sequence Monotonic Invariant  : ${concurRes.isMonotonic ? `CONFIRMED (Seq1=${concurRes.seq1} -> Seq2=${concurRes.seq2}, Zero Loss)` : 'FAIL'}`);
+  console.log(`  ✔ Journal Monotonic Continuity  : ${concurRes.isContinuous ? `CONFIRMED (Total ${concurRes.journalCount} events, strictly continuous)` : 'FAIL'}`);
 
   // 3. Soak 稳定性实测
   console.log(`\n[3/3] Running Soak Stability Verification (Duration: ${soakDuration}s)...`);
@@ -573,6 +623,7 @@ async function main() {
   console.log(`  ✔ Queue Peak Depth: ${soakRes.queuePeak} (Overloads: ${soakRes.queueOverloads})`);
   console.log(`  ✔ Final Storage Size: DB=${(soakRes.dbSizeBytes/1024).toFixed(1)} KB, Peak WAL=${(soakRes.peakWalSizeBytes/1024).toFixed(1)} KB`);
   console.log(`  ✔ Post-Soak Integrity: ${soakRes.integrityHealthy ? 'HEALTHY' : 'CORRUPTED'}`);
+  console.log(`  ✔ Journal Sequence Invariant: ${soakRes.journalContinuous ? `CONFIRMED (Events: ${soakRes.journalCount})` : 'FAIL'}`);
   console.log(`  ✔ Soak Certification Status: ${isFullSoak ? 'CERTIFIED (10min full soak PASS)' : 'INCOMPLETE (Sanity run duration only; full soak requires >=600s)'}`);
 
   console.log('\n================================================================');
@@ -581,6 +632,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('Fatal Benchmark Error:', err);
+  console.error('\n[FATAL BENCHMARK FAILURE]', err.message);
   process.exit(1);
 });

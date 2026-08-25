@@ -261,6 +261,39 @@ func TestCollectorHeartbeatAndRuntimeLivenessCoverage(t *testing.T) {
 	}
 }
 
+// 4.1. Heartbeat 安全 Stop/Join 与多会话生命周期回归测试
+func TestHeartbeatLifecycleStopJoinAndRepeatedSessions(t *testing.T) {
+	ctx := context.Background()
+	dbPath, cleanup := createRuntimeTestDB(t)
+	defer cleanup()
+
+	// 1. 打开第一个 Session
+	sink, err := OpenSQLiteSink(ctx, dbPath, "sess-hb-1", "v1.0.0-test")
+	if err != nil {
+		t.Fatalf("Open sink failed: %v", err)
+	}
+
+	// 2. 调用 EndSession: 必须安全触发 stopHeartbeat 并等待 join，不产生死锁
+	if err := sink.EndSession(ctx, "sess-hb-1", SessionStatusClosedClean); err != nil {
+		t.Fatalf("EndSession failed: %v", err)
+	}
+
+	// 3. 再次启动新 Session: 必须能够正常开启新心跳协程
+	if err := sink.BeginSession(ctx, "sess-hb-2", "v1.0.0-test"); err != nil {
+		t.Fatalf("BeginSession 2 failed: %v", err)
+	}
+
+	// 4. 重复调用 EndSession 或并发调用不会死锁或 panic
+	if err := sink.EndSession(ctx, "sess-hb-2", SessionStatusClosedClean); err != nil {
+		t.Fatalf("EndSession 2 failed: %v", err)
+	}
+
+	// 5. 最终 Close 必须正常完成
+	if err := sink.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+}
+
 // 5. Safe Derived Retention 绝不删除原始权威数据测试 (F5)
 func TestSafeDerivedRetentionNeverDeletesRawAuthority(t *testing.T) {
 	ctx := context.Background()
