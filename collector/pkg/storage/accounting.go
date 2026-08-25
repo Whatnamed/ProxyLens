@@ -316,18 +316,25 @@ func reconcileBoundedRelayRelations(ctx context.Context, db *sql.DB, runID strin
 		for _, c := range conns {
 			hasProcess := strings.TrimSpace(c.process) != ""
 			hasRule := strings.TrimSpace(c.rule) != ""
+			hasProcessAndRule := hasProcess && hasRule
 
-			isCandidate := c.attributionClass == types.ClassRelayCandidate ||
-				c.attributionClass == types.ClassConfirmedRelayDuplicate ||
-				(!hasProcess && !hasRule && len(c.chains) > 0 && c.route == types.RouteProxy)
+			// 核心原则：如果 metadata 明确具备 process+rule (或显式为 KnownApplication)，绝对不是 Candidate！
+			isLogical := hasProcessAndRule || c.attributionClass == types.ClassKnownApplication
 
-			isLogical := c.attributionClass == types.ClassKnownApplication || (hasProcess && hasRule)
+			isCandidate := false
+			if !hasProcessAndRule {
+				if c.attributionClass == types.ClassRelayCandidate ||
+					c.attributionClass == types.ClassConfirmedRelayDuplicate ||
+					(!hasProcess && !hasRule && len(c.chains) > 0 && c.route == types.RouteProxy) {
+					isCandidate = true
+				}
+			}
 
-			if isCandidate {
-				candidates = append(candidates, c)
-			} else if isLogical {
+			if isLogical {
 				logicals = append(logicals, c)
 				resultClasses[c.key] = ClassUnique
+			} else if isCandidate {
+				candidates = append(candidates, c)
 			} else {
 				resultClasses[c.key] = ClassMissingAttribution
 			}

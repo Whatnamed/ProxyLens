@@ -12,11 +12,15 @@ import (
 
 // SQLiteEventSink 提供基于 SQLite + WAL 的可靠事件持久化 Sink
 type SQLiteEventSink struct {
-	mu            sync.Mutex
-	db            *sql.DB
-	sessionID     string
-	dbPath        string
-	heartbeatDone chan struct{}
+	mu                         sync.Mutex
+	db                         *sql.DB
+	sessionID                  string
+	dbPath                     string
+	heartbeatDone              chan struct{}
+	heartbeatWg                sync.WaitGroup
+	lastHeartbeatAt            time.Time
+	consecutiveHeartbeatErrors int
+	lastHeartbeatErr           error
 }
 
 // NewSQLiteEventSink 创建 SQLiteEventSink 实例
@@ -160,17 +164,21 @@ func (s *SQLiteEventSink) BeginSession(ctx context.Context, sessionID string, co
 		return err
 	}
 
-	// 3. 启动后台轻量心跳循环 (F4)
+	// 3. 启动后台轻量心跳循环 (正确 stop/join 前序心跳 goroutine)
 	if s.heartbeatDone != nil {
 		close(s.heartbeatDone)
+		s.heartbeatWg.Wait()
+		s.heartbeatDone = nil
 	}
 	s.heartbeatDone = make(chan struct{})
+	s.heartbeatWg.Add(1)
 	go s.heartbeatLoop(sessionID, s.heartbeatDone)
 
 	return nil
 }
 
 func (s *SQLiteEventSink) heartbeatLoop(sessionID string, done chan struct{}) {
+	defer s.heartbeatWg.Done()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -180,14 +188,36 @@ func (s *SQLiteEventSink) heartbeatLoop(sessionID string, done chan struct{}) {
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			nowStr := time.Now().UTC().Format(time.RFC3339Nano)
-			_, _ = s.db.ExecContext(ctx, `
-				UPDATE collector_sessions SET last_heartbeat_at = ?, updated_at = ?
-				WHERE session_id = ? AND status = 'running';
-			`, nowStr, nowStr, sessionID)
+			now := time.Now().UTC()
+			nowStr := now.Format(time.RFC3339Nano)
+			err := execWithTxRetry(ctx, s.db, 3, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `
+					UPDATE collector_sessions SET last_heartbeat_at = ?, updated_at = ?
+					WHERE session_id = ? AND status = 'running';
+				`, nowStr, nowStr, sessionID)
+				return err
+			})
 			cancel()
+
+			s.mu.Lock()
+			if err != nil {
+				s.consecutiveHeartbeatErrors++
+				s.lastHeartbeatErr = err
+			} else {
+				s.lastHeartbeatAt = now
+				s.consecutiveHeartbeatErrors = 0
+				s.lastHeartbeatErr = nil
+			}
+			s.mu.Unlock()
 		}
 	}
+}
+
+// GetHeartbeatStatus 获取当前心跳运行状态 (最后成功心跳时间、连续错误数、最后错误)
+func (s *SQLiteEventSink) GetHeartbeatStatus() (time.Time, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastHeartbeatAt, s.consecutiveHeartbeatErrors, s.lastHeartbeatErr
 }
 
 func errorsIsNoRows(err error) bool {
@@ -294,15 +324,29 @@ func (s *SQLiteEventSink) EndSession(ctx context.Context, sessionID string, stat
 // Close 关闭 Sink 并释放资源
 func (s *SQLiteEventSink) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.heartbeatDone != nil {
 		close(s.heartbeatDone)
 		s.heartbeatDone = nil
 	}
+	s.mu.Unlock()
+
+	// 等待心跳协程彻底退出，防止在关闭数据库连接后并发写
+	s.heartbeatWg.Wait()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if s.db != nil {
-		return s.db.Close()
+		err := s.db.Close()
+		s.db = nil
+		if err != nil {
+			return err
+		}
 	}
+
+	if s.consecutiveHeartbeatErrors >= 3 {
+		return fmt.Errorf("persistent heartbeat failures detected before closing: %w (%d consecutive errors)", s.lastHeartbeatErr, s.consecutiveHeartbeatErrors)
+	}
+
 	return nil
 }

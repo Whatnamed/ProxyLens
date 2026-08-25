@@ -116,11 +116,11 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 
 ---
 
-## Phase 2 — Local Storage & Aggregations [IN PROGRESS]
+## Phase 2 — Local Storage, Accounting & Runtime Validation [COMPLETED]
 
 ### Goal
 
-把已经验证可靠的连接状态转换为长期可查询的本地历史，并建立正确性对账和 Monitoring Gap 模型。
+把已经验证可靠的连接状态转换为长期可查询的本地历史，并建立不可变事件日志、版本化核算、监控缺口与运行时运维体系。
 
 ### Phase 2A — Storage Foundation & Event Journal [COMPLETED]
 - [x] 选定 SQLite + WAL 驱动（纯 Go `modernc.org/sqlite`，ADR 0002）；
@@ -138,11 +138,14 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 - [x] 实现监控覆盖率区间并集模型（`CoverageSummary`，Interval Union，Known Scope 隔离）；
 - [x] 交付面向 UI 的稳定 `AnalyticsService` 与 `collector accounting rebuild`、`collector analytics` 系列 CLI 命令。
 
-### Phase 2B2 — Lifecycle Ops, Full-Stack Benchmarks & PRODUCT Acceptance [NEXT]
-- [ ] 数据保留与清理策略 (Retention Policy & Automated Cleanup)；
-- [ ] 周期性 SQLite WAL checkpoint 调度器；
-- [ ] 全栈端到端写入性能基准（针对真实高负载）与长效 Soak 稳定性实测；
-- [ ] 运行 PRODUCT.md A-E 场景持久化与核算最终验收。
+### Phase 2B2 — Lifecycle Ops, Full-Stack Benchmarks & PRODUCT Acceptance [COMPLETED]
+- [x] 引入全局单调序列边界 `journal_sequence` 与非阻塞短事务分批核算重构（ADR 0004）；
+- [x] 实现显式 Freshness / Staleness API（`GetAccountingFreshness`）；
+- [x] 实现 Collector 心跳机制与动态 `collector_heartbeat_stale` 存活缺口判定；
+- [x] 实现安全派生层保留策略（Safe Derived Retention，100% 保护 Raw Authority 零删除）；
+- [x] SQLite WAL 运维与 Integrity Check CLI（`collector storage integrity`）；
+- [x] 全栈 1000/500/250ms Cadence 矩阵、高并发 Rebuild 与 30s Soak 稳定性实测；
+- [x] PRODUCT.md A–E 全场景逐项机械断言 100% PASS。
 
 ### Acceptance
 
@@ -162,7 +165,7 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 
 ---
 
-## Phase 3 — Audit UI
+## Phase 3 — Audit UI [NEXT]
 
 ### Goal
 

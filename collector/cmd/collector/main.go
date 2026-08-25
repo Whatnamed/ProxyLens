@@ -258,34 +258,32 @@ func runCollector(args []string) {
 
 func runStorageCommand(args []string) {
 	if len(args) == 0 {
-		fmt.Println("Usage: collector storage <inspect|gaps|rebuild> --db <path> [flags]")
+		fmt.Println("Usage: collector storage <inspect|gaps|rebuild|cleanup|integrity> --db <path> [flags]")
 		os.Exit(1)
 	}
 
 	action := args[0]
 	subargs := args[1:]
 
-	fs := flag.NewFlagSet("collector storage "+action, flag.ContinueOnError)
-	dbPath := fs.String("db", "", "Path to SQLite database file")
-	latestN := fs.Int("latest", 20, "Number of latest records to display")
-
-	if err := fs.Parse(subargs); err != nil || *dbPath == "" {
-		fmt.Fprintf(os.Stderr, "Usage: collector storage %s --db <path>\n", action)
-		os.Exit(1)
-	}
-
-	ctx := context.Background()
-	db, err := storage.OpenDB(ctx, *dbPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", *dbPath, err)
-		os.Exit(1)
-	}
-	defer db.Close()
-
-	qs := storage.NewQueryService(db)
-
 	switch action {
 	case "inspect":
+		fs := flag.NewFlagSet("collector storage inspect", flag.ContinueOnError)
+		dbPath := fs.String("db", "", "Path to SQLite database file")
+		latestN := fs.Int("latest", 20, "Number of latest records to display")
+		if err := fs.Parse(subargs); err != nil || *dbPath == "" {
+			fmt.Fprintf(os.Stderr, "Usage: collector storage inspect --db <path> [--latest <n>]\n")
+			os.Exit(1)
+		}
+
+		ctx := context.Background()
+		db, err := storage.OpenDB(ctx, *dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", *dbPath, err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
+		qs := storage.NewQueryService(db)
 		conns, err := qs.ListConnections(ctx, storage.ConnectionFilter{Limit: *latestN})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Query failed: %v\n", err)
@@ -309,6 +307,22 @@ func runStorageCommand(args []string) {
 		}
 
 	case "gaps":
+		fs := flag.NewFlagSet("collector storage gaps", flag.ContinueOnError)
+		dbPath := fs.String("db", "", "Path to SQLite database file")
+		if err := fs.Parse(subargs); err != nil || *dbPath == "" {
+			fmt.Fprintf(os.Stderr, "Usage: collector storage gaps --db <path>\n")
+			os.Exit(1)
+		}
+
+		ctx := context.Background()
+		db, err := storage.OpenDB(ctx, *dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", *dbPath, err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
+		qs := storage.NewQueryService(db)
 		gaps, err := qs.ListMonitoringGaps(ctx, nil, nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Query gaps failed: %v\n", err)
@@ -330,15 +344,52 @@ func runStorageCommand(args []string) {
 				idx+1, g.Source, g.StartedAt.Format(time.RFC3339), endStr, durStr, g.Reason)
 		}
 
-	case "cleanup":
-		applyFlag := fs.Bool("apply", false, "Apply actual deletion of derived data (default: dry-run)")
-		retainComp := fs.Int("retain-completed", 3, "Number of latest completed runs to retain")
-		if err := fs.Parse(subargs); err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing cleanup flags: %v\n", err)
+	case "rebuild":
+		fs := flag.NewFlagSet("collector storage rebuild", flag.ContinueOnError)
+		dbPath := fs.String("db", "", "Path to SQLite database file")
+		if err := fs.Parse(subargs); err != nil || *dbPath == "" {
+			fmt.Fprintf(os.Stderr, "Usage: collector storage rebuild --db <path>\n")
 			os.Exit(1)
 		}
 
-		plan, err := storage.PlanDerivedRetention(ctx, db, *retainComp, 7*24*time.Hour, *dbPath)
+		ctx := context.Background()
+		db, err := storage.OpenDB(ctx, *dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", *dbPath, err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
+		fmt.Printf("Rebuilding storage projections from authoritative event journal in %s...\n", *dbPath)
+		if err := storage.RebuildProjections(ctx, db); err != nil {
+			fmt.Fprintf(os.Stderr, "[FATAL REBUILD ERROR] %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Storage projections successfully rebuilt!\n")
+
+	case "cleanup":
+		fs := flag.NewFlagSet("collector storage cleanup", flag.ContinueOnError)
+		dbPath := fs.String("db", "", "Path to SQLite database file")
+		applyFlag := fs.Bool("apply", false, "Apply actual deletion of derived data (default: dry-run)")
+		dryRunFlag := fs.Bool("dry-run", false, "Explicitly perform dry-run only")
+		keepRuns := fs.Int("keep-runs", 3, "Number of latest completed accounting runs to retain")
+		retentionDays := fs.Int("retention-days", 7, "Retention window in days for failed runs")
+
+		if err := fs.Parse(subargs); err != nil || *dbPath == "" {
+			fmt.Fprintf(os.Stderr, "Usage: collector storage cleanup --db <path> [--keep-runs <n>] [--retention-days <n>] [--apply] [--dry-run]\n")
+			os.Exit(1)
+		}
+
+		ctx := context.Background()
+		db, err := storage.OpenDB(ctx, *dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", *dbPath, err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
+		failedAge := time.Duration(*retentionDays) * 24 * time.Hour
+		plan, err := storage.PlanDerivedRetention(ctx, db, *keepRuns, failedAge, *dbPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to compute retention plan: %v\n", err)
 			os.Exit(1)
@@ -357,10 +408,11 @@ func runStorageCommand(args []string) {
 		fmt.Printf("Raw Authority Invariant     : event_journal & connection_traffic NEVER deleted\n")
 		fmt.Printf("----------------------------------------------------------------\n")
 
-		if !*applyFlag {
+		shouldApply := *applyFlag && !*dryRunFlag
+		if !shouldApply {
 			fmt.Println("[DRY-RUN] No changes were applied. Specify --apply to execute cleanup.")
 		} else {
-			fmt.Println("[APPLYING] Deleting derived rows for marked runs...")
+			fmt.Println("[APPLYING] Row-batched deleting derived rows for marked runs...")
 			res, err := storage.ApplyDerivedRetention(ctx, db, plan)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[ERROR] Retention cleanup failed: %v\n", err)
@@ -373,6 +425,21 @@ func runStorageCommand(args []string) {
 		fmt.Printf("================================================================\n")
 
 	case "integrity":
+		fs := flag.NewFlagSet("collector storage integrity", flag.ContinueOnError)
+		dbPath := fs.String("db", "", "Path to SQLite database file")
+		if err := fs.Parse(subargs); err != nil || *dbPath == "" {
+			fmt.Fprintf(os.Stderr, "Usage: collector storage integrity --db <path>\n")
+			os.Exit(1)
+		}
+
+		ctx := context.Background()
+		db, err := storage.OpenDB(ctx, *dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", *dbPath, err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
 		var integCheck string
 		if err := db.QueryRowContext(ctx, "PRAGMA integrity_check;").Scan(&integCheck); err != nil {
 			fmt.Fprintf(os.Stderr, "PRAGMA integrity_check error: %v\n", err)
@@ -404,6 +471,7 @@ func runStorageCommand(args []string) {
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown storage action: %s\n", action)
+		fmt.Println("Usage: collector storage <inspect|gaps|rebuild|cleanup|integrity> --db <path> [flags]")
 		os.Exit(1)
 	}
 }
