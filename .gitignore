@@ -31,3 +31,10 @@ target/
 tmp/
 scratch/
 *.exe
+
+# UI & Tauri
+ui/node_modules/
+ui/dist/
+ui/src-tauri/target/
+ui/src-tauri/binaries/
+
