@@ -44,12 +44,13 @@ ProxyLens 是面向 Windows + Mihomo/Clash 的本地代理流量审计工具。�
 
 ## 4. 当前阶段与技术决策纪律
 
-仓库目前已完成 Phase 0 数据源验证与 Phase 1 Collector 生产原型验证。
+仓库目前已完成 Phase 0 数据源验证、Phase 1 Collector 原型、Phase 2 持久化/核算验证与 Phase 3A UI 平台底座开发。当前正处于 **Phase 3B — Audit UI Visual System & Primary Dashboard** 准备阶段。
 
 ### 已确认核心技术决策：
 - **Collector 实现语言**: **Go (v1.24+)**（详见 `docs/decisions/0001-collector-language.md`）；
-- **Collector 状态机与事件契约**: 详见 `docs/collector-rfc.md` 与 `docs/phase2-storage-handoff.md`；
-- **Storage & UI 技术选型**: 将在 Phase 2 (SQLite + WAL) 与 Phase 3 (Tauri vs Web UI) 阶段结合原型实测推进决策。
+- **Storage 存储与核算**: **SQLite + WAL**、双事实权威源与版本化核算重建（详见 `docs/decisions/0002-storage-engine.md`, `0003-reconciled-accounting.md`, `0004-runtime-validation.md`）；
+- **UI 平台架构与查询边界**: **Tauri v2 + React 19 + TypeScript + Vite + Go Local Query API**（详见 `docs/decisions/0005-ui-platform-and-query-boundary.md` 与 `docs/ui-api-contract-v1.md`）；
+- **开发铁律**: Tauri/Rust 绝不得重写 Go 查询/核算语义；React 绝不得直接读取 SQLite 数据库。
 
 ## 5. 实现与修改原则
 
@@ -63,12 +64,19 @@ ProxyLens 是面向 Windows + Mihomo/Clash 的本地代理流量审计工具。�
 
 ## 6. 构建与测试命令 (Build & Test Commands)
 
-### Go Collector (生产原型):
-- **构建**: `cd collector && go build -o collector.exe ./cmd/collector`
+### Go Collector & Query API:
+- **构建 Collector**: `cd collector && go build -o collector.exe ./cmd/collector`
+- **构建 Query API**: `cd collector && go build -o proxylens-query-api.exe ./cmd/proxylens-query-api`
 - **运行单元/集成测试**: `cd collector && go test -v ./test/... ./pkg/...`
 - **运行性能基准测试**: `cd collector && go test -v -bench=. ./test/...`
-- **运行实时采集**: `.\collector\collector.exe run --controller http://127.0.0.1:9090 --connections-interval 250`
-- **运行确定性回放**: `.\collector\collector.exe replay <fixture.ndjson>`
+
+### Tauri & React UI:
+- **安装依赖**: `cd ui && npm install`
+- **构建 Sidecar**: `cd ui && npm run sidecar:build`
+- **前端开发调试**: `cd ui && npm run dev`
+- **桌面开发调试**: `cd ui && npm run tauri:dev`
+- **桌面发布构建**: `cd ui && npm run tauri:build`
+- **平台集成冒烟测试**: `node tools/benchmark/run-phase3a-smoke.mjs`
 
 ### Phase 0 验证套件 (Node.js):
 - **回归测试**: `node --test tools/discovery/test/*.test.mjs`

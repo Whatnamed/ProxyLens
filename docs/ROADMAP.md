@@ -165,35 +165,32 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 
 ---
 
-## Phase 3 — Audit UI [NEXT]
+## Phase 3 — Audit UI
 
-### Goal
+### Phase 3A — UI Platform Foundation & Local Query API [COMPLETED]
+- [x] 确立桌面平台技术路线：Tauri v2 + React 19 + TypeScript + Vite；
+- [x] Go Local Query API (`proxylens-query-api`) 建立：只读 Loopback 随机端口绑定、单次会话高熵 Bearer Token 鉴权与严格 CORS；
+- [x] SQLite 只读访问路径（`OpenReadOnlyDB` + `query_only=ON`，绝不执行迁移与写操作）；
+- [x] 端到端 API 契约文档（`docs/ui-api-contract-v1.md`）与 18 项单测 / 冒烟集成测试；
+- [x] Tauri Go Query API Sidecar 生命周期管理（启动就绪握手、窗口销毁停止、与常驻 Collector 零耦合）；
+- [x] React 类型化客户端封装与 `Phase 3 Platform Diagnostics` 临时开发者诊断面板；
+- [x] Windows 原生桌面可执行程序构建验证通过。
 
-开发随用随开的审计 UI，让用户能够快速从历史中回答“谁、去哪、为什么、走哪里、多少”。
+### Phase 3B — Audit UI Visual System & Primary Dashboard [NEXT]
+- [ ] 确立正式设计系统与视觉语言（色彩、排版、卡片密度、响应式布局）；
+- [ ] 实现主审计看板（Overview Dashboard）：流量汇总、代理节点排行、规则命中排行、进程排行；
+- [ ] 时间范围选择器与实时 Freshness 刷新指示；
+- [ ] 移除临时 Diagnostics 面板，替换为正式产品界面。
 
-### Deliverables
+### Phase 3C — History, Search & Connection Detail
+- [ ] 历史连接列表与多维组合搜索（进程、域名/IP、规则、代理链、端口）；
+- [ ] 单连接审计因果链下钻抽屉（因果元数据、归因证据、流量增量时序帧）；
+- [ ] DIRECT / PROXY / REJECT 独立分类视图。
 
-1. 历史连接列表与搜索；
-2. 时间、进程、域名 / IP、规则、协议、节点等组合筛选；
-3. 单连接审计链；
-4. 按应用 / 域名 / 规则 / 节点等聚合；
-5. DIRECT / PROXY / REJECT 等分类视图；
-6. 监控覆盖率和 Gap 时间轴；
-7. UI 与 Collector 生命周期彻底解耦。
-
-### Acceptance
-
-- UI 关闭后 Collector 不受影响；
-- 在 Phase 2 建立的目标数据集规模下查询和交互保持流畅；
-- 用户可以快速识别统计区间是否存在监控缺口；
-- 单条代理连接能够清楚展示可用的完整因果链；
-- 基于真实数据建立启动和查询性能基准，不为满足早期文档数字而优化。
-
-### Out of scope
-
-- 自动修改 Mihomo；
-- 云同步；
-- 与系统网络路径耦合。
+### Phase 3D — Coverage, Gaps, Performance & Polish
+- [ ] 监控覆盖率和 Gap 时间轴可视化；
+- [ ] 大数据量虚拟滚动与交互响应优化；
+- [ ] 桌面应用打包、图标与启动性能最终打磨。
 
 ---
 

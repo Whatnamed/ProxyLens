@@ -68,17 +68,29 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   2. **版本化核算层 (Versioned Reconciled Accounting)**: `accounting_runs`, `relay_relations`, `accounted_traffic`；
   3. **分时聚合层 (Materialized Hourly Aggregates)**: `usage_hourly_dimensions`。
 
-### UI
+### UI Platform & Local Query API (已确认生产架构，ADR 0005)
 
-职责：
-
-- 历史连接搜索与过滤；
-- 多维聚合统计；
-- 单条连接审计链展示；
-- 待检查流量；
-- 监控覆盖率和缺口展示。
-
-UI 随用随开，关闭时不得停止 Collector。
+- **实现技术**: **Tauri v2 + React 19 + TypeScript + Vite**；
+- **架构分工与查询边界 (Locked Query Boundary)**:
+  ```text
+  Mihomo
+     ↓
+  Go Collector  ──────────────→ SQLite + WAL (Authority DB)
+                                   ↑
+                                   │ read-only (query_only=ON)
+                            Go Local Query API (Sidecar)
+                                   ↑
+                           127.0.0.1 : ephemeral port (HTTP JSON)
+                                   ↑ (Authorization: Bearer <token>)
+                         React + TypeScript + Vite
+                                   ↑
+                           Tauri v2 (Desktop Shell)
+  ```
+- **核心契约**:
+  - **Tauri / Rust**: 仅负责桌面原生窗口生命周期与 Go Query API Sidecar 启停，生成单次会话高熵 Bearer Token（>=256-bit），**严禁** 在 Rust 中实现 Analytics SQL、核算或存储业务逻辑；
+  - **Go Local Query API (`proxylens-query-api`)**: 以只读模式（`query_only=ON`, `busy_timeout=10000`）打开数据库，严格绑定 `127.0.0.1` 随机端口，校验 Bearer Token 与 CORS，完全复用 `storage.AnalyticsService` 与 `storage.QueryService`；
+  - **React / TypeScript**: 纯 Web 前端，通过 TanStack React Query 消费 HTTP JSON API，**严禁** 直接读取 SQLite 数据库；
+  - **零耦合生命周期**: UI 随开随用，UI 关闭时仅终止 Query API Sidecar，后台常驻 Collector 保持独立运行，完全不受影响。
 
 ---
 
