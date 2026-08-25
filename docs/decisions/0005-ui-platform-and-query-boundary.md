@@ -63,19 +63,26 @@ Go Collector  ──────────────→ SQLite + WAL (Author
   - 纯 Web 前端，使用 TanStack React Query 管理数据请求与缓存；
   - 仅通过 HTTP JSON 访问 Go Local Query API，**严禁** 直接访问 SQLite 数据库或调用任意 shell 命令。
 
-### 3.3 进程生命周期契约
-```text
-UI 启动 → Tauri 生成 Token → 启动 Go Query API Sidecar → 前端就绪 → 查询展示
-UI 关闭 → Tauri 终止 Go Query API Sidecar → 释放端口与资源
-Collector 守护进程保持独立常驻，不受 UI 启停任何影响
-```
+### 3.3 进程生命周期与 Sidecar Resolver 契约
+- **官方 Bundled Sidecar Resolver**: Tauri 通过 `app_handle.shell().sidecar("proxylens-query-api")` 寻找并启动 target-specific bundled sidecar，杜绝源码目录硬编码猜测；
+- **异步超时保护**: Rust 侧使用 `tokio::time::timeout(Duration::from_secs(5))` 异步监听 `CommandEvent` 事件流，杜绝阻塞挂死；
+- **安全 Token 管道传输**: Token 不作为 `--token` 命令行 argv 暴露（防止进程列表泄漏），通过 anonymous stdin pipe 首行传输；
+- **生命周期解耦**: UI 关闭时仅终止 Query API Sidecar，后台 Collector 守护进程保持独立常驻，不受 UI 启停任何影响。
 
 ### 3.4 安全与网络边界规范
 1. **Loopback Only**: Query API 仅监听 `127.0.0.1`，拒绝任何外网或 `0.0.0.0` 绑定；
 2. **Ephemeral Port**: 每次随机选择可用高位端口，标准输出第一行吐出就绪 JSON；
-3. **Session Token**: 每次启动动态生成，仅存在于 Rust 与前端内存中，不持久化、不打印日志、不在 URL 中传递；
-4. **CORS 保护**: 仅允许 `tauri://localhost`、`http://tauri.localhost` 及本地 Vite 开发源，严禁通配符 `*`；
-5. **只读保护**: 数据库连接显式开启 `query_only=ON`，拒绝任何写操作。
+3. **Session Token**: 每次启动动态生成，通过 stdin 内存管道传输，仅存在于 Rust 与前端内存中，不持久化、不打印日志、不在 URL 中传递；
+4. **CORS 与 CSP 深度防御**:
+   - Query API 仅允许 `tauri://localhost`、`http://tauri.localhost` 及本地 Vite 开发源，严禁通配符 `*`；
+   - Tauri 配置收紧的 Content Security Policy，仅允许访问 loopback 与自身资源，阻断潜在 XSS 泄露 Token 或数据；
+5. **双重只读与 Schema 匹配保护**:
+   - 数据库连接显式配置 `mode=ro` 与 `query_only=ON` 双防御；
+   - Schema 校验要求 `db_version == binary_supported_version`（fail closed），旧版本或未知新版本均在启动时明确拒绝。
+
+### 3.5 连接身份与核算时序契约 (Composite Identity & Event Sequence)
+- **三元组权威身份**: 连接详情与核算必须基于 `(session_id, epoch_id, connection_id)` 唯一检索；
+- **全量事件时序**: 返回该连接在 latest completed run 下的全部 `accountingEvents[]` 时序列表，完整保留 Rule/Host/Chain 演化历史，同时提供聚合后的 `accountingSummary`。
 
 ---
 

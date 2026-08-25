@@ -113,7 +113,8 @@ func (s *Server) handleAnalyticsSummary(w http.ResponseWriter, r *http.Request) 
 			s.writeError(w, http.StatusNotFound, "NO_COMPLETED_ACCOUNTING_RUN", "No completed accounting run found in database")
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", err.Error())
+		s.logInternalError("GetUsageSummary failed", err)
+		s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to retrieve usage summary")
 		return
 	}
 
@@ -121,36 +122,36 @@ func (s *Server) handleAnalyticsSummary(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleTopProcesses(w http.ResponseWriter, r *http.Request) {
-	s.handleTopQuery(w, r, func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
+	s.handleTopQuery(w, r, "GetTopProcesses", func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
 		return s.analyticsSvc.GetTopProcesses(ctx, f)
 	})
 }
 
 func (s *Server) handleTopHosts(w http.ResponseWriter, r *http.Request) {
-	s.handleTopQuery(w, r, func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
+	s.handleTopQuery(w, r, "GetTopHosts", func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
 		return s.analyticsSvc.GetTopHosts(ctx, f)
 	})
 }
 
 func (s *Server) handleTopRules(w http.ResponseWriter, r *http.Request) {
-	s.handleTopQuery(w, r, func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
+	s.handleTopQuery(w, r, "GetTopRules", func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
 		return s.analyticsSvc.GetTopRules(ctx, f)
 	})
 }
 
 func (s *Server) handleTopFinalProxies(w http.ResponseWriter, r *http.Request) {
-	s.handleTopQuery(w, r, func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
+	s.handleTopQuery(w, r, "GetTopFinalProxies", func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
 		return s.analyticsSvc.GetTopFinalProxies(ctx, f)
 	})
 }
 
 func (s *Server) handleProtocols(w http.ResponseWriter, r *http.Request) {
-	s.handleTopQuery(w, r, func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
+	s.handleTopQuery(w, r, "GetProtocolBreakdown", func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error) {
 		return s.analyticsSvc.GetProtocolBreakdown(ctx, f)
 	})
 }
 
-func (s *Server) handleTopQuery(w http.ResponseWriter, r *http.Request, fn func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error)) {
+func (s *Server) handleTopQuery(w http.ResponseWriter, r *http.Request, queryName string, fn func(ctx context.Context, f storage.AnalyticsFilter) ([]storage.TopDimensionItem, error)) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
@@ -187,7 +188,8 @@ func (s *Server) handleTopQuery(w http.ResponseWriter, r *http.Request, fn func(
 			s.writeError(w, http.StatusNotFound, "NO_COMPLETED_ACCOUNTING_RUN", "No completed accounting run found in database")
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", err.Error())
+		s.logInternalError(queryName+" failed", err)
+		s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to retrieve top dimension statistics")
 		return
 	}
 
@@ -215,7 +217,8 @@ func (s *Server) handleCoverage(w http.ResponseWriter, r *http.Request) {
 
 	coverage, err := s.analyticsSvc.GetCoverage(r.Context(), from, to)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", err.Error())
+		s.logInternalError("GetCoverage failed", err)
+		s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to calculate monitoring coverage")
 		return
 	}
 

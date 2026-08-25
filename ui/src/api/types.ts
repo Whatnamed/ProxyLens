@@ -175,8 +175,6 @@ export interface ConnectionRecord {
   relayEvidence?: Record<string, unknown>;
   baselineUploadCounter: number;
   baselineDownloadCounter: number;
-  lastObservedUploadCounter: number;
-  lastObservedDownloadCounter: number;
   monitoredUploadTotal: number;
   monitoredDownloadTotal: number;
 }
@@ -187,3 +185,60 @@ export interface ConnectionsListResponse {
   offset: number;
   hasMore: boolean;
 }
+
+export interface AccountedTrafficRecord {
+  runId: string;
+  sourceEventId: string;
+  sessionId: string;
+  epochId: number;
+  connectionId: string;
+  observedAt: string;
+  intervalStart?: string;
+  intervalEnd?: string;
+  precision: 'exact' | 'interval_derived';
+  route: string;
+  rawUpload: number;
+  rawDownload: number;
+  accountedUpload: number;
+  accountedDownload: number;
+  accountingClass: string;
+  process?: string;
+  processPath?: string;
+  host?: string;
+  sniffHost?: string;
+  destinationIp?: string;
+  network?: string;
+  rule?: string;
+  rulePayload?: string;
+  finalProxy?: string;
+  topPolicyGroup?: string;
+  dimensionDerivationVersion?: string;
+}
+
+export interface ConnectionAccountingSummary {
+  runId: string;
+  accountingClass: string;
+  route: string;
+  rawUploadTotal: number;
+  rawDownloadTotal: number;
+  accountedUploadTotal: number;
+  accountedDownloadTotal: number;
+  latestProcess?: string;
+  latestProcessPath?: string;
+  latestHost?: string;
+  latestSniffHost?: string;
+  latestDestinationIp?: string;
+  latestNetwork?: string;
+  latestRule?: string;
+  latestRulePayload?: string;
+  latestFinalProxy?: string;
+  latestTopPolicyGroup?: string;
+}
+
+export interface ConnectionDetailResponse {
+  connection: ConnectionRecord;
+  accountingEvents: AccountedTrafficRecord[];
+  accountingSummary?: ConnectionAccountingSummary;
+}
+
+

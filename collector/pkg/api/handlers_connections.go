@@ -2,12 +2,20 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/storage"
 )
+
+func (s *Server) logInternalError(contextMsg string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[API INTERNAL ERROR] %s: %v\n", contextMsg, err)
+	}
+}
 
 func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -54,7 +62,8 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 
 	items, err := s.querySvc.ListConnections(r.Context(), filter)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", err.Error())
+		s.logInternalError("ListConnections failed", err)
+		s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to query connections")
 		return
 	}
 
@@ -105,7 +114,8 @@ func (s *Server) handleConnectionDetailRouter(w http.ResponseWriter, r *http.Req
 		// 查询流量增量时序帧
 		traffic, err := s.querySvc.ListConnectionTraffic(r.Context(), sessionID, epochID, connectionID)
 		if err != nil {
-			s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", err.Error())
+			s.logInternalError("ListConnectionTraffic failed", err)
+			s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to query connection traffic")
 			return
 		}
 		s.writeJSON(w, http.StatusOK, ConnectionTrafficResponse{
@@ -116,22 +126,62 @@ func (s *Server) handleConnectionDetailRouter(w http.ResponseWriter, r *http.Req
 	}
 
 	if len(parts) == 3 {
-		// 查询连接详情与对应的 Accounting 记录
+		// 查询连接物理维度元数据
 		conn, err := s.querySvc.GetConnection(r.Context(), sessionID, epochID, connectionID)
 		if err != nil {
 			if errors.Is(err, storage.ErrConnectionNotFound) {
 				s.writeError(w, http.StatusNotFound, "CONNECTION_NOT_FOUND", "Connection not found")
 				return
 			}
-			s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", err.Error())
+			s.logInternalError("GetConnection failed", err)
+			s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to get connection details")
 			return
 		}
 
-		acc, _ := s.querySvc.GetAccountedTrafficForConnection(r.Context(), connectionID)
+		// 按三元组身份查询 Accounting Events 完整时序列表
+		accEvents, err := s.querySvc.ListAccountedTrafficForConnection(r.Context(), sessionID, epochID, connectionID)
+		if err != nil {
+			s.logInternalError("ListAccountedTrafficForConnection failed", err)
+		}
+
+		// 聚合生成 Accounting Summary (如果存在事件)
+		var summary *ConnectionAccountingSummary
+		if len(accEvents) > 0 {
+			var rawUp, rawDown, accUp, accDown int64
+			latestEv := accEvents[len(accEvents)-1] // 最新的事件行提供最新元数据
+
+			for _, ev := range accEvents {
+				rawUp += ev.RawUpload
+				rawDown += ev.RawDownload
+				accUp += ev.AccountedUpload
+				accDown += ev.AccountedDownload
+			}
+
+			summary = &ConnectionAccountingSummary{
+				RunID:                  latestEv.RunID,
+				AccountingClass:        latestEv.AccountingClass,
+				Route:                  string(latestEv.Route),
+				RawUploadTotal:         rawUp,
+				RawDownloadTotal:       rawDown,
+				AccountedUploadTotal:   accUp,
+				AccountedDownloadTotal: accDown,
+				LatestProcess:          latestEv.Process,
+				LatestProcessPath:      latestEv.ProcessPath,
+				LatestHost:             latestEv.Host,
+				LatestSniffHost:        latestEv.SniffHost,
+				LatestDestinationIP:    latestEv.DestinationIP,
+				LatestNetwork:          latestEv.Network,
+				LatestRule:             latestEv.Rule,
+				LatestRulePayload:      latestEv.RulePayload,
+				LatestFinalProxy:       latestEv.FinalProxy,
+				LatestTopPolicyGroup:   latestEv.TopPolicyGroup,
+			}
+		}
 
 		s.writeJSON(w, http.StatusOK, ConnectionDetailResponse{
-			Connection: conn,
-			Accounting: acc,
+			Connection:        conn,
+			AccountingEvents:  accEvents,
+			AccountingSummary: summary,
 		})
 		return
 	}

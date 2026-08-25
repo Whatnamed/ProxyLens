@@ -27,35 +27,50 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var schemaVer sql.NullInt64
-	_ = s.db.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations;").Scan(&schemaVer)
-
 	dbState := "READY"
-	if !schemaVer.Valid || schemaVer.Int64 == 0 {
+	schemaVer := 0
+	var ver sql.NullInt64
+
+	if err := s.db.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations;").Scan(&ver); err != nil {
+		s.logInternalError("handleMeta failed to query schema_migrations", err)
+		dbState = "UNAVAILABLE"
+	} else if !ver.Valid || ver.Int64 <= 0 {
 		dbState = "UNINITIALIZED"
-	} else if schemaVer.Int64 > int64(maxBinary) {
-		dbState = "INCOMPATIBLE"
+	} else {
+		schemaVer = int(ver.Int64)
+		if schemaVer > maxBinary {
+			dbState = "INCOMPATIBLE"
+		}
 	}
 
 	resp := MetaResponse{
 		APIVersion:             "v1",
 		AppVersion:             s.appVersion,
 		DBState:                dbState,
-		SchemaVersion:          int(schemaVer.Int64),
+		SchemaVersion:          schemaVer,
 		MaxBinarySchemaVersion: maxBinary,
 	}
 
 	if s.querySvc != nil && dbState == "READY" {
-		latestSess, _ := s.querySvc.GetLatestSession(ctx)
-		resp.LatestCollectorSession = latestSess
+		if latestSess, err := s.querySvc.GetLatestSession(ctx); err != nil {
+			s.logInternalError("handleMeta failed to query latest session", err)
+		} else {
+			resp.LatestCollectorSession = latestSess
+		}
 	}
 
 	if s.analyticsSvc != nil && dbState == "READY" {
-		latestRun, _ := s.analyticsSvc.GetLatestCompletedAccountingRun(ctx)
-		resp.LatestAccountingRun = latestRun
+		if latestRun, err := s.analyticsSvc.GetLatestCompletedAccountingRun(ctx); err != nil {
+			s.logInternalError("handleMeta failed to query latest accounting run", err)
+		} else {
+			resp.LatestAccountingRun = latestRun
+		}
 
-		freshness, _ := s.analyticsSvc.GetAccountingFreshness(ctx)
-		resp.Freshness = freshness
+		if freshness, err := s.analyticsSvc.GetAccountingFreshness(ctx); err != nil {
+			s.logInternalError("handleMeta failed to query freshness", err)
+		} else {
+			resp.Freshness = freshness
+		}
 	}
 
 	s.writeJSON(w, http.StatusOK, resp)

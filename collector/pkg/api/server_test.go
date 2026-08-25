@@ -229,8 +229,13 @@ func TestAPIServerAuthCORSAndEndpoints(t *testing.T) {
 	if connDetail.Connection == nil || connDetail.Connection.ConnectionID != "c-api-1" {
 		t.Errorf("Expected c-api-1, got %+v", connDetail)
 	}
-	if connDetail.Accounting == nil || connDetail.Accounting.Process != "chrome.exe" {
-		t.Errorf("Expected accounting chrome.exe, got %+v", connDetail.Accounting)
+	if len(connDetail.AccountingEvents) == 0 {
+		t.Errorf("Expected accountingEvents for c-api-1, got 0")
+	} else if connDetail.AccountingEvents[0].Process != "chrome.exe" {
+		t.Errorf("Expected event process chrome.exe, got %s", connDetail.AccountingEvents[0].Process)
+	}
+	if connDetail.AccountingSummary == nil || connDetail.AccountingSummary.LatestProcess != "chrome.exe" {
+		t.Errorf("Expected summary LatestProcess chrome.exe, got %+v", connDetail.AccountingSummary)
 	}
 
 	// 12. 缺失连接 -> 404

@@ -6,7 +6,7 @@ import {
   TopDimensionResponse,
   CoverageSummary,
   ConnectionsListResponse,
-  ConnectionRecord
+  ConnectionDetailResponse,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -114,7 +114,7 @@ export class QueryApiClient {
     return this.request<ConnectionsListResponse>('/api/v1/connections', params);
   }
 
-  async getConnectionDetail(sessionId: string, epochId: number, connectionId: string): Promise<{ connection: ConnectionRecord; accounting?: unknown }> {
-    return this.request(`/api/v1/connections/${sessionId}/${epochId}/${connectionId}`);
+  async getConnectionDetail(sessionId: string, epochId: number, connectionId: string): Promise<ConnectionDetailResponse> {
+    return this.request<ConnectionDetailResponse>(`/api/v1/connections/${sessionId}/${epochId}/${connectionId}`);
   }
 }

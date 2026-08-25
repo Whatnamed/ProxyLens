@@ -139,6 +139,10 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.Stop(ctx)
+}
+
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/api/v1/meta", s.handleMeta)

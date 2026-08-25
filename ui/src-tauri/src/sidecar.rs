@@ -2,10 +2,11 @@ use crate::state::QueryApiSession;
 use rand::RngCore;
 use serde::Deserialize;
 use std::env;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tauri::AppHandle;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::ShellExt;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,127 +30,104 @@ pub fn generate_high_entropy_token() -> String {
 }
 
 pub fn resolve_db_path() -> Result<PathBuf, String> {
-    // 1. 优先读取环境变量 PROXYLENS_DB_PATH
+    // 严格按 G12 规范: 仅读取显式环境变量 PROXYLENS_DB_PATH，杜绝自动开发目录猜测导致连错 DB
     if let Ok(env_path) = env::var("PROXYLENS_DB_PATH") {
         let p = PathBuf::from(&env_path);
         if p.exists() {
             return Ok(p);
         }
-        return Err(format!("PROXYLENS_DB_PATH is set to '{}' but the file does not exist", env_path));
+        return Err(format!(
+            "PROXYLENS_DB_PATH is set to '{}' but the file does not exist",
+            env_path
+        ));
     }
 
-    // 2. 尝试寻找当前仓库或开发目录下的默认测试数据库
-    let dev_candidates = [
-        Path::new("collector").join("testdata").join("proxylens.db"),
-        Path::new("..").join("collector").join("testdata").join("proxylens.db"),
-        Path::new("..").join("..").join("collector").join("testdata").join("proxylens.db"),
-    ];
-
-    for c in &dev_candidates {
-        if c.exists() {
-            if let Ok(canonical) = c.canonicalize() {
-                return Ok(canonical);
-            }
-        }
-    }
-
-    Err("DB_NOT_CONFIGURED: Set PROXYLENS_DB_PATH environment variable to an existing SQLite DB".to_string())
+    Err("DB_NOT_CONFIGURED: Set PROXYLENS_DB_PATH environment variable to an existing SQLite DB path".to_string())
 }
 
-pub fn find_sidecar_binary() -> Result<PathBuf, String> {
-    // 1. 如果指定了 PROXYLENS_SIDECAR_PATH
-    if let Ok(p) = env::var("PROXYLENS_SIDECAR_PATH") {
-        let path = PathBuf::from(&p);
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-
-    // 2. 在 src-tauri/binaries 目录按目标架构寻找
-    let exe_ext = if cfg!(windows) { ".exe" } else { "" };
-    let candidates = [
-        format!("binaries/proxylens-query-api-x86_64-pc-windows-msvc{}", exe_ext),
-        format!("../src-tauri/binaries/proxylens-query-api-x86_64-pc-windows-msvc{}", exe_ext),
-        format!("src-tauri/binaries/proxylens-query-api-x86_64-pc-windows-msvc{}", exe_ext),
-        format!("../../ui/src-tauri/binaries/proxylens-query-api-x86_64-pc-windows-msvc{}", exe_ext),
-        format!("collector/proxylens-query-api{}", exe_ext),
-        format!("../collector/proxylens-query-api{}", exe_ext),
-        format!("../../collector/proxylens-query-api{}", exe_ext),
-    ];
-
-    for c in &candidates {
-        let p = PathBuf::from(c);
-        if p.exists() {
-            if let Ok(canonical) = p.canonicalize() {
-                return Ok(canonical);
-            }
-            return Ok(p);
-        }
-    }
-
-    Err("Sidecar binary 'proxylens-query-api' not found. Run 'npm run sidecar:build' first.".to_string())
-}
-
-pub fn spawn_query_sidecar(db_path: &Path) -> Result<(QueryApiSession, Child), String> {
-    let sidecar_path = find_sidecar_binary()?;
+pub async fn spawn_query_sidecar(
+    app_handle: &AppHandle,
+    db_path: &Path,
+) -> Result<(QueryApiSession, CommandChild), String> {
     let token = generate_high_entropy_token();
+    let db_path_str = db_path.to_string_lossy().to_string();
 
-    let mut cmd = Command::new(&sidecar_path);
-    cmd.arg("--db")
-        .arg(db_path)
-        .arg("--listen")
-        .arg("127.0.0.1:0")
-        .arg("--token")
-        .arg(&token)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
+    // 使用 Tauri 官方 shell extension sidecar resolver 寻找与启动目标架构二进制
+    let sidecar_command = app_handle
+        .shell()
+        .sidecar("proxylens-query-api")
+        .map_err(|e| format!("Failed to create sidecar command: {}", e))?;
 
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn query API sidecar: {}", e))?;
+    let (mut rx, mut child) = sidecar_command
+        .args(["--db", &db_path_str, "--listen", "127.0.0.1:0"])
+        .spawn()
+        .map_err(|e| format!("Failed to spawn query API sidecar: {}", e))?;
 
-    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture sidecar stdout".to_string())?;
-    let mut reader = BufReader::new(stdout);
-    let mut ready_line = String::new();
+    // 安全通道: 通过 anonymous stdin pipe 发送 token，避免通过 argv 暴露给系统进程列表
+    let token_payload = format!("{}\n", token);
+    child
+        .write(token_payload.as_bytes())
+        .map_err(|e| format!("Failed to write session token to sidecar stdin: {}", e))?;
 
-    let start_time = Instant::now();
-    let timeout = Duration::from_secs(5);
-
-    // 读取第一行 stdout 进行就绪握手
-    while start_time.elapsed() < timeout {
-        ready_line.clear();
-        match reader.read_line(&mut ready_line) {
-            Ok(0) => {
-                // EOF
-                break;
-            }
-            Ok(_) => {
-                let trimmed = ready_line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if let Ok(signal) = serde_json::from_str::<ReadySignal>(trimmed) {
-                    if signal.signal_type == "proxylens-query-api-ready" {
-                        let session = QueryApiSession {
-                            base_url: format!("http://{}:{}", signal.host, signal.port),
-                            token,
-                            api_version: signal.api_version,
-                        };
-                        return Ok((session, child));
+    // 真正非阻塞的异步 5 秒就绪超时检测
+    let ready_res = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(line_bytes) => {
+                    let line = String::from_utf8_lossy(&line_bytes);
+                    for sub in line.lines() {
+                        let trimmed = sub.trim();
+                        if trimmed.starts_with('{') && trimmed.contains("proxylens-query-api-ready") {
+                            if let Ok(sig) = serde_json::from_str::<ReadySignal>(trimmed) {
+                                if sig.signal_type == "proxylens-query-api-ready" {
+                                    return Ok(sig);
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                let _ = child.kill();
-                return Err(format!("Error reading sidecar handshake: {}", e));
+                CommandEvent::Stderr(err_bytes) => {
+                    let err_str = String::from_utf8_lossy(&err_bytes);
+                    eprintln!("[ProxyLens Sidecar Stderr] {}", err_str);
+                }
+                CommandEvent::Error(err) => {
+                    return Err(format!("Sidecar error event: {}", err));
+                }
+                CommandEvent::Terminated(term) => {
+                    return Err(format!(
+                        "Sidecar terminated prematurely with code {:?}",
+                        term.code
+                    ));
+                }
+                _ => {}
             }
         }
-    }
+        Err("Sidecar stdout channel closed without outputting ready signal".to_string())
+    })
+    .await;
 
-    let _ = child.kill();
-    Err("Timeout waiting for query API ready signal".to_string())
+    match ready_res {
+        Ok(Ok(sig)) => {
+            let session = QueryApiSession {
+                base_url: format!("http://{}:{}", sig.host, sig.port),
+                token,
+                api_version: sig.api_version,
+            };
+            Ok((session, child))
+        }
+        Ok(Err(e)) => {
+            let _ = child.kill();
+            Err(e)
+        }
+        Err(_) => {
+            let _ = child.kill();
+            Err("Timed out waiting 5s for proxylens-query-api ready signal".to_string())
+        }
+    }
 }
 
-pub fn stop_query_sidecar(mut child: Child) {
+pub fn stop_query_sidecar(mut child: CommandChild) {
+    // 优雅停止: 先尝试发送 STOP\n，随后调用 kill
+    let _ = child.write(b"STOP\n");
     let _ = child.kill();
-    let _ = child.wait();
 }

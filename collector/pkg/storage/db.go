@@ -117,8 +117,8 @@ func OpenReadOnlyDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("%w: sqlite file not found at %s", ErrDBUnavailable, dbPath)
 	}
 
-	// 2. 使用 query_only=ON 配置 DSN
-	dsn := fmt.Sprintf("%s?_pragma=query_only=ON&_pragma=busy_timeout=10000&_pragma=foreign_keys=ON&_pragma=synchronous=NORMAL", dbPath)
+	// 2. 使用 mode=ro + query_only=ON 双重防御配置 DSN
+	dsn := fmt.Sprintf("%s?mode=ro&_pragma=query_only=ON&_pragma=busy_timeout=10000&_pragma=foreign_keys=ON&_pragma=synchronous=NORMAL", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to open sqlite connection: %v", ErrDBUnavailable, err)
@@ -128,7 +128,7 @@ func OpenReadOnlyDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(time.Hour)
 
-	// 3. 快速模式兼容性检验 (只读 SELECT)
+	// 3. 严格模式兼容性检验 (只读 SELECT): 必须精确匹配当前版本
 	var tableExists int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations';").Scan(&tableExists); err != nil {
 		_ = db.Close()
@@ -151,11 +151,13 @@ func OpenReadOnlyDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("%w: no applied migrations recorded", ErrSchemaIncompatible)
 	}
 
-	if maxDBVersion.Int64 > int64(maxBinary) {
+	// 严格模式: 低于或高于当前版本均 fail closed
+	if maxDBVersion.Int64 != int64(maxBinary) {
 		_ = db.Close()
-		return nil, fmt.Errorf("%w: db schema version (%d) is newer than binary supported max (%d)", ErrSchemaIncompatible, maxDBVersion.Int64, maxBinary)
+		return nil, fmt.Errorf("%w: db schema version (%d) does not match required binary schema version (%d)", ErrSchemaIncompatible, maxDBVersion.Int64, maxBinary)
 	}
 
 	return db, nil
 }
+
 

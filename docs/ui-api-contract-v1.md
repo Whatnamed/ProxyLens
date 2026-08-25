@@ -142,6 +142,44 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 
 ### 3.7 Connection Detail & Traffic
 - `GET /api/v1/connections/{sessionId}/{epochId}/{connectionId}`
-  - 返回连接元数据与其在最新 Accounting Run 中的归因记录。
+  - **三元组唯一身份检索**: 严格使用 `(session_id, epoch_id, connection_id)` 定位物理连接；
+  - **完整事件时序列表**: 返回该连接在 latest completed run 中的所有 `accountingEvents[]` 记录（保留 Rule/Host/Chain/Final Proxy 演化证据），以及汇总的 `accountingSummary`。
+  - **Response 结构**:
+  ```json
+  {
+    "connection": { ... },
+    "accountingEvents": [
+      {
+        "runId": "run-...",
+        "sourceEventId": "ev-...",
+        "observedAt": "2026-08-25T...",
+        "precision": "exact",
+        "route": "PROXY",
+        "rawUpload": 1000,
+        "rawDownload": 5000,
+        "accountedUpload": 1000,
+        "accountedDownload": 5000,
+        "accountingClass": "known_application",
+        "process": "chrome.exe",
+        "host": "google.com",
+        "rule": "DomainSuffix",
+        "finalProxy": "Node-HK-01"
+      }
+    ],
+    "accountingSummary": {
+      "runId": "run-...",
+      "accountingClass": "known_application",
+      "route": "PROXY",
+      "rawUploadTotal": 1000,
+      "rawDownloadTotal": 5000,
+      "accountedUploadTotal": 1000,
+      "accountedDownloadTotal": 5000,
+      "latestProcess": "chrome.exe",
+      "latestHost": "google.com",
+      "latestFinalProxy": "Node-HK-01"
+    }
+  }
+  ```
 - `GET /api/v1/connections/{sessionId}/{epochId}/{connectionId}/traffic`
-  - 返回该连接的所有流量增量时序帧列表。
+  - 返回该连接的所有原始流量增量时序帧列表。
+

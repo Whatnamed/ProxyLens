@@ -1,5 +1,6 @@
 import React from 'react';
 import { QueryApiClient } from '../api/client';
+import { ConnectionRecord } from '../api/types';
 import {
   useMetaQuery,
   useSummaryQuery,
@@ -188,7 +189,7 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
               </tr>
             </thead>
             <tbody>
-              {connsQuery.data?.items?.map((c) => (
+              {connsQuery.data?.items?.map((c: ConnectionRecord) => (
                 <tr key={`${c.sessionId}-${c.epochId}-${c.connectionId}`}>
                   <td><code>{c.connectionId}</code></td>
                   <td>{c.metadata.process || '-'}</td>

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::process::Child;
 use std::sync::Mutex;
+use tauri_plugin_shell::process::CommandChild;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,7 +12,7 @@ pub struct QueryApiSession {
 
 pub struct AppState {
     pub session: Mutex<Option<QueryApiSession>>,
-    pub child: Mutex<Option<Child>>,
+    pub child: Mutex<Option<CommandChild>>,
 }
 
 impl AppState {

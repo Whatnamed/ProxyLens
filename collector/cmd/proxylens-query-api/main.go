@@ -27,12 +27,28 @@ type ReadySignal struct {
 func main() {
 	dbPath := flag.String("db", "", "Absolute path to ProxyLens SQLite database")
 	listenAddr := flag.String("listen", "127.0.0.1:0", "Listen address (must be loopback, e.g. 127.0.0.1:0)")
-	token := flag.String("token", "", "High-entropy session token for Bearer authentication")
+	tokenFlag := flag.String("token", "", "Session token (optional via argv, preferred via stdin)")
 	flag.Parse()
 
-	if *dbPath == "" || *token == "" {
-		fmt.Fprintf(os.Stderr, "Usage: proxylens-query-api --db <path> --token <token> [--listen 127.0.0.1:0]\n")
+	if *dbPath == "" {
+		fmt.Fprintf(os.Stderr, "Usage: proxylens-query-api --db <path> [--listen 127.0.0.1:0] [--token <token>]\n")
 		os.Exit(1)
+	}
+
+	stdinScanner := bufio.NewScanner(os.Stdin)
+	var sessionToken string
+
+	if *tokenFlag != "" {
+		sessionToken = *tokenFlag
+	} else {
+		// 安全通道: 从 stdin 第一行读取 token，避免 argv 泄露给系统进程列表
+		if stdinScanner.Scan() {
+			sessionToken = strings.TrimSpace(stdinScanner.Text())
+		}
+		if sessionToken == "" {
+			fmt.Fprintf(os.Stderr, "[FATAL SECURITY ERROR] No session token provided via stdin or --token\n")
+			os.Exit(1)
+		}
 	}
 
 	// 1. 安全检查: 必须绑定 Loopback
@@ -48,7 +64,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 2. 以严格只读模式打开 SQLite DB
+	// 2. 以严格只读模式打开 SQLite DB (mode=ro + query_only=ON)
 	db, err := storage.OpenReadOnlyDB(ctx, *dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] Failed to open read-only database at %s: %v\n", *dbPath, err)
@@ -61,7 +77,7 @@ func main() {
 		DB:         db,
 		DBPath:     *dbPath,
 		ListenAddr: *listenAddr,
-		Token:      *token,
+		Token:      sessionToken,
 		AppVersion: "0.7.0-phase3a",
 	})
 	if err != nil {
@@ -91,10 +107,9 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		// 监听父进程管道是否断开 (Tauri 退出时 stdin 会关闭)
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			text := strings.TrimSpace(scanner.Text())
+		// 监听父进程管道是否发送 STOP 或关闭 (Tauri 退出时 stdin 会关闭)
+		for stdinScanner.Scan() {
+			text := strings.TrimSpace(stdinScanner.Text())
 			if text == "STOP" || text == "QUIT" {
 				break
 			}
@@ -107,7 +122,8 @@ func main() {
 	case <-ctx.Done():
 	}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// 优雅关闭 API Server (500ms 超时)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer shutdownCancel()
-	_ = server.Stop(shutdownCtx)
+	_ = server.Shutdown(shutdownCtx)
 }

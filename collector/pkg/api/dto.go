@@ -35,10 +35,32 @@ type ConnectionsListResponse struct {
 	HasMore bool                        `json:"hasMore"`
 }
 
+// ConnectionAccountingSummary 连接在最新核算轮次中的汇总信息
+type ConnectionAccountingSummary struct {
+	RunID                  string                  `json:"runId"`
+	AccountingClass        storage.AccountingClass `json:"accountingClass"`
+	Route                  string                  `json:"route"`
+	RawUploadTotal         int64                   `json:"rawUploadTotal"`
+	RawDownloadTotal       int64                   `json:"rawDownloadTotal"`
+	AccountedUploadTotal   int64                   `json:"accountedUploadTotal"`
+	AccountedDownloadTotal int64                   `json:"accountedDownloadTotal"`
+	LatestProcess          string                  `json:"latestProcess,omitempty"`
+	LatestProcessPath      string                  `json:"latestProcessPath,omitempty"`
+	LatestHost             string                  `json:"latestHost,omitempty"`
+	LatestSniffHost        string                  `json:"latestSniffHost,omitempty"`
+	LatestDestinationIP    string                  `json:"latestDestinationIp,omitempty"`
+	LatestNetwork          string                  `json:"latestNetwork,omitempty"`
+	LatestRule             string                  `json:"latestRule,omitempty"`
+	LatestRulePayload      string                  `json:"latestRulePayload,omitempty"`
+	LatestFinalProxy       string                  `json:"latestFinalProxy,omitempty"`
+	LatestTopPolicyGroup   string                  `json:"latestTopPolicyGroup,omitempty"`
+}
+
 // ConnectionDetailResponse 单条连接详情与审计证据
 type ConnectionDetailResponse struct {
-	Connection *storage.ConnectionRecord `json:"connection"`
-	Accounting *storage.AccountedTrafficRecord `json:"accounting,omitempty"`
+	Connection        *storage.ConnectionRecord          `json:"connection"`
+	AccountingEvents  []*storage.AccountedTrafficRecord `json:"accountingEvents"`
+	AccountingSummary *ConnectionAccountingSummary       `json:"accountingSummary,omitempty"`
 }
 
 // ConnectionTrafficResponse 单条连接的流量时序帧

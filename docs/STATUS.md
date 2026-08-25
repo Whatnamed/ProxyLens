@@ -8,18 +8,18 @@
 
 - **当前阶段**：`Phase 3A Complete — UI Platform Foundation & Query API Integration Finalized (Ready for Phase 3B Visual System & Primary Dashboard)`
 - **代码状态**：Phase 3A 桌面平台底座、Go 本地只读查询 API、安全 Loopback 会话桥接与 React 平台层已全部落地并验证通过：
-  1. **Tauri v2 桌面原生外壳 (`ui/src-tauri`)**：集成 Tauri v2，原生 Windows 窗口管理（可缩放、最小尺寸约束、零冗余权限）；
-  2. **Go Local Query API (`collector/cmd/proxylens-query-api`, `pkg/api`)**：独立只读查询服务，严格绑定 `127.0.0.1` 随机临时端口，开启 `query_only=ON`，标准输出首行吐出 `proxylens-query-api-ready` JSON 握手信号；
-  3. **单次会话高熵 Bearer Token 鉴权 (>=256-bit)**：每次 Tauri 启动动态生成，仅驻留于 Rust 与前端内存中，不落盘、不记日志、不在 URL 中传递；
-  4. **严格 CORS / Origin 白名单**：拒绝通配符 `*`，精确限制仅允许本地 Tauri 与 Vite 开发源；
-  5. **Sidecar 零耦合生命周期管理**：Tauri 启动时拉起 Query API，关闭时销毁 Query API，**独立后台运行的 Collector 保持健康常驻（完全解耦不受影响）**；
-  6. **React + TypeScript + Vite 平台层 (`ui/src`)**：集成 TanStack React Query，封装类型化 `QueryApiClient` 与统一错误模型，提供 `Phase 3 Platform Diagnostics` 临时开发者诊断面板；
-  7. **端到端集成冒烟与性能实测 (`run-phase3a-smoke.mjs`)**：
-     - Sidecar 启动握手延迟: **3839 ms**
-     - 首请求 `/api/v1/meta` 响应延迟: **3 ms**
-     - 首请求 `/api/v1/analytics/summary` 响应延迟: **3 ms**
-     - 独立 Collector 进程在 Sidecar 启动/退出前后保持存活: **CONFIRMED**
-  8. **测试套件覆盖**: 全部 54 个 Go 测试 (test: 9, state: 10, storage: 34, api: 1) + 18 个 Phase 0 回归测试 100% PASS；React 前端与 Tauri 原生可执行程序编译 100% PASS。
+  1. **Tauri v2 桌面原生外壳与官方 Sidecar Resolver (`ui/src-tauri`)**：集成 Tauri v2 与 `tauri_plugin_shell`，使用 `app.shell().sidecar("proxylens-query-api")` 动态解析 bundled 架构二进制，配合 `tokio::time::timeout` 5s 异步非阻塞超时与安全 CSP 策略；
+  2. **Go Local Query API (`collector/cmd/proxylens-query-api`, `pkg/api`)**：独立只读查询服务，严格绑定 `127.0.0.1` 随机临时端口，开启 `mode=ro + query_only=ON` 双防御与精确 Schema 匹配校验，标准输出首行吐出 `proxylens-query-api-ready` JSON 握手信号；
+  3. **单次会话高熵 Bearer Token 鉴权 (>=256-bit)**：每次 Tauri 启动动态生成，通过 anonymous stdin pipe 传输给 Sidecar（绝不通过 argv 暴露在进程列表），仅驻留于 Rust 与前端内存中，不落盘、不记日志、不在 URL 中传递；
+  4. **严格 CORS / Origin 白名单与错误隔离**：拒绝通配符 `*`，精确限制仅允许本地 Tauri 与 Vite 开发源；底层 SQLite 错误仅记录至内部日志，HTTP 仅返回结构化安全错误代码；
+  5. **连接三元组权威检索与完整事件流**：`/api/v1/connections/{sessionId}/{epochId}/{connectionId}` 严格按 `(session_id, epoch_id, connection_id)` 检索，返回最新 Run 下全部 `accountingEvents[]` 时序事件流与聚合 `accountingSummary`；
+  6. **Sidecar 零耦合生命周期管理**：Tauri 启动时拉起 Query API，关闭时销毁 Query API，**独立后台运行的 Collector 保持健康常驻（完全解耦不受影响）**；
+  7. **真实 Tauri Executable E2E 冒烟实测 (`run-phase3a-smoke.mjs`)**：
+     - 真实启动 Release 编译的 `proxylens-desktop.exe` 桌面程序；
+     - Tauri 自动拉起 bundled Go Sidecar 并就绪耗时: **663 ms**；
+     - 终止 Tauri 进程后 Go Sidecar 随之干净退出: **VERIFIED CLEAN EXIT**；
+     - 独立后台常驻 Collector 在全生命周期中保持健康运行: **VERIFIED UNINTERRUPTED**；
+  8. **测试套件覆盖**: 全部 54 个 Go 测试 (test: 9, state: 10, storage: 34, api: 1) + 18 个 Phase 0 回归测试 100% PASS；React 前端与 Tauri 原生 Release 可执行程序编译与 E2E 测试 100% PASS。
 - **环境资产清单 (Environment Inventory)**：
   - OS: Windows 11 (AMD64) / 12th Gen Intel Core i5-12400 (12 cores)
   - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
