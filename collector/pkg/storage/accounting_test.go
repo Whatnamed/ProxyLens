@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,7 +30,6 @@ func TestStorageFullMigrationChainV1ToV5(t *testing.T) {
 	dbPath, cleanup := createAccountingTestDB(t)
 	defer cleanup()
 
-	// 1. 手动直接执行 001_initial.sql 创建 v1 数据库
 	rawDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("Failed to open raw sqlite db: %v", err)
@@ -47,7 +47,6 @@ func TestStorageFullMigrationChainV1ToV5(t *testing.T) {
 	}
 	_ = rawDB.Close()
 
-	// 2. 通过 OpenDB 连续升级至最高版本 (v5)
 	upgradedDB, err := OpenDB(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB failed to run migrations: %v", err)
@@ -129,6 +128,120 @@ func TestObservationLifecycleSemantics(t *testing.T) {
 		t.Errorf("c2 mismatch after rebuild: %+v", c2After)
 	}
 	_ = sink.Close()
+}
+
+func TestInterruptedSessionLifecycleLastEventPriority(t *testing.T) {
+	ctx := context.Background()
+	dbPath, cleanup := createAccountingTestDB(t)
+	defer cleanup()
+
+	sink, err := OpenSQLiteSink(ctx, dbPath, "sess-interrupted", "v1.0.0-test")
+	if err != nil { t.Fatalf("Open sink failed: %v", err) }
+
+	t0 := time.Date(2026, 8, 25, 8, 0, 0, 0, time.UTC)
+	tEvent := time.Date(2026, 8, 25, 8, 15, 0, 0, time.UTC)
+
+	_ = sink.Emit(&types.CollectorEvent{
+		EventID: "i-boot", SessionID: "sess-interrupted", EpochID: 1, FrameSequence: 1, EventSequence: 1,
+		Type: types.EventConnectionBootstrap, Timestamp: t0, ConnectionID: "c-interrupted",
+		Metadata: types.RawMetadata{Process: "task.exe"},
+	})
+	_ = sink.Emit(&types.CollectorEvent{
+		EventID: "i-delta", SessionID: "sess-interrupted", EpochID: 1, FrameSequence: 2, EventSequence: 1,
+		Type: types.EventConnectionDelta, Timestamp: tEvent, ConnectionID: "c-interrupted",
+		DeltaUpload: 500, DeltaDownload: 500,
+	})
+
+	// 显式以 Interrupted 状态结束
+	if err := sink.EndSession(ctx, "sess-interrupted", SessionStatusInterrupted); err != nil {
+		t.Fatalf("EndSession interrupted failed: %v", err)
+	}
+
+	qs := NewQueryService(sink.db)
+	cBefore, err := qs.GetConnection(ctx, "sess-interrupted", 1, "c-interrupted")
+	if err != nil { t.Fatalf("Get connection failed: %v", err) }
+
+	// 必须以 last_event_at (8:15) 作为结束时间
+	if cBefore.ObservationEndedAt == nil || !cBefore.ObservationEndedAt.Equal(tEvent) {
+		t.Errorf("ObservationEndedAt expected %v, got %v", tEvent, cBefore.ObservationEndedAt)
+	}
+	if cBefore.ObservationEndReason != "collector_session_interrupted" {
+		t.Errorf("ObservationEndReason expected collector_session_interrupted, got %s", cBefore.ObservationEndReason)
+	}
+
+	// 验证 RebuildProjections 前后完全一致 (指令 5)
+	if err := RebuildProjections(ctx, sink.db); err != nil {
+		t.Fatalf("RebuildProjections failed: %v", err)
+	}
+	cAfter, _ := qs.GetConnection(ctx, "sess-interrupted", 1, "c-interrupted")
+	if cAfter.ObservationEndedAt == nil || !cAfter.ObservationEndedAt.Equal(tEvent) || cAfter.ObservationEndReason != "collector_session_interrupted" {
+		t.Errorf("Rebuild lifecycle mismatch: before=%+v, after=%+v", cBefore, cAfter)
+	}
+	_ = sink.Close()
+}
+
+func TestAccountingHistoricalMetadataFromJournal(t *testing.T) {
+	ctx := context.Background()
+	dbPath, cleanup := createAccountingTestDB(t)
+	defer cleanup()
+
+	sink, err := OpenSQLiteSink(ctx, dbPath, "sess-meta-evo", "v1.0.0-test")
+	if err != nil { t.Fatalf("Open sink failed: %v", err) }
+
+	t0 := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 8, 25, 9, 10, 0, 0, time.UTC)
+
+	// 1. Frame 1: 初始快照 (Host: "initial.com", Process: "initial.exe")
+	_ = sink.Emit(&types.CollectorEvent{
+		EventID: "evo-boot", SessionID: "sess-meta-evo", EpochID: 1, FrameSequence: 1, EventSequence: 1,
+		Type: types.EventConnectionBootstrap, Timestamp: t0, ConnectionID: "c-evo",
+		Route: types.RouteProxy, AttributionClass: types.ClassKnownApplication,
+		Metadata: types.RawMetadata{Process: "initial.exe", Host: "initial.com"},
+		Chains: []string{"Node-A"},
+	})
+	// Frame 2: 产生第一笔流量 Delta
+	_ = sink.Emit(&types.CollectorEvent{
+		EventID: "evo-delta-1", SessionID: "sess-meta-evo", EpochID: 1, FrameSequence: 2, EventSequence: 1,
+		Type: types.EventConnectionDelta, Timestamp: t0.Add(time.Second), ConnectionID: "c-evo",
+		Route: types.RouteProxy, AttributionClass: types.ClassKnownApplication,
+		DeltaUpload: 100, DeltaDownload: 100,
+	})
+
+	// 2. Frame 3: Metadata 演化更新为 "evolved.com" / "evolved.exe"
+	_ = sink.Emit(&types.CollectorEvent{
+		EventID: "evo-meta", SessionID: "sess-meta-evo", EpochID: 1, FrameSequence: 3, EventSequence: 1,
+		Type: types.EventConnectionMetadataUpdated, Timestamp: t1, ConnectionID: "c-evo",
+		Route: types.RouteProxy, AttributionClass: types.ClassKnownApplication,
+		Metadata: types.RawMetadata{Process: "evolved.exe", Host: "evolved.com"},
+		Chains: []string{"Node-B"},
+	})
+	// Frame 4: 产生第二笔流量 Delta
+	_ = sink.Emit(&types.CollectorEvent{
+		EventID: "evo-delta-2", SessionID: "sess-meta-evo", EpochID: 1, FrameSequence: 4, EventSequence: 1,
+		Type: types.EventConnectionDelta, Timestamp: t1.Add(time.Second), ConnectionID: "c-evo",
+		Route: types.RouteProxy, AttributionClass: types.ClassKnownApplication,
+		DeltaUpload: 200, DeltaDownload: 200,
+	})
+	_ = sink.Close()
+
+	db, err := OpenDB(ctx, dbPath)
+	if err != nil { t.Fatalf("OpenDB failed: %v", err) }
+	defer db.Close()
+
+	run, err := RebuildAccounting(ctx, db, "test meta run")
+	if err != nil { t.Fatalf("RebuildAccounting failed: %v", err) }
+
+	// 验证 accounted_traffic 中第一笔 delta 的 Host 为 initial.com，第二笔为 evolved.com (指令 1)
+	var host1, host2 string
+	_ = db.QueryRowContext(ctx, "SELECT host FROM accounted_traffic WHERE run_id = ? AND source_event_id = 'evo-delta-1'", run.RunID).Scan(&host1)
+	_ = db.QueryRowContext(ctx, "SELECT host FROM accounted_traffic WHERE run_id = ? AND source_event_id = 'evo-delta-2'", run.RunID).Scan(&host2)
+
+	if host1 != "initial.com" {
+		t.Errorf("Expected host1 to be initial.com (historical at event time), got %s", host1)
+	}
+	if host2 != "evolved.com" {
+		t.Errorf("Expected host2 to be evolved.com, got %s", host2)
+	}
 }
 
 func TestConservativeRelayReconciliation(t *testing.T) {
@@ -262,9 +375,9 @@ func TestConservativeRelayReconciliation(t *testing.T) {
 	}
 
 	// 验证：
-	// Raw PROXY Up: c-log-1(1000) + c-cand-1(1000) + c-amb-cand(300) + c-amb-log1(300) + c-amb-log2(300) = 2900
-	// Accounted PROXY Up: c-log-1(1000) + c-cand-1(0, 去重) + c-amb-cand(300, 歧义不扣) + c-amb-log1(300) + c-amb-log2(300) = 1900
-	// DIRECT Up: 500 (独立统计)
+	// Raw PROXY Up: 2900 (c-log 1000 + c-cand 1000 + amb-cand 300 + amb-log1 300 + amb-log2 300)
+	// Accounted PROXY Up: 1900 (c-cand-1 去重为 0，ambiguous 不扣)
+	// DIRECT Up: 500
 	if summary.ProxyUpload != 1900 || summary.ProxyDownload != 3200 {
 		t.Errorf("Proxy upload/download mismatch: Up=%d (expected 1900), Down=%d (expected 3200)", summary.ProxyUpload, summary.ProxyDownload)
 	}
@@ -273,6 +386,18 @@ func TestConservativeRelayReconciliation(t *testing.T) {
 	}
 	if summary.AmbiguousRelayUpload != 300 || summary.AmbiguousRelayDownload != 400 {
 		t.Errorf("Ambiguous relay mismatch: Up=%d, Down=%d", summary.AmbiguousRelayUpload, summary.AmbiguousRelayDownload)
+	}
+
+	// 验证 evidence_json 指标完整性 (指令 2)
+	var evJSONStr string
+	err = db.QueryRowContext(ctx, "SELECT evidence_json FROM relay_relations WHERE run_id = ? AND candidate_connection_id = 'c-cand-1'", run.RunID).Scan(&evJSONStr)
+	if err != nil {
+		t.Fatalf("Query evidence_json failed: %v", err)
+	}
+	var evMap map[string]any
+	_ = json.Unmarshal([]byte(evJSONStr), &evMap)
+	if evMap["decisionReason"] != "strict_1to1_structural_overlap_match" || evMap["candidateKey"] == nil || evMap["logicalKey"] == nil {
+		t.Errorf("Incomplete evidence metrics in relay_relations: %+v", evMap)
 	}
 
 	// 验证 10 次确定性 Rebuild (E8.4)
@@ -323,7 +448,6 @@ func TestHourlyAllocationByteConservation(t *testing.T) {
 	run, err := RebuildAccounting(ctx, db, "test alloc")
 	if err != nil { t.Fatalf("RebuildAccounting failed: %v", err) }
 
-	// 查询 hourly aggregates 中 total 维度两个小时的总和
 	var sumUp, sumDown int64
 	err = db.QueryRowContext(ctx, `
 		SELECT SUM(upload_bytes), SUM(download_bytes)
@@ -334,74 +458,79 @@ func TestHourlyAllocationByteConservation(t *testing.T) {
 		t.Fatalf("Query hourly sum failed: %v", err)
 	}
 
-	// 必须绝对字节守恒 (E8.5)
+	// 纯整型纳秒分摊，绝对字节守恒 (指令 6)
 	if sumUp != 10000000001 || sumDown != 1 {
 		t.Fatalf("Byte conservation broken! Expected (10000000001, 1), got (%d, %d)", sumUp, sumDown)
 	}
 }
 
-func TestMonitoringCoverageIntervalUnion(t *testing.T) {
+func TestMonitoringCoverageIntervalUnionAndTrailingOffline(t *testing.T) {
 	ctx := context.Background()
 	dbPath, cleanup := createAccountingTestDB(t)
 	defer cleanup()
 
-	// 1. 初始化 DB 并创建 Session
 	db, err := OpenDB(ctx, dbPath)
 	if err != nil { t.Fatalf("OpenDB failed: %v", err) }
 	defer db.Close()
 
-	nowStr := "2026-08-25T10:00:00Z"
-	_, _ = db.Exec(`
-		INSERT INTO collector_sessions (session_id, started_at, status, created_at, updated_at)
-		VALUES ('sess-cov', '2026-08-25T10:00:00Z', 'closed_clean', ?, ?);
-	`, nowStr, nowStr)
+	tSessStart := time.Now().UTC().Add(-2 * time.Hour)
+	tSessEnd := tSessStart.Add(30 * time.Minute)
+	sessStartStr := tSessStart.Format(time.RFC3339Nano)
+	sessEndStr := tSessEnd.Format(time.RFC3339Nano)
 
-	// 2. 插入两个重叠的 Gap (Gap 1: 10:00~10:10, Gap 2: 10:05~10:15)
+	// 1. 插入已停止的会话 (用于测试 Trailing Offline Gap, 指令 4)
+	_, _ = db.Exec(`
+		INSERT INTO collector_sessions (session_id, started_at, ended_at, last_event_at, status, created_at, updated_at)
+		VALUES ('sess-cov', ?, ?, ?, 'closed_clean', ?, ?);
+	`, sessStartStr, sessEndStr, sessEndStr, sessStartStr, sessStartStr)
+
+	// 2. 插入两个重叠的 Gaps (Gap 1 与 Gap 2 重叠)
+	g1Start := tSessStart
+	g1End := tSessStart.Add(10 * time.Minute)
+	g2Start := tSessStart.Add(5 * time.Minute)
+	g2End := tSessStart.Add(15 * time.Minute)
+
 	_, _ = db.Exec(`
 		INSERT INTO monitoring_gaps (gap_id, source, session_id, started_at, ended_at, duration_ms, reason, precision, created_at)
 		VALUES
-			('g1', 'controller_stream', 'sess-cov', '2026-08-25T10:00:00Z', '2026-08-25T10:10:00Z', 600000, 'reconnect', 'interval', ?),
-			('g2', 'collector_session_boundary', 'sess-cov', '2026-08-25T10:05:00Z', '2026-08-25T10:15:00Z', 600000, 'offline', 'interval', ?);
-	`, nowStr, nowStr)
+			('g1', 'controller_stream', 'sess-cov', ?, ?, 600000, 'reconnect', 'interval', ?),
+			('g2', 'collector_session_boundary', 'sess-cov', ?, ?, 600000, 'offline', 'interval', ?);
+	`, g1Start.Format(time.RFC3339Nano), g1End.Format(time.RFC3339Nano), sessStartStr,
+		g2Start.Format(time.RFC3339Nano), g2End.Format(time.RFC3339Nano), sessStartStr)
 
 	svc := NewAnalyticsService(db)
 
-	// 查询区间 10:00 ~ 11:00 (1 小时 = 3,600,000 ms)
-	qStart, _ := time.Parse(time.RFC3339, "2026-08-25T10:00:00Z")
-	qEnd, _ := time.Parse(time.RFC3339, "2026-08-25T11:00:00Z")
+	// 查询区间包含会话内与会话后的 Trailing Offline
+	qStart := tSessStart
+	qEnd := tSessStart.Add(1 * time.Hour) // 1 小时窗口
 
 	cov, err := svc.GetCoverage(ctx, &qStart, &qEnd)
 	if err != nil {
 		t.Fatalf("GetCoverage failed: %v", err)
 	}
 
-	// 两个重叠 Gap 并集后应为 10:00 ~ 10:15 (15 分钟 = 900,000 ms)
-	if len(cov.MergedGaps) != 1 {
-		t.Errorf("Expected 1 merged gap from overlapping intervals, got %d", len(cov.MergedGaps))
+	// 验证 MergedGaps 包含会话内的 15 分钟合并缺口（保留 Provenance）+ 会话后 30 分钟的 Trailing Offline 缺口
+	if len(cov.MergedGaps) < 2 {
+		t.Errorf("Expected at least 2 merged gaps (session gap + trailing offline), got %d: %+v", len(cov.MergedGaps), cov.MergedGaps)
 	}
-	if cov.UncoveredDurationMs != 900000 {
-		t.Errorf("Expected 900,000 ms uncovered (15 mins), got %d ms", cov.UncoveredDurationMs)
-	}
-	if cov.CoveredDurationMs != 2700000 {
-		t.Errorf("Expected 2,700,000 ms covered (45 mins), got %d ms", cov.CoveredDurationMs)
-	}
-	if cov.CoverageRatio == nil || *cov.CoverageRatio != 0.75 {
-		t.Errorf("Expected 0.75 coverage ratio (75%%), got %v", cov.CoverageRatio)
+	// 验证 Overlap Gap Provenance 不丢 (指令 4)
+	if len(cov.MergedGaps[0].Sources) < 2 {
+		t.Errorf("Expected merged gap 0 to retain multiple sources provenance, got %+v", cov.MergedGaps[0])
 	}
 
-	// 查询完全早于 known scope 的时间 (08:00 ~ 09:00)
-	earlyStart, _ := time.Parse(time.RFC3339, "2026-08-25T08:00:00Z")
-	earlyEnd, _ := time.Parse(time.RFC3339, "2026-08-25T09:00:00Z")
-	earlyCov, err := svc.GetCoverage(ctx, &earlyStart, &earlyEnd)
+	// 验证 Future Query Clip (指令 4)
+	futureStart := time.Now().UTC().Add(1 * time.Hour)
+	futureEnd := time.Now().UTC().Add(2 * time.Hour)
+	futureCov, err := svc.GetCoverage(ctx, &futureStart, &futureEnd)
 	if err != nil {
-		t.Fatalf("GetCoverage early failed: %v", err)
+		t.Fatalf("GetCoverage future failed: %v", err)
 	}
-	if earlyCov.CoverageRatio != nil {
-		t.Errorf("Expected nil coverage ratio for outside known scope window, got %v", earlyCov.CoverageRatio)
+	if futureCov.CoverageRatio != nil || futureCov.FutureDurationMs <= 0 {
+		t.Errorf("Future coverage ratio must be nil with FutureDurationMs > 0, got ratio=%v, futureMs=%d", futureCov.CoverageRatio, futureCov.FutureDurationMs)
 	}
 }
 
-func TestAnalyticsServiceTopQueries(t *testing.T) {
+func TestAnalyticsServiceTopQueriesAndPartialHour(t *testing.T) {
 	ctx := context.Background()
 	dbPath, cleanup := createAccountingTestDB(t)
 	defer cleanup()
@@ -464,6 +593,10 @@ func TestAnalyticsServiceTopQueries(t *testing.T) {
 	if topProcs[0].Key != "git.exe" || topProcs[0].TotalBytes != 10000 {
 		t.Errorf("Top process #1 mismatch: got %+v", topProcs[0])
 	}
+	// 验证全窗口 Distinct 连接数 (c-1 产生流量，Distinct 连接数为 1)
+	if topProcs[0].ConnectionCount != 1 {
+		t.Errorf("Top process distinct connection count mismatch: expected 1, got %d", topProcs[0].ConnectionCount)
+	}
 
 	// 2. Top Hosts (github.com > api.anthropic.com)
 	topHosts, err := svc.GetTopHosts(ctx, AnalyticsFilter{Limit: 10})
@@ -503,7 +636,6 @@ func TestAccountingRebuildSanity10k(t *testing.T) {
 
 	t0 := time.Date(2026, 8, 25, 15, 0, 0, 0, time.UTC)
 
-	// 构造 10,000 条合成流量事件 (5,000 Bootstrap + 5,000 Delta)
 	const count = 5000
 	for i := 0; i < count; i++ {
 		connID := fmt.Sprintf("c-10k-%d", i)

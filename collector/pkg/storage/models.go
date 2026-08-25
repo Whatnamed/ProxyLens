@@ -300,10 +300,12 @@ type UsageSummary struct {
 
 type MergedGap struct {
 	Source     string    `json:"source"`
+	Sources    []string  `json:"sources,omitempty"`
 	StartedAt  time.Time `json:"startedAt"`
 	EndedAt    time.Time `json:"endedAt"`
 	DurationMs int64     `json:"durationMs"`
 	Reason     string    `json:"reason"`
+	Reasons    []string  `json:"reasons,omitempty"`
 }
 
 type CoverageSummary struct {
@@ -316,6 +318,7 @@ type CoverageSummary struct {
 	CoveredDurationMs         int64       `json:"coveredDurationMs"`
 	UncoveredDurationMs       int64       `json:"uncoveredDurationMs"`
 	OutsideKnownScopeMs       int64       `json:"outsideKnownScopeMs"`
+	FutureDurationMs          int64       `json:"futureDurationMs"`
 
 	CoverageRatio             *float64    `json:"coverageRatio,omitempty"` // nil if outside known scope
 	ControllerGapDurationMs   int64       `json:"controllerGapDurationMs"`

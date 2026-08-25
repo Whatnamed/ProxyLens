@@ -104,9 +104,9 @@ func RebuildProjections(ctx context.Context, db *sql.DB) error {
 				return fmt.Errorf("failed to reconcile clean session close during rebuild: %w", err)
 			}
 		} else if s.status == string(SessionStatusInterrupted) {
-			endTime := s.endedAt.String
+			endTime := s.lastEventAt.String
 			if endTime == "" {
-				endTime = s.lastEventAt.String
+				endTime = s.endedAt.String
 			}
 			if endTime == "" {
 				endTime = s.startedAt

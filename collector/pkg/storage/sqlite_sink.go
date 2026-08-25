@@ -234,9 +234,17 @@ func (s *SQLiteEventSink) EndSession(ctx context.Context, sessionID string, stat
 		return err
 	}
 
+	// 优先以 last_event_at 作为 interrupted 连接结束时间
+	var lastEventStr sql.NullString
+	_ = tx.QueryRowContext(ctx, "SELECT last_event_at FROM collector_sessions WHERE session_id = ?", sessionID).Scan(&lastEventStr)
+	
+	endObsTime := nowStr
 	endReason := "collector_session_closed"
 	if status == SessionStatusInterrupted {
 		endReason = "collector_session_interrupted"
+		if lastEventStr.Valid && lastEventStr.String != "" {
+			endObsTime = lastEventStr.String
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE connections SET
@@ -244,7 +252,7 @@ func (s *SQLiteEventSink) EndSession(ctx context.Context, sessionID string, stat
 			observation_end_reason = ?,
 			updated_at = ?
 		WHERE session_id = ? AND observation_ended_at IS NULL;
-	`, nowStr, endReason, nowStr, sessionID); err != nil {
+	`, endObsTime, endReason, nowStr, sessionID); err != nil {
 		return err
 	}
 
