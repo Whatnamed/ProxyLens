@@ -2,7 +2,7 @@
  * ProxyLens Non-visual API Error Mapping Utilities
  */
 
-import { ApiErrorResponse } from '../api/types';
+import type { ApiErrorResponse } from '../api/types';
 
 export function mapApiErrorCode(code: string | undefined): string {
   switch (code) {

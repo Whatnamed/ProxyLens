@@ -58,3 +58,54 @@ export function formatLocalDateTime(isoString: string | null | undefined): strin
     return isoString;
   }
 }
+
+/** `HH:mm:ss` — the resolution that matters when inspecting a connection timeline. */
+export function formatLocalTime(isoString: string | null | undefined): string {
+  if (!isoString) return '-';
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
+    return d.toLocaleTimeString('zh-CN', { hour12: false });
+  } catch {
+    return isoString;
+  }
+}
+
+/** `MM-DD HH:mm` — compact enough for dense tables and timeline ticks. */
+export function formatLocalShort(isoString: string | null | undefined): string {
+  if (!isoString) return '-';
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return isoString;
+  }
+}
+
+/** Build an explicit custom window from two local `datetime-local` inputs. */
+export function getCustomWindow(fromLocal: string, toLocal: string): TimeRangeRFC3339 | null {
+  if (!fromLocal || !toLocal) return null;
+  const from = new Date(fromLocal);
+  const to = new Date(toLocal);
+  if (isNaN(from.getTime()) || isNaN(to.getTime())) return null;
+  if (from.getTime() >= to.getTime()) return null;
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+/** `datetime-local` input value (local, minute precision) from an ISO instant. */
+export function toLocalInputValue(isoString: string | null | undefined): string {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export const QUICK_WINDOW_LABELS: Record<QuickWindowType, string> = {
+  today: '今天',
+  yesterday: '昨天',
+  '7d': '近 7 天',
+  '30d': '近 30 天',
+};

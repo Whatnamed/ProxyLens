@@ -2,14 +2,18 @@ import React, { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getQueryApiSession, isTauriEnvironment } from './platform/tauri';
 import { QueryApiClient } from './api/client';
-import { DiagnosticsView } from './diagnostics/DiagnosticsView';
-import './styles/diagnostics.css';
+import { AppFiltersProvider } from './state/AppFilters';
+import { Shell } from './app/Shell';
+import { usePlatformProbe } from './app/usePlatformProbe';
+import './styles/tokens.css';
+import './styles/app.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      staleTime: 2000,
+      staleTime: 10_000,
+      refetchOnWindowFocus: false,
     },
   },
 });
@@ -31,21 +35,24 @@ export const App: React.FC = () => {
         }
       } catch (err: unknown) {
         if (active) {
-          const msg = err instanceof Error ? err.message : String(err);
-          setSessionError(msg);
+          setSessionError(err instanceof Error ? err.message : String(err));
         }
       }
     }
 
-    initSession();
+    void initSession();
     return () => {
       active = false;
     };
   }, []);
 
+  usePlatformProbe(apiClient);
+
   return (
     <QueryClientProvider client={queryClient}>
-      <DiagnosticsView client={apiClient} isTauri={isTauri} sessionError={sessionError} />
+      <AppFiltersProvider>
+        <Shell client={apiClient} isTauri={isTauri} sessionError={sessionError} />
+      </AppFiltersProvider>
     </QueryClientProvider>
   );
 };

@@ -1,8 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatBytes } from './format.js';
-import { getQuickWindow } from './time.js';
-import { mapApiErrorCode, formatErrorMessage } from './error.js';
+import { formatBytes } from './format.ts';
+import { getQuickWindow } from './time.ts';
+import { mapApiErrorCode, formatErrorMessage } from './error.ts';
 
 describe('Utility: formatBytes', () => {
   it('handles zero, null, undefined, and NaN', () => {

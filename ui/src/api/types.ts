@@ -260,4 +260,29 @@ export interface ConnectionDetailResponse {
   accountingSummary?: ConnectionAccountingSummary;
 }
 
+/** One raw observation frame of a connection's byte counters. */
+export interface ConnectionTrafficRecord {
+  eventId: string;
+  sessionId: string;
+  epochId: number;
+  frameSequence: number;
+  eventSequence: number;
+  connectionId: string;
+  observedAt: string;
+  intervalStart?: string;
+  intervalEnd?: string;
+  precision: string;
+  deltaUpload: number;
+  deltaDownload: number;
+  observedUploadCounter: number;
+  observedDownloadCounter: number;
+  monitoredUploadTotal: number;
+  monitoredDownloadTotal: number;
+}
+
+export interface ConnectionTrafficResponse {
+  connectionId: string;
+  traffic: ConnectionTrafficRecord[];
+}
+
 

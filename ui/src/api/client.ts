@@ -8,6 +8,7 @@ import {
   CoverageSummary,
   ConnectionsListResponse,
   ConnectionDetailResponse,
+  ConnectionTrafficResponse,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -117,5 +118,16 @@ export class QueryApiClient {
 
   async getConnectionDetail(sessionId: string, epochId: number, connectionId: string): Promise<ConnectionDetailResponse> {
     return this.request<ConnectionDetailResponse>(`/api/v1/connections/${sessionId}/${epochId}/${connectionId}`);
+  }
+
+  /** Raw traffic increment frames for one connection (the physical observation series). */
+  async getConnectionTraffic(
+    sessionId: string,
+    epochId: number,
+    connectionId: string
+  ): Promise<ConnectionTrafficResponse> {
+    return this.request<ConnectionTrafficResponse>(
+      `/api/v1/connections/${sessionId}/${epochId}/${connectionId}/traffic`
+    );
   }
 }

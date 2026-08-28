@@ -12,11 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "ProxyLens Platform Diagnostics",
-        "width": 1100,
-        "height": 750,
-        "minWidth": 800,
-        "minHeight": 600,
+        "title": "ProxyLens · 代理流量审计",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 640,
         "resizable": true
       }
     ],

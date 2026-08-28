@@ -1,0 +1,102 @@
+/*
+ * ProxyLens Design Tokens
+ *
+ * ProxyLens is a read-only audit instrument, not a SaaS dashboard.
+ * The visual language follows from that:
+ *
+ *   1. Surfaces are dark and low-chroma so that data is the brightest thing on screen.
+ *   2. Colour is a semantic channel, never decoration. Two independent axes exist:
+ *        - ROUTE axis  : what happened to the traffic (PROXY / DIRECT / REJECT / UNKNOWN)
+ *        - TRUST axis  : how far the numbers can be believed (ok / warn / danger)
+ *      These never borrow from each other, so a red rule row and a red gap mean different things.
+ *   3. Absence of data (monitoring gaps) is drawn as hatched emptiness, never filled
+ *      with a colour that could be mistaken for measured traffic.
+ */
+
+:root {
+  /* ---- Surfaces (deep neutral with a cold cast) ---- */
+  --pl-bg-sunken: #05070a;
+  --pl-bg-base: #080b10;
+  --pl-bg-panel: #0e131a;
+  --pl-bg-raised: #131924;
+  --pl-bg-hover: #18212d;
+  --pl-bg-active: #1d2733;
+  --pl-bg-input: #0a0e14;
+
+  /* ---- Lines ---- */
+  --pl-line-subtle: #161e28;
+  --pl-line: #232d3a;
+  --pl-line-strong: #33404f;
+
+  /* ---- Text ---- */
+  --pl-text-1: #e7edf5;
+  --pl-text-2: #9dabbe;
+  --pl-text-3: #6b7a8d;
+  --pl-text-4: #4c5968;
+
+  /* ---- ROUTE semantics axis ----
+     PROXY is the hero: the product exists to explain real proxy traffic.
+     DIRECT is deliberately desaturated so it can never compete for attention. */
+  --pl-route-proxy: #4da3e8;
+  --pl-route-proxy-dim: rgba(77, 163, 232, 0.16);
+  --pl-route-direct: #7d8b9c;
+  --pl-route-direct-dim: rgba(125, 139, 156, 0.16);
+  --pl-route-reject: #e5544b;
+  --pl-route-reject-dim: rgba(229, 84, 75, 0.16);
+  --pl-route-unknown: #a98bf0;
+  --pl-route-unknown-dim: rgba(169, 139, 240, 0.16);
+
+  /* ---- TRUST axis ---- */
+  --pl-ok: #3ecf8e;
+  --pl-ok-dim: rgba(62, 207, 142, 0.14);
+  --pl-warn: #e0a33a;
+  --pl-warn-dim: rgba(224, 163, 58, 0.14);
+  --pl-danger: #e5544b;
+  --pl-danger-dim: rgba(229, 84, 75, 0.14);
+  --pl-accent: #4da3e8;
+  --pl-accent-dim: rgba(77, 163, 232, 0.14);
+
+  /* ---- Monitoring gap: drawn as emptiness, tinted but never "traffic-like" ---- */
+  --pl-gap-base: #16120a;
+  --pl-gap-stripe: rgba(224, 163, 58, 0.42);
+
+  /* ---- Typography ---- */
+  --pl-font-ui: "Inter var", "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui,
+    -apple-system, "Helvetica Neue", sans-serif;
+  --pl-font-mono: "Cascadia Mono", "JetBrains Mono", "SFMono-Regular", "Consolas",
+    "Liberation Mono", ui-monospace, monospace;
+
+  --pl-fs-micro: 10px;
+  --pl-fs-label: 11px;
+  --pl-fs-meta: 12px;
+  --pl-fs-body: 13px;
+  --pl-fs-title: 15px;
+  --pl-fs-metric: 19px;
+  --pl-fs-hero: 27px;
+
+  /* ---- Spacing ---- */
+  --pl-sp-1: 2px;
+  --pl-sp-2: 4px;
+  --pl-sp-3: 6px;
+  --pl-sp-4: 8px;
+  --pl-sp-5: 10px;
+  --pl-sp-6: 12px;
+  --pl-sp-8: 16px;
+  --pl-sp-10: 20px;
+  --pl-sp-12: 24px;
+  --pl-sp-16: 32px;
+
+  /* ---- Radii ---- */
+  --pl-r-xs: 3px;
+  --pl-r-sm: 5px;
+  --pl-r-md: 8px;
+  --pl-r-lg: 12px;
+
+  /* ---- Elevation ---- */
+  --pl-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --pl-shadow-overlay: 0 16px 48px rgba(0, 0, 0, 0.62);
+
+  /* ---- Layout ---- */
+  --pl-rail-w: 208px;
+  --pl-topbar-h: 56px;
+}
