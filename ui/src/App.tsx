@@ -2,7 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getQueryApiSession, isTauriEnvironment } from './platform/tauri';
 import { QueryApiClient } from './api/client';
-import { DiagnosticsView } from './diagnostics/DiagnosticsView';
+import { AuditProvider } from './state/AuditContext';
+import { AppShell } from './components/shell/AppShell';
+import './styles/tokens.css';
+import './styles/globals.css';
+import './styles/components.css';
+import './styles/shell.css';
 import './styles/diagnostics.css';
 
 const queryClient = new QueryClient({
@@ -45,7 +50,9 @@ export const App: React.FC = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <DiagnosticsView client={apiClient} isTauri={isTauri} sessionError={sessionError} />
+      <AuditProvider>
+        <AppShell client={apiClient} isTauri={isTauri} sessionError={sessionError} />
+      </AuditProvider>
     </QueryClientProvider>
   );
 };

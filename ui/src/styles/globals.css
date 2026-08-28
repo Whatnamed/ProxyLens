@@ -1,0 +1,109 @@
+/* ProxyLens UI — Global base styles */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--pl-font-sans);
+  font-size: var(--pl-text-13);
+  line-height: 1.45;
+  color: var(--pl-text-primary);
+  background: var(--pl-canvas);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--pl-accent-soft);
+}
+
+/* Focus: keyboard focus is distinct from selection/hover */
+:focus-visible {
+  outline: 2px solid var(--pl-focus-ring);
+  outline-offset: 1px;
+  border-radius: var(--pl-radius-xs);
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--pl-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Scrollbars: quiet, theme-aware */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pl-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--pl-border-strong);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Typography helpers */
+.pl-mono {
+  font-family: var(--pl-font-mono);
+  font-feature-settings: normal;
+}
+
+.pl-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.pl-eyebrow {
+  font-size: var(--pl-text-11);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pl-text-muted);
+}
+
+.pl-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

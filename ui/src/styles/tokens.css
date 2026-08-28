@@ -1,0 +1,161 @@
+/* ProxyLens UI — Semantic theme tokens (Design System Draft v1 seed)
+ * Light is canonical; Dark is a coherent graphite adaptation.
+ * Token roles are authoritative; hex values are tunable seeds. */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --pl-canvas: #f7f7f5;
+  --pl-sidebar: #f2f2f0;
+  --pl-workspace: #fafaf8;
+
+  --pl-surface-subtle: #f4f4f1;
+  --pl-surface-raised: #ffffff;
+  --pl-surface-inset: #eeeeeb;
+  --pl-surface-selected: #e9ebe8;
+  --pl-surface-hover: #f0f1ee;
+
+  /* Borders */
+  --pl-border: #dedfdb;
+  --pl-border-muted: #e7e8e4;
+  --pl-border-strong: #c9ccc6;
+
+  /* Text */
+  --pl-text-primary: #1d201e;
+  --pl-text-secondary: #555a56;
+  --pl-text-muted: #7e847f;
+  --pl-text-disabled: #a8ada8;
+
+  /* Interaction */
+  --pl-accent: #607b82;
+  --pl-accent-hover: #536d74;
+  --pl-accent-soft: #e5ecec;
+  --pl-focus-ring: rgba(96, 123, 130, 0.35);
+
+  /* Route semantics */
+  --pl-route-proxy: #5f7d8c;
+  --pl-route-proxy-soft: #e7eef1;
+  --pl-route-direct: #667d69;
+  --pl-route-direct-soft: #e8eee8;
+  --pl-route-reject: #965f57;
+  --pl-route-reject-soft: #f3e9e6;
+
+  /* Status semantics */
+  --pl-status-fresh: #5e765f;
+  --pl-status-fresh-soft: #e8eee8;
+  --pl-status-stale: #8d733f;
+  --pl-status-stale-soft: #f2eee2;
+  --pl-status-gap: #946744;
+  --pl-status-gap-soft: #f3e9df;
+  --pl-status-offline: #9a5b55;
+  --pl-status-offline-soft: #f3e6e4;
+
+  /* Evidence semantics */
+  --pl-evidence-estimated: #88724a;
+  --pl-evidence-estimated-soft: #f0ece2;
+  --pl-evidence-ambiguous: #6d7482;
+  --pl-evidence-ambiguous-soft: #e9eaee;
+  --pl-evidence-missing: #7b7470;
+  --pl-evidence-missing-soft: #ece9e7;
+
+  /* Neutral analytical scale (non-semantic bars/emphasis) */
+  --pl-analytical: #9aa39c;
+  --pl-analytical-soft: #e8eae6;
+
+  /* Typography */
+  --pl-font-sans: "Public Sans", Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --pl-font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  --pl-text-10: 10px;
+  --pl-text-11: 11px;
+  --pl-text-12: 12px;
+  --pl-text-13: 13px;
+  --pl-text-14: 14px;
+  --pl-text-16: 16px;
+  --pl-text-20: 20px;
+  --pl-text-24: 24px;
+
+  /* Spacing (base 4px) */
+  --pl-space-1: 4px;
+  --pl-space-2: 8px;
+  --pl-space-3: 12px;
+  --pl-space-4: 16px;
+  --pl-space-5: 20px;
+  --pl-space-6: 24px;
+  --pl-space-8: 32px;
+  --pl-space-10: 40px;
+
+  /* Radius */
+  --pl-radius-xs: 2px;
+  --pl-radius-sm: 4px;
+  --pl-radius-md: 6px;
+  --pl-radius-lg: 8px;
+
+  /* Motion */
+  --pl-duration-fast: 120ms;
+  --pl-duration-ui: 180ms;
+  --pl-duration-panel: 210ms;
+  --pl-ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Density / geometry (tunable until visual QA freezes them) */
+  --pl-control-h-compact: 28px;
+  --pl-control-h: 32px;
+  --pl-history-row-h: 42px;
+  --pl-sidebar-w: 208px;
+  --pl-inspector-w: 410px;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --pl-canvas: #0f1110;
+  --pl-sidebar: #111312;
+  --pl-workspace: #151715;
+
+  --pl-surface-subtle: #191b19;
+  --pl-surface-raised: #1e201e;
+  --pl-surface-inset: #121412;
+  --pl-surface-selected: #242824;
+  --pl-surface-hover: #1c201d;
+
+  --pl-border: #2a2e2a;
+  --pl-border-muted: #222622;
+  --pl-border-strong: #3a3f3a;
+
+  --pl-text-primary: #e9ece8;
+  --pl-text-secondary: #b4b9b4;
+  --pl-text-muted: #858b85;
+  --pl-text-disabled: #5f655f;
+
+  --pl-accent: #86a0a6;
+  --pl-accent-hover: #99b1b6;
+  --pl-accent-soft: #202b2d;
+  --pl-focus-ring: rgba(134, 160, 166, 0.4);
+
+  --pl-route-proxy: #8fa8b5;
+  --pl-route-proxy-soft: #1d282d;
+  --pl-route-direct: #91a993;
+  --pl-route-direct-soft: #202a21;
+  --pl-route-reject: #c0877e;
+  --pl-route-reject-soft: #302321;
+
+  --pl-status-fresh: #8ea790;
+  --pl-status-fresh-soft: #202a21;
+  --pl-status-stale: #baa06b;
+  --pl-status-stale-soft: #2b281e;
+  --pl-status-gap: #c0916a;
+  --pl-status-gap-soft: #2f251f;
+  --pl-status-offline: #c5827b;
+  --pl-status-offline-soft: #302220;
+
+  --pl-evidence-estimated: #ae986d;
+  --pl-evidence-estimated-soft: #29261e;
+  --pl-evidence-ambiguous: #969dac;
+  --pl-evidence-ambiguous-soft: #23262d;
+  --pl-evidence-missing: #9b9691;
+  --pl-evidence-missing-soft: #272523;
+
+  --pl-analytical: #6f7a72;
+  --pl-analytical-soft: #212521;
+}
