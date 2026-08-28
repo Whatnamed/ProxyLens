@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "ProxyLens Platform Diagnostics",
-        "width": 1100,
-        "height": 750,
+        "title": "ProxyLens",
+        "width": 1280,
+        "height": 820,
         "minWidth": 800,
         "minHeight": 600,
         "resizable": true

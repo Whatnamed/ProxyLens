@@ -150,6 +150,20 @@ export interface TopRulesResponse {
   limit: number;
 }
 
+/**
+ * Metadata completeness flags derived at projection time.
+ * NOTE: this is the serialized `types.QualityFlags` object (booleans), not a
+ * string array — verified against `collector/pkg/types/types.go`.
+ */
+export interface QualityFlags {
+  missingProcess: boolean;
+  missingProcessPath: boolean;
+  missingHost: boolean;
+  ipOnly: boolean;
+  missingRule: boolean;
+  missingChain: boolean;
+}
+
 export interface ConnectionRecord {
   sessionId: string;
   epochId: number;
@@ -165,6 +179,7 @@ export interface ConnectionRecord {
   state: string;
   preexistingAtStart: boolean;
   possibleUnobservedTail: boolean;
+  startClassification?: string;
   metadata: {
     process?: string;
     processPath?: string;
@@ -190,10 +205,12 @@ export interface ConnectionRecord {
   providerChains?: string[];
   route: string;
   latestAttributionClass?: string;
-  qualityFlags?: string[];
+  qualityFlags?: QualityFlags;
   relayEvidence?: Record<string, unknown>;
   baselineUploadCounter: number;
   baselineDownloadCounter: number;
+  lastObservedUploadCounter: number;
+  lastObservedDownloadCounter: number;
   monitoredUploadTotal: number;
   monitoredDownloadTotal: number;
 }
@@ -205,6 +222,19 @@ export interface ConnectionsListResponse {
   hasMore: boolean;
 }
 
+/**
+ * Precision values the backend is known to emit.
+ * `exact_snapshot` / `estimated` are accepted alongside the documented
+ * `exact` / `interval_derived`; any unrecognised value is surfaced as
+ * "Unrecognised precision" rather than silently treated as exact.
+ */
+export type PrecisionValue =
+  | 'exact'
+  | 'exact_snapshot'
+  | 'interval_derived'
+  | 'estimated'
+  | (string & {});
+
 export interface AccountedTrafficRecord {
   runId: string;
   sourceEventId: string;
@@ -214,7 +244,7 @@ export interface AccountedTrafficRecord {
   observedAt: string;
   intervalStart?: string;
   intervalEnd?: string;
-  precision: 'exact' | 'interval_derived';
+  precision: PrecisionValue;
   route: string;
   rawUpload: number;
   rawDownload: number;
@@ -258,6 +288,31 @@ export interface ConnectionDetailResponse {
   connection: ConnectionRecord;
   accountingEvents: AccountedTrafficRecord[];
   accountingSummary?: ConnectionAccountingSummary;
+}
+
+/** Raw traffic sampling frame: `GET /api/v1/connections/{s}/{e}/{c}/traffic` */
+export interface ConnectionTrafficFrame {
+  eventId: string;
+  sessionId: string;
+  epochId: number;
+  frameSequence: number;
+  eventSequence: number;
+  connectionId: string;
+  observedAt: string;
+  intervalStart?: string;
+  intervalEnd?: string;
+  precision: PrecisionValue;
+  deltaUpload: number;
+  deltaDownload: number;
+  observedUploadCounter: number;
+  observedDownloadCounter: number;
+  monitoredUploadTotal: number;
+  monitoredDownloadTotal: number;
+}
+
+export interface ConnectionTrafficResponse {
+  connectionId: string;
+  traffic: ConnectionTrafficFrame[];
 }
 
 

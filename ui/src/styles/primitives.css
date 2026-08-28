@@ -1,0 +1,557 @@
+/* ProxyLens UI primitives: panels, badges, buttons, bars, states */
+
+/* ==========================================================================
+   Panel
+   ========================================================================== */
+.panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border-subtle);
+  flex: none;
+  min-height: 34px;
+}
+
+.panel-title {
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.panel-note {
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  font-weight: var(--fw-normal);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.panel-body {
+  padding: var(--sp-5);
+  min-width: 0;
+}
+
+.panel-body--flush {
+  padding: 0;
+}
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  height: 26px;
+  padding: 0 var(--sp-5);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+
+.btn:active:not(:disabled) {
+  background: var(--surface-4);
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-primary);
+  border-color: transparent;
+}
+
+.btn--primary {
+  background: var(--accent-dim-strong);
+  border-color: rgba(76, 154, 255, 0.42);
+  color: #cfe3ff;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: rgba(76, 154, 255, 0.3);
+  border-color: var(--accent);
+}
+
+.btn--sm {
+  height: 22px;
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-11);
+}
+
+.btn--icon {
+  width: 26px;
+  padding: 0;
+  flex: none;
+}
+
+.btn--icon.btn--sm {
+  width: 22px;
+}
+
+/* ==========================================================================
+   Segmented control (route focus, time window, page size)
+   ========================================================================== */
+.segmented {
+  display: inline-flex;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px;
+  gap: 1px;
+}
+
+.segmented-item {
+  height: 22px;
+  padding: 0 var(--sp-5);
+  border-radius: 2px;
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.segmented-item:hover:not(.is-active):not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-2);
+}
+
+.segmented-item.is-active {
+  background: var(--surface-4);
+  color: var(--text-primary);
+}
+
+/* Route focus uses its own accent per value, applied inline. */
+.segmented-item .seg-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: currentColor;
+}
+
+/* ==========================================================================
+   Badges / tags
+   ========================================================================== */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 17px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-xs);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex: none;
+  border: 1px solid transparent;
+  font-family: var(--font-ui);
+}
+
+.badge--proxy {
+  color: var(--route-proxy);
+  background: var(--route-proxy-dim);
+  border-color: rgba(76, 154, 255, 0.28);
+}
+
+.badge--direct {
+  color: var(--route-direct);
+  background: var(--route-direct-dim);
+  border-color: rgba(87, 168, 158, 0.28);
+}
+
+.badge--reject {
+  color: var(--route-reject);
+  background: var(--route-reject-dim);
+  border-color: rgba(242, 84, 91, 0.28);
+}
+
+.badge--all {
+  color: var(--route-all);
+  background: var(--route-all-dim);
+  border-color: rgba(167, 139, 250, 0.28);
+}
+
+.badge--ok {
+  color: var(--ok);
+  background: var(--ok-dim);
+  border-color: rgba(63, 185, 80, 0.26);
+}
+
+.badge--warn {
+  color: var(--warn);
+  background: var(--warn-dim);
+  border-color: rgba(217, 160, 60, 0.26);
+}
+
+.badge--danger {
+  color: var(--danger);
+  background: var(--danger-dim);
+  border-color: rgba(242, 84, 91, 0.26);
+}
+
+.badge--neutral {
+  color: var(--text-secondary);
+  background: var(--neutral-dim);
+  border-color: var(--border);
+}
+
+.badge--mono {
+  font-family: var(--font-mono);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: var(--fw-medium);
+}
+
+/* Dotted underline is the persistent non-colour signal for estimated values. */
+.is-estimated {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--warn);
+  text-underline-offset: 2px;
+}
+
+/* ==========================================================================
+   Filter chips
+   ========================================================================== */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 22px;
+  padding: 0 var(--sp-2) 0 var(--sp-4);
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  border: 1px solid rgba(76, 154, 255, 0.3);
+  font-size: var(--fs-11);
+  color: var(--text-primary);
+  max-width: 280px;
+}
+
+.chip-key {
+  color: var(--accent);
+  font-weight: var(--fw-semibold);
+  flex: none;
+}
+
+.chip-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-remove {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  flex: none;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.chip-remove:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   Proportional bar (rankings, coverage)
+   ========================================================================== */
+.bar-track {
+  position: relative;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--surface-inset);
+  overflow: hidden;
+  display: flex;
+}
+
+.bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+/* Estimated share is hatched: solid vs hatched distinguishes exact from
+   interval-derived at a glance without relying on colour alone. */
+.bar-fill--est {
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--warn) 0 2px,
+    transparent 2px 4px
+  );
+  background-color: rgba(217, 160, 60, 0.22);
+}
+
+/* ==========================================================================
+   Key / value list
+   ========================================================================== */
+.kv {
+  display: grid;
+  grid-template-columns: minmax(84px, auto) 1fr;
+  gap: var(--sp-3) var(--sp-5);
+  font-size: var(--fs-12);
+  align-items: baseline;
+}
+
+.kv > dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+.kv > dd {
+  margin: 0;
+  color: var(--text-primary);
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* ==========================================================================
+   Skeleton
+   ========================================================================== */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 0%,
+    var(--surface-3) 50%,
+    var(--surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.25s var(--ease) infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ==========================================================================
+   Empty / error / notice states
+   ========================================================================== */
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--sp-9) var(--sp-7);
+  gap: var(--sp-4);
+  min-height: 180px;
+}
+
+.state-glyph {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-tertiary);
+  flex: none;
+}
+
+.state--warn .state-glyph {
+  color: var(--warn);
+  border-color: rgba(217, 160, 60, 0.35);
+  background: var(--warn-dim);
+}
+
+.state--danger .state-glyph {
+  color: var(--danger);
+  border-color: rgba(242, 84, 91, 0.35);
+  background: var(--danger-dim);
+}
+
+.state-title {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+}
+
+.state-desc {
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  max-width: 460px;
+  line-height: var(--lh-relaxed);
+}
+
+.state-actions {
+  display: flex;
+  gap: var(--sp-4);
+  margin-top: var(--sp-2);
+}
+
+.state-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: var(--sp-1) var(--sp-3);
+}
+
+/* ==========================================================================
+   Inline notice banner
+   ========================================================================== */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  color: var(--text-secondary);
+}
+
+.notice--warn {
+  border-color: rgba(217, 160, 60, 0.3);
+  background: var(--warn-dim);
+  color: #f0dcb4;
+}
+
+.notice--danger {
+  border-color: rgba(242, 84, 91, 0.3);
+  background: var(--danger-dim);
+  color: #ffd3d5;
+}
+
+.notice--info {
+  border-color: rgba(76, 154, 255, 0.28);
+  background: var(--accent-dim);
+  color: #cfe3ff;
+}
+
+.notice-glyph {
+  flex: none;
+  margin-top: 1px;
+}
+
+.notice-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.notice-body strong {
+  color: inherit;
+  font-weight: var(--fw-semibold);
+}
+
+/* ==========================================================================
+   Tooltip (CSS-only, follows the trigger via inline positioning)
+   ========================================================================== */
+.tip {
+  position: relative;
+}
+
+.tip:hover > .tip-body,
+.tip:focus-visible > .tip-body {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.tip-body {
+  position: absolute;
+  z-index: 60;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 160px;
+  max-width: 340px;
+  padding: var(--sp-4);
+  background: var(--surface-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--fs-11);
+  line-height: var(--lh-normal);
+  color: var(--text-primary);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(3px);
+  transition: opacity var(--dur-base) var(--ease),
+    transform var(--dur-base) var(--ease);
+  pointer-events: none;
+  text-align: left;
+  white-space: normal;
+  font-weight: var(--fw-normal);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.tip-body--right {
+  left: auto;
+  right: 0;
+}
+
+.tip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-6);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tip-row + .tip-row {
+  margin-top: var(--sp-2);
+}
+
+.tip-label {
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+}

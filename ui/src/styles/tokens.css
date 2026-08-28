@@ -1,0 +1,140 @@
+/*
+ * ProxyLens Design Tokens
+ * ---------------------------------------------------------------------------
+ * Visual language: a local, read-only evidence instrument.
+ *
+ * The palette is deliberately quiet. Almost every surface is a neutral
+ * blue-grey; colour is reserved for semantic signal (route class, evidence
+ * quality, coverage segment type). This keeps an audit surface readable for
+ * long sessions and prevents decorative colour from competing with the few
+ * things that actually carry meaning.
+ *
+ * No web fonts: ProxyLens is local-first and must render identically offline.
+ */
+
+:root {
+  /* ---- Surfaces ----------------------------------------------------------
+   * Elevation is expressed with background lightness + hairline borders,
+   * never with large drop shadows.
+   */
+  --bg-base: #0b0e13;
+  --bg-sunken: #07090d;
+  --surface-1: #11151c;
+  --surface-2: #171c25;
+  --surface-3: #1e242f;
+  --surface-4: #262d3a;
+  --surface-hover: #171c25;
+  --surface-active: #1c222d;
+  --surface-inset: #0d1116;
+
+  /* ---- Borders ---------------------------------------------------------- */
+  --border-subtle: #1a2029;
+  --border: #242c38;
+  --border-strong: #333d4d;
+  --border-focus: #4c9aff;
+
+  /* ---- Text ------------------------------------------------------------- */
+  --text-primary: #e6eaf2;
+  --text-secondary: #9ba7b8;
+  --text-tertiary: #6b7787;
+  --text-disabled: #4a5462;
+  --text-inverse: #0b0e13;
+
+  /* ---- Interaction ------------------------------------------------------ */
+  --accent: #4c9aff;
+  --accent-hover: #6badff;
+  --accent-dim: rgba(76, 154, 255, 0.13);
+  --accent-dim-strong: rgba(76, 154, 255, 0.22);
+
+  /* ---- Route classification (semantically independent) ------------------- */
+  --route-proxy: #4c9aff;
+  --route-proxy-dim: rgba(76, 154, 255, 0.16);
+  --route-direct: #57a89e;
+  --route-direct-dim: rgba(87, 168, 158, 0.16);
+  --route-reject: #f2545b;
+  --route-reject-dim: rgba(242, 84, 91, 0.16);
+  --route-all: #a78bfa;
+  --route-all-dim: rgba(167, 139, 250, 0.16);
+
+  /* ---- Evidence quality / state ----------------------------------------- */
+  --ok: #3fb950;
+  --ok-dim: rgba(63, 185, 80, 0.14);
+  --warn: #d9a03c;
+  --warn-dim: rgba(217, 160, 60, 0.14);
+  --danger: #f2545b;
+  --danger-dim: rgba(242, 84, 91, 0.14);
+  --info: #4c9aff;
+  --info-dim: rgba(76, 154, 255, 0.14);
+  --neutral: #7c8da6;
+  --neutral-dim: rgba(124, 141, 166, 0.14);
+
+  /* ---- Coverage segment types ------------------------------------------- */
+  --cov-covered: #2f6ea8;
+  --cov-covered-dim: rgba(47, 110, 168, 0.35);
+  --cov-controller: #d9a03c;
+  --cov-collector: #a78bfa;
+  --cov-outside: #232a35;
+  --cov-future: #1a1f28;
+
+  /* ---- Typography -------------------------------------------------------
+   * Mono is not decoration: every byte count, timestamp, host, rule and
+   * identifier is tabular monospace so columns align vertically and values
+   * can be compared by eye while scanning dense evidence.
+   */
+  --font-ui: "Inter", "Segoe UI Variable Display", "Segoe UI", system-ui,
+    -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", "Consolas",
+    "SF Mono", "Menlo", ui-monospace, monospace;
+
+  --fs-10: 10px;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-28: 28px;
+  --fs-34: 34px;
+
+  --lh-tight: 1.2;
+  --lh-normal: 1.45;
+  --lh-relaxed: 1.6;
+
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+
+  /* ---- Spacing (4px grid) ----------------------------------------------- */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+  --sp-7: 20px;
+  --sp-8: 24px;
+  --sp-9: 32px;
+  --sp-10: 40px;
+
+  /* ---- Radius: small and precise, never pill-shaped --------------------- */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 7px;
+
+  /* ---- Layout ----------------------------------------------------------- */
+  --rail-w: 204px;
+  --rail-w-collapsed: 56px;
+  --contextbar-h: 52px;
+  --inspector-w: 480px;
+
+  /* ---- Motion: fast and functional -------------------------------------- */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 90ms;
+  --dur-base: 140ms;
+  --dur-slow: 220ms;
+
+  /* ---- Shadows: used sparingly, only for true overlays ------------------ */
+  --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border-strong);
+  --shadow-panel: 0 2px 10px rgba(0, 0, 0, 0.32);
+}

@@ -1,0 +1,474 @@
+/* Application shell: navigation rail, global audit context bar, status popover */
+
+.shell {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+/* ==========================================================================
+   Navigation rail
+   ========================================================================== */
+.rail {
+  width: var(--rail-w);
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  overflow: hidden;
+}
+
+.rail-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-5);
+  min-height: 52px;
+  flex: none;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.rail-mark {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(150deg, var(--accent) 0%, #2d6ea8 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #06121f;
+  font-weight: 700;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: -0.04em;
+}
+
+.rail-wordmark {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.rail-title {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+}
+
+.rail-subtitle {
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rail-nav {
+  padding: var(--sp-5) var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: none;
+}
+
+.rail-section-label {
+  padding: var(--sp-4) var(--sp-4) var(--sp-2);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+}
+
+.rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: 30px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  width: 100%;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.rail-item:hover {
+  background: var(--surface-1);
+  color: var(--text-primary);
+}
+
+.rail-item.is-active {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+/* Active marker: a hairline on the inner edge, not a filled pill. */
+.rail-item.is-active::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.rail-item-icon {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--text-tertiary);
+}
+
+.rail-item.is-active .rail-item-icon,
+.rail-item:hover .rail-item-icon {
+  color: var(--accent);
+}
+
+.rail-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-spacer {
+  flex: 1;
+  min-height: var(--sp-4);
+}
+
+.rail-footer {
+  flex: none;
+  padding: var(--sp-4) var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* ==========================================================================
+   System status trigger + popover
+   ========================================================================== */
+.status-trigger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: 34px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  width: 100%;
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: var(--fs-12);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.status-trigger:hover {
+  background: var(--surface-1);
+  color: var(--text-primary);
+}
+
+.status-trigger.has-problem {
+  border-color: var(--border);
+  background: var(--surface-1);
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--neutral);
+  box-shadow: 0 0 0 0 transparent;
+}
+
+.status-dot--ok {
+  background: var(--ok);
+}
+
+.status-dot--warn {
+  background: var(--warn);
+}
+
+.status-dot--danger {
+  background: var(--danger);
+  animation: status-pulse 2.2s var(--ease) infinite;
+}
+
+.status-dot--unknown {
+  background: var(--text-disabled);
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(242, 84, 91, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(242, 84, 91, 0);
+  }
+}
+
+.status-trigger-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-11);
+}
+
+.status-popover {
+  position: absolute;
+  left: var(--sp-3);
+  right: var(--sp-3);
+  bottom: calc(100% + var(--sp-3));
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  z-index: 80;
+  overflow: hidden;
+  animation: pop-in var(--dur-base) var(--ease);
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.status-popover-head {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.status-group {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.status-group:last-child {
+  border-bottom: none;
+}
+
+.status-group-title {
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+  margin-bottom: var(--sp-3);
+}
+
+/* ==========================================================================
+   Main column
+   ========================================================================== */
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ---------- Global audit context bar ---------- */
+.contextbar {
+  flex: none;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-3) var(--sp-6);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-sunken);
+  flex-wrap: wrap;
+  row-gap: var(--sp-3);
+}
+
+.contextbar-group {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+.contextbar-group--grow {
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.contextbar-label {
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+  flex: none;
+}
+
+.contextbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-subtle);
+  flex: none;
+}
+
+.window-readout {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.window-range {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-12);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.window-asof {
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* ---------- Custom range popover ---------- */
+.popover-anchor {
+  position: relative;
+}
+
+.popover {
+  position: absolute;
+  top: calc(100% + var(--sp-3));
+  left: 0;
+  z-index: 70;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  padding: var(--sp-5);
+  animation: pop-in var(--dur-base) var(--ease);
+}
+
+.popover--right {
+  left: auto;
+  right: 0;
+}
+
+.popover-title {
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: var(--sp-4);
+}
+
+.range-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 240px;
+}
+
+.range-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.range-field label {
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+}
+
+.range-actions {
+  display: flex;
+  gap: var(--sp-4);
+  justify-content: flex-end;
+  margin-top: var(--sp-2);
+}
+
+/* ---------- Surface host ---------- */
+.surface-host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==========================================================================
+   Compact desktop behaviour
+   ========================================================================== */
+
+/* Below this width the rail drops to icons only so dense tables keep room. */
+@media (max-width: 1080px) {
+  .rail {
+    width: var(--rail-w-collapsed);
+  }
+  .rail-wordmark,
+  .rail-item-label,
+  .rail-section-label,
+  .status-trigger-text {
+    display: none;
+  }
+  .rail-brand,
+  .status-trigger {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .rail-item {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .rail-nav {
+    padding-left: var(--sp-2);
+    padding-right: var(--sp-2);
+  }
+  /* The rail is only ~56px wide here and clips its overflow, so the status
+     popover must escape it with fixed positioning. */
+  .status-popover {
+    position: fixed;
+    left: calc(var(--rail-w-collapsed) + var(--sp-3));
+    bottom: var(--sp-5);
+    width: 330px;
+    z-index: 200;
+  }
+}

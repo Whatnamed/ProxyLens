@@ -8,6 +8,7 @@ import {
   CoverageSummary,
   ConnectionsListResponse,
   ConnectionDetailResponse,
+  ConnectionTrafficResponse,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -117,5 +118,14 @@ export class QueryApiClient {
 
   async getConnectionDetail(sessionId: string, epochId: number, connectionId: string): Promise<ConnectionDetailResponse> {
     return this.request<ConnectionDetailResponse>(`/api/v1/connections/${sessionId}/${epochId}/${connectionId}`);
+  }
+
+  /**
+   * Raw traffic sampling frames for one connection.
+   * The Go endpoint already exists (`.../traffic`); this is frontend wiring
+   * only — no new backend capability is introduced.
+   */
+  async getConnectionTraffic(sessionId: string, epochId: number, connectionId: string): Promise<ConnectionTrafficResponse> {
+    return this.request<ConnectionTrafficResponse>(`/api/v1/connections/${sessionId}/${epochId}/${connectionId}/traffic`);
   }
 }
