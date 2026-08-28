@@ -17,11 +17,22 @@ interface Props {
 }
 
 export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError }) => {
+  const diagRange = React.useMemo(
+    () => ({ from: new Date(0).toISOString(), to: new Date().toISOString() }),
+    []
+  );
   const metaQuery = useMetaQuery(client);
-  const summaryQuery = useSummaryQuery(client);
-  const topProcQuery = useTopProcessesQuery(client, 5);
-  const coverageQuery = useCoverageQuery(client);
-  const connsQuery = useConnectionsQuery(client, 5, 0);
+  const summaryQuery = useSummaryQuery(client, diagRange.from, diagRange.to);
+  const topProcQuery = useTopProcessesQuery(client, diagRange.from, diagRange.to, 'ALL', 5);
+  const coverageQuery = useCoverageQuery(client, diagRange.from, diagRange.to);
+  const connsQuery = useConnectionsQuery(client, {
+    from: diagRange.from,
+    to: diagRange.to,
+    route: 'ALL',
+    filters: {},
+    limit: 5,
+    offset: 0,
+  });
 
   const probeReportedRef = useRef(false);
 

@@ -260,4 +260,28 @@ export interface ConnectionDetailResponse {
   accountingSummary?: ConnectionAccountingSummary;
 }
 
+export interface ConnectionTrafficRecord {
+  eventId: string;
+  sessionId: string;
+  epochId: number;
+  frameSequence: number;
+  eventSequence: number;
+  connectionId: string;
+  observedAt: string;
+  intervalStart?: string;
+  intervalEnd?: string;
+  precision: 'exact' | 'interval_derived';
+  deltaUpload: number;
+  deltaDownload: number;
+  observedUploadCounter: number;
+  observedDownloadCounter: number;
+  monitoredUploadTotal: number;
+  monitoredDownloadTotal: number;
+}
+
+export interface ConnectionTrafficResponse {
+  connectionId: string;
+  traffic: ConnectionTrafficRecord[];
+}
+
 

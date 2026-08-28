@@ -1,5 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { QueryApiClient } from './client';
+import { ConnectionKey } from '../state/AuditContext';
+import { HistoryFilters } from '../state/AuditContext';
 
 export function useMetaQuery(client: QueryApiClient | null) {
   return useQuery({
@@ -10,35 +12,106 @@ export function useMetaQuery(client: QueryApiClient | null) {
   });
 }
 
-export function useSummaryQuery(client: QueryApiClient | null, route?: string) {
+export function useSummaryQuery(client: QueryApiClient | null, from: string, to: string, route?: string) {
   return useQuery({
-    queryKey: ['summary', route],
-    queryFn: () => client!.getSummary(undefined, undefined, route),
+    queryKey: ['summary', from, to, route],
+    queryFn: () => client!.getSummary(from, to, route),
     enabled: !!client,
-    refetchInterval: 5000,
+    refetchInterval: 10000,
   });
 }
 
-export function useTopProcessesQuery(client: QueryApiClient | null, limit: number = 5) {
+export function useTopProcessesQuery(client: QueryApiClient | null, from: string, to: string, route: string, limit = 10) {
   return useQuery({
-    queryKey: ['topProcesses', limit],
-    queryFn: () => client!.getTopProcesses(undefined, undefined, undefined, limit),
-    enabled: !!client,
-  });
-}
-
-export function useCoverageQuery(client: QueryApiClient | null) {
-  return useQuery({
-    queryKey: ['coverage'],
-    queryFn: () => client!.getCoverage(),
+    queryKey: ['topProcesses', from, to, route, limit],
+    queryFn: () => client!.getTopProcesses(from, to, route, limit),
     enabled: !!client,
   });
 }
 
-export function useConnectionsQuery(client: QueryApiClient | null, limit: number = 10, offset: number = 0) {
+export function useTopHostsQuery(client: QueryApiClient | null, from: string, to: string, route: string, limit = 10) {
   return useQuery({
-    queryKey: ['connections', limit, offset],
-    queryFn: () => client!.getConnections({ limit, offset }),
+    queryKey: ['topHosts', from, to, route, limit],
+    queryFn: () => client!.getTopHosts(from, to, route, limit),
     enabled: !!client,
+  });
+}
+
+export function useTopRulesQuery(client: QueryApiClient | null, from: string, to: string, route: string, limit = 10) {
+  return useQuery({
+    queryKey: ['topRules', from, to, route, limit],
+    queryFn: () => client!.getTopRules(from, to, route, limit),
+    enabled: !!client,
+  });
+}
+
+export function useTopFinalProxiesQuery(client: QueryApiClient | null, from: string, to: string, route: string, limit = 10) {
+  return useQuery({
+    queryKey: ['topFinalProxies', from, to, route, limit],
+    queryFn: () => client!.getTopFinalProxies(from, to, route, limit),
+    enabled: !!client,
+  });
+}
+
+export function useProtocolsQuery(client: QueryApiClient | null, from: string, to: string, route: string, limit = 10) {
+  return useQuery({
+    queryKey: ['protocols', from, to, route, limit],
+    queryFn: () => client!.getProtocols(from, to, route, limit),
+    enabled: !!client,
+  });
+}
+
+export function useCoverageQuery(client: QueryApiClient | null, from: string, to: string) {
+  return useQuery({
+    queryKey: ['coverage', from, to],
+    queryFn: () => client!.getCoverage(from, to),
+    enabled: !!client,
+  });
+}
+
+export function useConnectionsQuery(
+  client: QueryApiClient | null,
+  params: {
+    from: string;
+    to: string;
+    route: string;
+    filters: HistoryFilters;
+    limit: number;
+    offset: number;
+  }
+) {
+  const { from, to, route, filters, limit, offset } = params;
+  return useQuery({
+    queryKey: ['connections', from, to, route, filters, limit, offset],
+    queryFn: () =>
+      client!.getConnections({
+        from,
+        to,
+        route,
+        process: filters.process,
+        host: filters.host,
+        destinationIp: filters.destinationIp,
+        network: filters.network,
+        limit,
+        offset,
+      }),
+    enabled: !!client,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useConnectionDetailQuery(client: QueryApiClient | null, key: ConnectionKey | null) {
+  return useQuery({
+    queryKey: ['connectionDetail', key?.sessionId, key?.epochId, key?.connectionId],
+    queryFn: () => client!.getConnectionDetail(key!.sessionId, key!.epochId, key!.connectionId),
+    enabled: !!client && !!key,
+  });
+}
+
+export function useConnectionTrafficQuery(client: QueryApiClient | null, key: ConnectionKey | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['connectionTraffic', key?.sessionId, key?.epochId, key?.connectionId],
+    queryFn: () => client!.getConnectionTraffic(key!.sessionId, key!.epochId, key!.connectionId),
+    enabled: !!client && !!key && enabled,
   });
 }
