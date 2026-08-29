@@ -82,19 +82,17 @@ A normal History row should usually have no more than one dominant semantic acce
 Use:
 
 ```text
-Public Sans
-→ English / Latin product, navigation and explanation layer
-
 IBM Plex Sans SC
-→ Simplified Chinese product, navigation and explanation layer
+→ English and Simplified Chinese product, navigation and explanation layer
 
 JetBrains Mono
 → machine/evidence layer
 ```
 
 Only normal 400 and 500 WOFF2 weights are bundled. System fonts are last-resort
-fallbacks, and the root `html[lang="zh-CN"]` mapping controls Chinese leading
-and heading rhythm. Mono is semantic, not decorative.
+fallbacks. English and Chinese share the same Narrative family and typography
+metrics; locale must not introduce Chinese-only leading, tracking, padding or
+spacing hacks. Mono is semantic, not decorative.
 
 ## Theme rule
 

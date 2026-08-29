@@ -291,20 +291,24 @@ Check:
 
 - Bundle only the canonical normal WOFF2 weights required by the UI: 400 and
   500;
-- use Public Sans for the English/Latin narrative layer, IBM Plex Sans SC for
-  the Chinese locale, and JetBrains Mono for technical/evidence values;
+- use IBM Plex Sans SC for the shared English/Chinese narrative layer and
+  JetBrains Mono for technical/evidence values;
 - keep system fonts as last-resort fallbacks; do not require a system-wide
   install or a runtime font CDN;
 - verify actual rendered platform fonts after `document.fonts.ready` using
   DevTools/CDP rendered-font inspection, not CSS declarations alone;
-- keep English body leading near 1.45 and Chinese body leading near 1.50–1.52;
-  long Chinese helper copy may use 1.52–1.55;
+- use the same leading in both locales: body 1.45, heading 1.35, caption 1.45,
+  helper 1.52 and mono 1.40;
 - keep title/section heading leading near 1.3–1.4 and preserve the existing
   control, navigation, history-row, inspector, sidebar and toolbar geometry;
 - do not add global positive letter-spacing for Chinese; use normal spacing for
   body, controls, tables, technical values and buttons;
-- keep title-to-subtitle grouping at the existing compact rhythm: about 6px in
-  English and about 8px in Chinese, without expanding global section spacing.
+- keep title-to-subtitle grouping at the existing compact rhythm: 6px in both
+  locales, without expanding global section spacing;
+- do not add locale-specific font, size, weight, leading, letter-spacing,
+  padding or spacing overrides; translated copy may still wrap naturally;
+- use the Narrative family for locale preferences such as the sidebar locale
+  switch; reserve Mono for technical/evidence content.
 
 ---
 
@@ -323,8 +327,8 @@ Verify:
 - opening a DatePicker keeps one day gridcell tab stop, Arrow keys move by day/week (including across months), Home/End move within the row, and Tab closes it;
 - switching EN / 中文 updates visible UI copy immediately and survives reload;
 - date/time display follows the active locale while raw technical values remain unchanged.
-- the bundled Public Sans, IBM Plex Sans SC and JetBrains Mono are the actual
-  rendered families for their respective English, Chinese and evidence roles;
+- IBM Plex Sans SC is the actual rendered family for both English and Chinese
+  narrative UI, and JetBrains Mono is the actual rendered family for evidence;
 - the 1280×800 and 1600×1000 matrix is checked for Overview, History +
   Inspector and Coverage in EN/ZH and Light/Dark.
 

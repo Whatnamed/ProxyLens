@@ -111,7 +111,7 @@ Later    长期增强                                 [PLANNED]
 - [x] Time Range、Route Focus、Freshness / System Status；
 - [x] Temporary Diagnostics 退出默认产品入口；
 - [x] UI semantic Closure、English / 中文 runtime locale + persistence 与 42 个前端回归测试；
-- [x] 确定性 typography assets：Public Sans / IBM Plex Sans SC / JetBrains Mono 的 400/500 WOFF2，中文 `html[lang="zh-CN"]` typography mapping；
+- [x] 确定性 typography assets：IBM Plex Sans SC / JetBrains Mono 的 400/500 WOFF2；EN / 中文共用 Narrative family 与 typography metrics；
 - [ ] healthy / gaps / stale / empty / scaled 全 fixture 真实视觉验收；
 - [ ] 1280×800 / 1600×1000 + Light / Dark 完整视觉验收；
 - [ ] 根据验收结果决定是否 Freeze Design System v1；

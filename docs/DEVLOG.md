@@ -119,6 +119,41 @@
 - 1280×800 与 1600×1000 下 Overview / History / Coverage 的 EN/ZH、Light/Dark 共 24 张截图无页面级横向溢出；日期日历、network/page-size listbox 交互回归通过；
 - 构建产物字体总量为 8,049,984 bytes（约 8.05MB / 7.68MiB），未引入字体 npm 运行时依赖；完整 Tauri 多 fixture 视觉 Freeze 仍 PENDING。
 
+## 2026-08-30 — Shared Narrative typography unification
+
+**Scope:** C 分支已交付 typography asset 的最小修正；只统一 EN / 中文的
+Narrative family 与 structural metrics，不涉及布局、颜色、产品语义、Query
+API、Collector 或 Storage。
+
+### Root cause
+
+- EN 与中文原先分别使用 Public Sans 和 IBM Plex Sans SC；`html[lang="zh-CN"]`
+  还额外覆盖了 leading、tracking 与标题副标题 gap；sidebar locale switch
+  误用了 Mono，因此语言切换会带来不必要的字体与节奏差异。
+
+### Completed
+
+- EN / 中文普通 UI 统一使用 IBM Plex Sans SC；JetBrains Mono 继续只用于
+  technical/evidence；
+- 删除中文专属 typography root override，保留 400 / 500、body 1.45、heading
+  1.35、caption 1.45、helper 1.52、mono 1.40 与 title/subtitle 6px；
+- 移除 Public Sans `@font-face`、两份 WOFF2 与当前字体 license 索引条目；
+- locale switch 改回 Narrative，未改变 control height 或其它 geometry；
+- 未新增 `--pl-leading-control`：统一字体与 metrics 后 Time Range 已视觉居中。
+
+### Validation state
+
+- `npm.cmd test`：42 项通过；`npm.cmd run build`：通过；
+- Chromium/CDP 实际渲染：EN / 中文标题与普通控件均为 `IBM Plex Sans SC Medium`，
+  technical evidence 为 `JetBrains Mono Regular`；4 个 WOFF2 总计
+  7,982,696 bytes；
+- 1280×800、1600×1000 的 Overview / History / Coverage EN/ZH 几何复核：
+  shell、nav、footer、page header、context bar、Time Range 的 top/height/bottom
+  均为 0px 差异；Overview 1280 的 Evidence trust 仅因中文文案自然换行，1600
+  已一致；完整 Tauri 多 fixture visual Freeze 仍 PENDING。
+
+Design System 仍保持 Draft，未标记 Freeze。
+
 ---
 
 ## Earlier milestones

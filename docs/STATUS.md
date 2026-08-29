@@ -27,7 +27,7 @@
 - Design System family overlays：自定义 date/time picker、network/page-size listbox，共用 surface / border / radius / selected / hover / focus / shadow 语言；
 - Overlay accessibility：Select 使用单一 listbox focus + `aria-activedescendant`；DatePicker 使用 `grid → row → gridcell` 与单一 roving day focus，支持方向键跨月移动和 focus-out close；
 - 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译。
-- 确定性 typography：仓库内 bundled Public Sans、IBM Plex Sans SC、JetBrains Mono 的 400/500 WOFF2；中文字体由 `html[lang="zh-CN"]` 集中映射，系统字体只作最后 fallback，不要求系统安装。
+- 确定性 typography：仓库内 bundled IBM Plex Sans SC、JetBrains Mono 的 400/500 WOFF2；EN / 中文共用 IBM Plex Sans SC Narrative family 与同一套 typography metrics，系统字体只作最后 fallback，不要求系统安装。
 
 ### 独立审查 Closure 已完成
 
@@ -55,7 +55,7 @@
 - TypeScript / frontend build：本轮本地 PASS；
 - UI regression coverage：42 tests（本地执行结果），包含 locale dictionary parity、静态 translation-key audit 与 calendar navigation utilities；
 - Locale dictionary parity：EN / 中文各 370 个 key，静态 UI translation keys 无缺失；
-- Typography asset build：6 个 WOFF2、8,049,984 bytes（约 8.05MB / 7.68MiB，其中 IBM SC 约 7.80MB）；无 TTF/WOFF/italic 或额外字重；
+- Typography asset build：4 个 WOFF2、7,982,696 bytes（约 7.98MB / 7.61MiB，其中 IBM SC 约 7.80MB）；无 TTF/WOFF/italic 或额外字重；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 
@@ -75,8 +75,8 @@
 - Custom date/time：日期选择、24 小时输入、非法时间提示、Apply 前后状态、日期 grid 方向键/跨月移动与 Tab 离开关闭；
 - Network / page size：统一 listbox 打开、选中、`aria-activedescendant` 更新、Tab 离开关闭与值更新；
 - 824px 保底窗口无页面级横向溢出，1280px 桌面窗口完成布局几何检查。
-- 本轮确定性字体渲染：EN 标题/控件由 CDP 识别为 `Public Sans Medium`，ZH 标题/控件为 `IBM Plex Sans SC Medium`，技术时间证据为 `JetBrains Mono Regular`；字体加载状态为 `loaded`。
-- 本轮 1280×800 与 1600×1000 的 Overview / History / Coverage、EN / 中文、Light / Dark 共 24 个截图无页面级横向溢出；中文 body / helper / heading leading 与紧凑标题副标题节奏已按 Draft token 固化。
+- 本轮确定性字体渲染：EN / 中文标题与控件均由 CDP 识别为 `IBM Plex Sans SC Medium`，技术时间证据为 `JetBrains Mono Regular`；字体加载状态为 `loaded`。
+- 本轮 1280×800 与 1600×1000 的 Overview / History / Coverage、EN / 中文、Light / Dark 共 24 个截图无页面级横向溢出；EN / 中文共用 body 1.45、heading 1.35、caption 1.45、helper 1.52、mono 1.40 与标题副标题 6px 节奏，未保留 locale-specific structural typography。
 
 仍待人工验收：
 

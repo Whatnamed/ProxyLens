@@ -259,10 +259,7 @@ not separate brown/blue/gray blocks.
 ```css
 /* Bundled canonical families; system fonts are last-resort fallbacks. */
 --pl-font-narrative:
-  "Public Sans",
   "IBM Plex Sans SC",
-  Inter,
-  "Segoe UI",
   "Microsoft YaHei",
   system-ui,
   sans-serif;
@@ -277,20 +274,9 @@ not separate brown/blue/gray blocks.
   monospace;
 ```
 
-Locale-specific typography roles are concentrated on the root element:
-
-```css
-html[lang="zh-CN"] {
-  --pl-font-narrative: "IBM Plex Sans SC", "Public Sans", ...;
-  --pl-leading-body: 1.52;
-  --pl-leading-heading: 1.36;
-  --pl-leading-caption: 1.5;
-  --pl-leading-helper: 1.54;
-  --pl-letter-spacing-heading: normal;
-  --pl-letter-spacing-eyebrow: normal;
-  --pl-title-subtitle-gap: 8px;
-}
-```
+English and Simplified Chinese share one Narrative family and one typography
+metric set. Locale changes copy and locale-aware formatting; it does not add a
+font, size, weight, leading, letter-spacing, padding or spacing override.
 
 Typography roles:
 
@@ -299,17 +285,21 @@ Typography roles:
 --pl-font-weight-control   500
 --pl-font-weight-heading   500
 --pl-font-weight-emphasis  500
---pl-leading-body          1.45 (EN) / 1.52 (ZH)
---pl-leading-heading       1.35 (EN) / 1.36 (ZH)
---pl-leading-caption       1.45 (EN) / 1.50 (ZH)
---pl-leading-helper        1.52 (EN) / 1.54 (ZH)
+--pl-leading-body          1.45
+--pl-leading-heading       1.35
+--pl-leading-caption       1.45
+--pl-leading-helper        1.52
 --pl-leading-mono          1.40
+--pl-letter-spacing-body   normal
+--pl-letter-spacing-heading -0.01em
+--pl-letter-spacing-eyebrow 0.04em
+--pl-title-subtitle-gap    6px
 ```
 
 Do not apply positive letter-spacing globally to Chinese. Body, controls,
 tables, technical values, IP/domain/protocol tokens and buttons keep normal
-letter-spacing. The existing English eyebrow treatment is removed in the
-Chinese locale through the root role token.
+letter-spacing. Heading and eyebrow role tracking, where used, is shared by
+both locales rather than overridden for Chinese.
 
 Suggested size seed:
 
