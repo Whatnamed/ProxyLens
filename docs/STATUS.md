@@ -7,11 +7,11 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure；本轮已完成 focused UI polish、统一 overlay 控件与 EN / 中文 locale 基础能力，仍等待完整真实多状态视觉验收。
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure；focused UI polish、EN / 中文 locale 与 overlay accessibility Closure 已完成，仍等待完整真实多状态视觉验收。
 - **活动分支**：`experiment/qwen38max-directed-ui`
-- **当前远端 HEAD（本次状态记录前）**：`a1b4d2b`
+- **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
-- **Closure**：`96b08cb` 之后 6 个代码/测试修复提交 + 1 个状态文档提交；工程/语义 Gate 已通过。
+- **Closure**：`96b08cb` 之后的代码、测试、文档与 focused UI polish 修复均已保留；工程/语义 Gate 已通过。
 - **当前唯一阻塞项**：完整真实 Tauri 多状态视觉验收，不是代码架构、产品语义或本轮 UI polish 实现本身。
 
 ### 已实现的正式 UI
@@ -25,6 +25,7 @@
 - System Status：Collector / Accounting / DB 状态，heartbeat stale 规则与后端一致；
 - ErrorBoundary 与 Query/API 可恢复状态。
 - Design System family overlays：自定义 date/time picker、network/page-size listbox，共用 surface / border / radius / selected / hover / focus / shadow 语言；
+- Overlay accessibility：Select 使用单一 listbox focus + `aria-activedescendant`；DatePicker 使用 `grid → row → gridcell` 与单一 roving day focus，支持方向键跨月移动和 focus-out close；
 - 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译。
 
 ### 独立审查 Closure 已完成
@@ -50,9 +51,9 @@
 - Coverage provenance：PASS；
 - System Status heartbeat consistency：PASS；
 - Inspector crash resilience：PASS；
-- UI regression coverage：38 tests（本地执行结果）；
 - TypeScript / frontend build：本轮本地 PASS；
-- Locale dictionary parity：EN / 中文各 370 个 key，使用到的 357 个 key 无缺失；
+- UI regression coverage：42 tests（本地执行结果），包含 locale dictionary parity、静态 translation-key audit 与 calendar navigation utilities；
+- Locale dictionary parity：EN / 中文各 370 个 key，静态 UI translation keys 无缺失；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 
@@ -69,8 +70,8 @@
 
 - Light / Dark：Overview、History、Coverage、History Inspector 基本渲染；
 - EN / 中文：导航、标题、筛选、日期控件、分页、状态、空/错误/加载文案与日期格式同步；
-- Custom date/time：日期选择、24 小时输入、非法时间提示、Apply 前后状态；
-- Network / page size：统一 listbox 打开、选中、关闭与值更新；
+- Custom date/time：日期选择、24 小时输入、非法时间提示、Apply 前后状态、日期 grid 方向键/跨月移动与 Tab 离开关闭；
+- Network / page size：统一 listbox 打开、选中、`aria-activedescendant` 更新、Tab 离开关闭与值更新；
 - 824px 保底窗口无页面级横向溢出，1280px 桌面窗口完成布局几何检查。
 
 仍待人工验收：

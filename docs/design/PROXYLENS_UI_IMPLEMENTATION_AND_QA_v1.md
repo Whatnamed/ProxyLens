@@ -300,6 +300,8 @@ Verify:
 - filters are obvious;
 - Refresh behavior advances the frozen History snapshot;
 - pagination does not imply nonexistent totals;
+- opening a Select keeps one listbox tab stop, Arrow/Home/End update the active option, Enter/Space commits, and Tab closes it;
+- opening a DatePicker keeps one day gridcell tab stop, Arrow keys move by day/week (including across months), Home/End move within the row, and Tab closes it;
 - switching EN / 中文 updates visible UI copy immediately and survives reload;
 - date/time display follows the active locale while raw technical values remain unchanged.
 
@@ -328,6 +330,7 @@ Run the repository-defined:
 - frontend tests;
 - type checks;
 - build;
+- locale dictionary parity and static translation-key audit;
 - Tauri dev/runtime smoke as appropriate.
 
 The actual rendered Tauri UI is required.

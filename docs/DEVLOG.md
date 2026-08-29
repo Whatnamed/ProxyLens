@@ -75,6 +75,27 @@
 
 ---
 
+## 2026-08-29 — UI polish accessibility closure and product sync
+
+**Scope:** 针对独立审查反馈的最小前端 closure；不涉及 Query API、Collector 或 Storage。
+
+### Root causes fixed
+
+- Select option 与 DatePicker day cell 原先分别占用 Tab stop，且 overlay 只处理 pointer/Escape，焦点离开后不会关闭；
+- `SelectMenu` 改为单一 focusable listbox + `aria-activedescendant`，DatePicker 改为 `grid → row → gridcell`、单一 roving day focus，并支持方向键跨月、Home/End 与 focus-out close；
+- Connection Inspector 的缺失出口 fallback 改为 locale-aware UI copy，避免中文界面出现硬编码 `(unknown)`；
+- locale dictionary parity 与静态 translation-key audit 固化进测试；
+- `STATUS` 去除易漂移的远端 HEAD，PRODUCT / ROADMAP 补齐 V1 locale policy 与 Phase 3 keyboard/accessibility 状态。
+
+### Validation state
+
+- `npm.cmd test`：42 项通过；
+- `npm.cmd run build`：TypeScript / Vite build 通过；
+- 健康 synthetic fixture 浏览器 fallback：日期 grid 方向键/跨月、Tab 离开关闭、Select `aria-activedescendant`、Tab 离开关闭均通过；
+- 完整 Tauri 多状态视觉验收仍 PENDING。
+
+---
+
 ## Earlier milestones
 
 更早的 Phase 0–2 与 Phase 3A 过程已有 `ROADMAP.md`、`STATUS.md` 历史版本、`docs/decisions/`、专项 handoff 与 Git commit 记录支撑。

@@ -110,7 +110,7 @@ Later    长期增强                                 [PLANNED]
 - [x] Overview：Traffic Summary、Evidence Trust、Top Processes / Rules / Hosts / Final Proxies；
 - [x] Time Range、Route Focus、Freshness / System Status；
 - [x] Temporary Diagnostics 退出默认产品入口；
-- [x] UI semantic Closure 与 32 个前端回归测试；
+- [x] UI semantic Closure、English / 中文 runtime locale + persistence 与 42 个前端回归测试；
 - [ ] healthy / gaps / stale / empty / scaled 全 fixture 真实视觉验收；
 - [ ] 1280×800 / 1600×1000 + Light / Dark 完整视觉验收；
 - [ ] 根据验收结果决定是否 Freeze Design System v1；
@@ -130,12 +130,13 @@ Later    长期增强                                 [PLANNED]
 - [x] Accounting Event Timeline；
 - [x] Raw Traffic Frames advanced disclosure；
 - [x] 行级键盘选择与可恢复 render error boundary。
+- [x] Select / DatePicker composite keyboard navigation、focus-out close 与 ARIA semantics；
 
 仍待后续、且不得在无后端契约时伪造：
 
 - [ ] 评估真正需要的额外搜索维度（如 Rule / Final Proxy / Port），必要时单独设计 read-only API extension；
 - [ ] 大规模 History 的虚拟化/滚动策略，仅在真实数据量证明需要时实施；
-- [ ] 更完整的键盘导航与可访问性 integration test。
+- [ ] 更完整的跨页面键盘导航与真实 Tauri 可访问性 integration test。
 
 ### Phase 3D — Coverage, Gaps, Performance & Polish [PARTIALLY IMPLEMENTED]
 

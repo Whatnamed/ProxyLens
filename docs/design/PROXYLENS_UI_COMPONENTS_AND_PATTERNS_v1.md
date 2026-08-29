@@ -89,6 +89,12 @@ border, radius, selected/hover/focus states and temporary elevation.
 
 Menu uses raised surface, border and temporary elevation.
 
+When open, the listbox itself is the only tab stop inside the option set and
+owns the active option through `aria-activedescendant`. Arrow Up/Down and
+Home/End move the highlighted option; Enter/Space commits it; Escape restores
+focus to the trigger. Leaving the component by focus or pointer closes the
+temporary menu.
+
 ---
 
 ## 2.4 FilterChip
@@ -154,6 +160,12 @@ tokenized calendar popover and 24-hour time input. It must not expose the
 browser-native datetime picker, default blue calendar selection or an
 un-themed system panel.
 
+The calendar uses `grid → row → gridcell` semantics and keeps exactly one day
+cell in the tab sequence. Arrow keys move by day or week, including across
+month boundaries; Home/End move to the visible row boundary. Focus leaving the
+picker closes the popover, while the selected date remains a separate state
+from the keyboard focus date.
+
 Do not silently convert to ambiguous rolling-day semantics.
 
 ---
@@ -177,8 +189,8 @@ Use for compact contextual choices/details.
 
 Menus, listboxes and date pickers are one overlay family: the same raised
 surface, neutral border, 6px radius, restrained shadow and focus-ring language.
-Temporary overlays close on outside pointer interaction and Escape where the
-interaction supports it.
+Temporary overlays close on outside pointer interaction, Escape and focus
+leaving the component.
 
 Popover should not become a substitute for the persistent Connection Inspector.
 
