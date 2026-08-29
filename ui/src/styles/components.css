@@ -299,6 +299,11 @@
   outline-offset: -2px;
 }
 
+.pl-select-menu__popover:focus-visible {
+  outline: 2px solid var(--pl-focus-ring);
+  outline-offset: -2px;
+}
+
 .pl-select-menu__option-check {
   display: inline-flex;
   align-items: center;
@@ -351,8 +356,16 @@
 }
 
 .pl-date-picker__grid {
+  display: flex;
+  flex-direction: column;
   padding-top: var(--pl-space-1);
   padding-bottom: var(--pl-space-3);
+}
+
+.pl-date-picker__row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
 }
 
 .pl-date-picker__day {

@@ -2,7 +2,10 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { localeTag } from '../../i18n';
 import { useLocale } from '../../state/AuditContext';
 import {
+  addCalendarDays,
   calendarDays,
+  calendarDateKey,
+  clampCalendarDay,
   formatLocalTimeInput,
   parseLocalDateTimeInput,
   withLocalDateAndTime,
@@ -117,14 +120,15 @@ export function SelectMenu<T extends string | number>({
   const [highlightedIndex, setHighlightedIndex] = useState(selectedIndex);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const listboxRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
   const selected = options[selectedIndex];
 
   useEffect(() => {
     if (!open) return;
     setHighlightedIndex(selectedIndex);
-    requestAnimationFrame(() => optionRefs.current[selectedIndex]?.focus());
+    const frame = requestAnimationFrame(() => listboxRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
   }, [open, selectedIndex]);
 
   useEffect(() => {
@@ -147,6 +151,11 @@ export function SelectMenu<T extends string | number>({
     };
   }, [open]);
 
+  const handleRootBlur = (event: React.FocusEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !rootRef.current?.contains(nextTarget)) setOpen(false);
+  };
+
   const choose = (option: SelectMenuOption<T>) => {
     onChange(option.value);
     setOpen(false);
@@ -154,9 +163,9 @@ export function SelectMenu<T extends string | number>({
   };
 
   const moveHighlight = (nextIndex: number) => {
+    if (options.length === 0) return;
     const next = (nextIndex + options.length) % options.length;
     setHighlightedIndex(next);
-    optionRefs.current[next]?.focus();
   };
 
   const onTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -173,11 +182,32 @@ export function SelectMenu<T extends string | number>({
     }
   };
 
+  const onListboxKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (options.length === 0) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveHighlight(highlightedIndex + 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveHighlight(highlightedIndex - 1);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      moveHighlight(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      moveHighlight(options.length - 1);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      choose(options[highlightedIndex]);
+    }
+  };
+
   return (
     <div
       ref={rootRef}
       className={`pl-select-menu pl-select-menu--${placement}${className ? ` ${className}` : ''}`}
       data-select-menu
+      onBlur={handleRootBlur}
     >
       <button
         ref={triggerRef}
@@ -195,41 +225,33 @@ export function SelectMenu<T extends string | number>({
         <IconChevronDown size={12} />
       </button>
       {open && (
-        <div id={listboxId} className="pl-select-menu__popover" role="listbox" aria-label={ariaLabel}>
+        <div
+          ref={listboxRef}
+          id={listboxId}
+          className="pl-select-menu__popover"
+          role="listbox"
+          aria-label={ariaLabel}
+          aria-activedescendant={options.length > 0 ? `${listboxId}-option-${highlightedIndex}` : undefined}
+          tabIndex={0}
+          onKeyDown={onListboxKeyDown}
+        >
           {options.map((option, index) => (
-            <button
+            <div
               key={String(option.value)}
-              ref={(element) => { optionRefs.current[index] = element; }}
-              type="button"
+              id={`${listboxId}-option-${index}`}
               role="option"
               aria-selected={option.value === value}
+              tabIndex={-1}
               className={`pl-select-menu__option${option.value === value ? ' pl-select-menu__option--selected' : ''}${index === highlightedIndex ? ' pl-select-menu__option--highlighted' : ''}`}
               title={option.title}
+              onMouseEnter={() => setHighlightedIndex(index)}
               onClick={() => choose(option)}
-              onKeyDown={(event) => {
-                if (event.key === 'ArrowDown') {
-                  event.preventDefault();
-                  moveHighlight(index + 1);
-                } else if (event.key === 'ArrowUp') {
-                  event.preventDefault();
-                  moveHighlight(index - 1);
-                } else if (event.key === 'Home') {
-                  event.preventDefault();
-                  moveHighlight(0);
-                } else if (event.key === 'End') {
-                  event.preventDefault();
-                  moveHighlight(options.length - 1);
-                } else if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  choose(option);
-                }
-              }}
             >
               <span className="pl-select-menu__option-label">{option.label}</span>
               <span className="pl-select-menu__option-check" aria-hidden="true">
                 {option.value === value && <IconCheck size={13} />}
               </span>
-            </button>
+            </div>
           ))}
         </div>
       )}
@@ -241,6 +263,10 @@ export function SelectMenu<T extends string | number>({
 
 function sameCalendarDate(left: Date | null, right: Date): boolean {
   return !!left && left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
+}
+
+function sameCalendarMonth(left: Date, right: Date): boolean {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth();
 }
 
 function isValidTime(value: string): boolean {
@@ -262,11 +288,17 @@ export const DateTimePicker: React.FC<{
     const current = parseLocalDateTimeInput(value) ?? new Date();
     return new Date(current.getFullYear(), current.getMonth(), 1);
   });
+  const [focusedDate, setFocusedDate] = useState(() => {
+    const current = parseLocalDateTimeInput(value) ?? new Date();
+    return new Date(current.getFullYear(), current.getMonth(), current.getDate());
+  });
   const [timeDraft, setTimeDraft] = useState(defaultTime);
   const [timeError, setTimeError] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const dayRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const timeInputId = useId();
+  const dialogId = useId();
   const selectedDate = parseLocalDateTimeInput(value);
   const monthLabel = new Intl.DateTimeFormat(localeTag(locale), { year: 'numeric', month: 'long' }).format(viewDate);
   const displayedValue = selectedDate
@@ -287,9 +319,16 @@ export const DateTimePicker: React.FC<{
     const current = parseLocalDateTimeInput(value);
     const anchor = current ?? new Date();
     setViewDate(new Date(anchor.getFullYear(), anchor.getMonth(), 1));
+    setFocusedDate(new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate()));
     setTimeDraft(current ? formatLocalTimeInput(current) : defaultTime);
     setTimeError(false);
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => dayRefs.current[calendarDateKey(focusedDate)]?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [open, viewDate, focusedDate]);
 
   useEffect(() => {
     if (!open) return;
@@ -313,12 +352,18 @@ export const DateTimePicker: React.FC<{
     };
   }, [open]);
 
+  const handleRootBlur = (event: React.FocusEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !rootRef.current?.contains(nextTarget)) setOpen(false);
+  };
+
   const chooseDate = (day: number) => {
     const date = new Date(viewDate.getFullYear(), viewDate.getMonth(), day);
     const time = isValidTime(timeDraft) ? timeDraft : defaultTime;
     const next = withLocalDateAndTime(date, time);
     if (next) {
       onChange(next);
+      setFocusedDate(new Date(date.getFullYear(), date.getMonth(), date.getDate()));
       setTimeDraft(time);
       setTimeError(false);
     }
@@ -340,11 +385,63 @@ export const DateTimePicker: React.FC<{
   };
 
   const moveMonth = (offset: number) => {
-    setViewDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+    const nextMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + offset, 1);
+    const nextDate = clampCalendarDay(nextMonth.getFullYear(), nextMonth.getMonth(), focusedDate.getDate());
+    setViewDate(nextMonth);
+    setFocusedDate(nextDate);
+  };
+
+  const moveFocusTo = (date: Date) => {
+    const next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    setFocusedDate(next);
+    if (!sameCalendarMonth(next, viewDate)) {
+      setViewDate(new Date(next.getFullYear(), next.getMonth(), 1));
+    }
+  };
+
+  const moveFocusBy = (amount: number) => {
+    moveFocusTo(addCalendarDays(focusedDate, amount));
+  };
+
+  const moveFocusToRowBoundary = (index: number, direction: 'start' | 'end') => {
+    const rowStart = Math.floor(index / 7) * 7;
+    const rowEnd = rowStart + 6;
+    const step = direction === 'start' ? 1 : -1;
+    const first = direction === 'start' ? rowStart : rowEnd;
+    const last = direction === 'start' ? rowEnd : rowStart;
+    for (let cursor = first; direction === 'start' ? cursor <= last : cursor >= last; cursor += step) {
+      const day = days[cursor];
+      if (day !== null) {
+        moveFocusTo(new Date(viewDate.getFullYear(), viewDate.getMonth(), day));
+        return;
+      }
+    }
+  };
+
+  const onDayKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      moveFocusBy(-1);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      moveFocusBy(1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveFocusBy(-7);
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveFocusBy(7);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      moveFocusToRowBoundary(index, 'start');
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      moveFocusToRowBoundary(index, 'end');
+    }
   };
 
   return (
-    <div ref={rootRef} className={`pl-date-picker${className ? ` ${className}` : ''}`}>
+    <div ref={rootRef} className={`pl-date-picker${className ? ` ${className}` : ''}`} onBlur={handleRootBlur}>
       <button
         ref={triggerRef}
         type="button"
@@ -352,6 +449,7 @@ export const DateTimePicker: React.FC<{
         aria-label={t('datePicker.open', { label })}
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls={dialogId}
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
       >
@@ -359,7 +457,7 @@ export const DateTimePicker: React.FC<{
         <span className="pl-date-picker__value">{displayedValue}</span>
       </button>
       {open && (
-        <div className="pl-date-picker__popover" role="dialog" aria-label={t('datePicker.dialog', { label })}>
+        <div id={dialogId} className="pl-date-picker__popover" role="dialog" aria-label={t('datePicker.dialog', { label })}>
           <div className="pl-date-picker__header">
             <strong>{monthLabel}</strong>
             <div className="pl-date-picker__nav">
@@ -374,27 +472,41 @@ export const DateTimePicker: React.FC<{
           <div className="pl-date-picker__weekdays" aria-hidden="true">
             {weekdays.map((weekday) => <span key={weekday}>{weekday}</span>)}
           </div>
-          <div className="pl-date-picker__grid" role="grid" aria-label={monthLabel}>
-            {days.map((day, index) => {
-              if (day === null) return <span key={`empty-${index}`} className="pl-date-picker__day pl-date-picker__day--empty" aria-hidden="true" />;
-              const date = new Date(viewDate.getFullYear(), viewDate.getMonth(), day);
-              const selected = sameCalendarDate(selectedDate, date);
-              const today = sameCalendarDate(new Date(), date);
-              const dateLabel = new Intl.DateTimeFormat(localeTag(locale), { dateStyle: 'full' }).format(date);
-              return (
-                <button
-                  key={day}
-                  type="button"
-                  className={`pl-date-picker__day${selected ? ' pl-date-picker__day--selected' : ''}${today ? ' pl-date-picker__day--today' : ''}`}
-                  role="gridcell"
-                  aria-label={dateLabel}
-                  aria-selected={selected}
-                  onClick={() => chooseDate(day)}
-                >
-                  {day}
-                </button>
-              );
-            })}
+          <div className="pl-date-picker__grid" role="grid" aria-label={monthLabel} aria-rowcount={6} aria-colcount={7}>
+            {Array.from({ length: 6 }, (_, rowIndex) => (
+              <div key={`row-${rowIndex}`} className="pl-date-picker__row" role="row">
+                {days.slice(rowIndex * 7, rowIndex * 7 + 7).map((day, columnIndex) => {
+                  const index = rowIndex * 7 + columnIndex;
+                  if (day === null) {
+                    return <span key={`empty-${index}`} className="pl-date-picker__day pl-date-picker__day--empty" role="gridcell" aria-disabled="true" aria-hidden="true" />;
+                  }
+                  const date = new Date(viewDate.getFullYear(), viewDate.getMonth(), day);
+                  const selected = sameCalendarDate(selectedDate, date);
+                  const today = sameCalendarDate(new Date(), date);
+                  const focused = sameCalendarDate(focusedDate, date);
+                  const dateKey = calendarDateKey(date);
+                  const dateLabel = new Intl.DateTimeFormat(localeTag(locale), { dateStyle: 'full' }).format(date);
+                  return (
+                    <button
+                      key={dateKey}
+                      id={`${dialogId}-${dateKey}`}
+                      ref={(element) => { dayRefs.current[dateKey] = element; }}
+                      type="button"
+                      className={`pl-date-picker__day${selected ? ' pl-date-picker__day--selected' : ''}${today ? ' pl-date-picker__day--today' : ''}`}
+                      role="gridcell"
+                      tabIndex={focused ? 0 : -1}
+                      aria-label={dateLabel}
+                      aria-selected={selected}
+                      aria-current={today ? 'date' : undefined}
+                      onClick={() => chooseDate(day)}
+                      onKeyDown={(event) => onDayKeyDown(event, index)}
+                    >
+                      {day}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </div>
           <div className="pl-date-picker__time">
             <label htmlFor={timeInputId}>
