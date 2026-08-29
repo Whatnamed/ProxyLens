@@ -65,7 +65,7 @@
   --pl-analytical-soft: #e8eae6;
 
   /* Typography roles */
-  --pl-font-narrative: "Public Sans", "IBM Plex Sans SC", Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --pl-font-narrative: "IBM Plex Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   --pl-font-sans: var(--pl-font-narrative);
   --pl-font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
   --pl-font-weight-regular: 400;
@@ -119,17 +119,6 @@
   --pl-history-row-h: 42px;
   --pl-sidebar-w: 208px;
   --pl-inspector-w: 410px;
-}
-
-html[lang="zh-CN"] {
-  --pl-font-narrative: "IBM Plex Sans SC", "Public Sans", Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-  --pl-leading-body: 1.52;
-  --pl-leading-heading: 1.36;
-  --pl-leading-caption: 1.5;
-  --pl-leading-helper: 1.54;
-  --pl-letter-spacing-heading: normal;
-  --pl-letter-spacing-eyebrow: normal;
-  --pl-title-subtitle-gap: 8px;
 }
 
 [data-theme="dark"] {
