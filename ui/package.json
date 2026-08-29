@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
     "sidecar:build": "node scripts/build-sidecar.mjs",
+    "preview:serve": "node scripts/preview-serve.mjs",
     "tauri": "tauri",
     "tauri:dev": "node scripts/build-sidecar.mjs && tauri dev",
     "tauri:build": "node scripts/build-sidecar.mjs && tauri build"
