@@ -96,6 +96,31 @@
 
 ---
 
+## 2026-08-30 — Deterministic typography delivery
+
+**Scope:** C 分支字体实际渲染审计与 Design System typography consistency；不涉及布局结构、产品语义、Query API、Collector 或 Storage。
+
+### Root cause
+
+- 既有 CSS 只声明 Public Sans / JetBrains Mono 字体栈，没有 `@font-face` 或仓库字体资产；Windows Chromium 实际渲染为 `Segoe UI Semibold`、`Microsoft YaHei Bold` 与 `Cascadia Mono`，因此不同机器无法得到同一套 typography。
+
+### Completed
+
+- bundled Public Sans、IBM Plex Sans SC、JetBrains Mono 的 400 Regular / 500 Medium WOFF2；
+- 增加 narrative / heading / body / control / caption / helper / technical typography roles；
+- 通过 `html[lang="zh-CN"]` 集中设置中文字体、leading、标题字重、中文字距与标题副标题节奏；
+- 将 diagnostics 页面残留的系统字体、硬编码颜色和 600 字重归入现有 token；
+- 保持现有 control、navigation、history row、inspector、sidebar 与 toolbar 几何不变。
+
+### Validation state
+
+- `npm.cmd test`：42 项通过；`npm.cmd run build`：通过；
+- 真实 Chromium CDP：EN 使用 `Public Sans Medium`，ZH 使用 `IBM Plex Sans SC Medium`，technical evidence 使用 `JetBrains Mono Regular`；
+- 1280×800 与 1600×1000 下 Overview / History / Coverage 的 EN/ZH、Light/Dark 共 24 张截图无页面级横向溢出；日期日历、network/page-size listbox 交互回归通过；
+- 构建产物字体总量约 7.8MB，未引入字体 npm 运行时依赖；完整 Tauri 多 fixture 视觉 Freeze 仍 PENDING。
+
+---
+
 ## Earlier milestones
 
 更早的 Phase 0–2 与 Phase 3A 过程已有 `ROADMAP.md`、`STATUS.md` 历史版本、`docs/decisions/`、专项 handoff 与 Git commit 记录支撑。

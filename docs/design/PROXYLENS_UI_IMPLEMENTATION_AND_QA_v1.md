@@ -287,6 +287,25 @@ Check:
 - titles are not oversized;
 - long rules/hosts do not destroy layout.
 
+## 14.1 Deterministic font delivery
+
+- Bundle only the canonical normal WOFF2 weights required by the UI: 400 and
+  500;
+- use Public Sans for the English/Latin narrative layer, IBM Plex Sans SC for
+  the Chinese locale, and JetBrains Mono for technical/evidence values;
+- keep system fonts as last-resort fallbacks; do not require a system-wide
+  install or a runtime font CDN;
+- verify actual rendered platform fonts after `document.fonts.ready` using
+  DevTools/CDP rendered-font inspection, not CSS declarations alone;
+- keep English body leading near 1.45 and Chinese body leading near 1.50–1.52;
+  long Chinese helper copy may use 1.52–1.55;
+- keep title/section heading leading near 1.3–1.4 and preserve the existing
+  control, navigation, history-row, inspector, sidebar and toolbar geometry;
+- do not add global positive letter-spacing for Chinese; use normal spacing for
+  body, controls, tables, technical values and buttons;
+- keep title-to-subtitle grouping at the existing compact rhythm: about 6px in
+  English and about 8px in Chinese, without expanding global section spacing.
+
 ---
 
 # 15. Interaction audit
@@ -304,6 +323,10 @@ Verify:
 - opening a DatePicker keeps one day gridcell tab stop, Arrow keys move by day/week (including across months), Home/End move within the row, and Tab closes it;
 - switching EN / 中文 updates visible UI copy immediately and survives reload;
 - date/time display follows the active locale while raw technical values remain unchanged.
+- the bundled Public Sans, IBM Plex Sans SC and JetBrains Mono are the actual
+  rendered families for their respective English, Chinese and evidence roles;
+- the 1280×800 and 1600×1000 matrix is checked for Overview, History +
+  Inspector and Coverage in EN/ZH and Light/Dark.
 
 ---
 

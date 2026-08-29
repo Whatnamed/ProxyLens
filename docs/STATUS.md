@@ -7,7 +7,7 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure；focused UI polish、EN / 中文 locale 与 overlay accessibility Closure 已完成，仍等待完整真实多状态视觉验收。
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure；focused UI polish、EN / 中文 locale、overlay accessibility 与确定性 typography asset Closure 已完成，仍等待完整真实多状态视觉验收。
 - **活动分支**：`experiment/qwen38max-directed-ui`
 - **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
@@ -27,6 +27,7 @@
 - Design System family overlays：自定义 date/time picker、network/page-size listbox，共用 surface / border / radius / selected / hover / focus / shadow 语言；
 - Overlay accessibility：Select 使用单一 listbox focus + `aria-activedescendant`；DatePicker 使用 `grid → row → gridcell` 与单一 roving day focus，支持方向键跨月移动和 focus-out close；
 - 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译。
+- 确定性 typography：仓库内 bundled Public Sans、IBM Plex Sans SC、JetBrains Mono 的 400/500 WOFF2；中文字体由 `html[lang="zh-CN"]` 集中映射，系统字体只作最后 fallback，不要求系统安装。
 
 ### 独立审查 Closure 已完成
 
@@ -54,6 +55,7 @@
 - TypeScript / frontend build：本轮本地 PASS；
 - UI regression coverage：42 tests（本地执行结果），包含 locale dictionary parity、静态 translation-key audit 与 calendar navigation utilities；
 - Locale dictionary parity：EN / 中文各 370 个 key，静态 UI translation keys 无缺失；
+- Typography asset build：6 个 WOFF2、约 7.8MB 字体产物；无 TTF/WOFF/italic 或额外字重；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 
@@ -73,14 +75,14 @@
 - Custom date/time：日期选择、24 小时输入、非法时间提示、Apply 前后状态、日期 grid 方向键/跨月移动与 Tab 离开关闭；
 - Network / page size：统一 listbox 打开、选中、`aria-activedescendant` 更新、Tab 离开关闭与值更新；
 - 824px 保底窗口无页面级横向溢出，1280px 桌面窗口完成布局几何检查。
+- 本轮确定性字体渲染：EN 标题/控件由 CDP 识别为 `Public Sans Medium`，ZH 标题/控件为 `IBM Plex Sans SC Medium`，技术时间证据为 `JetBrains Mono Regular`；字体加载状态为 `loaded`。
+- 本轮 1280×800 与 1600×1000 的 Overview / History / Coverage、EN / 中文、Light / Dark 共 24 个截图无页面级横向溢出；中文 body / helper / heading leading 与紧凑标题副标题节奏已按 Draft token 固化。
 
 仍待人工验收：
 
 - `healthy / gaps / stale / empty / scaled` 全 fixture；
-- 1280×800；
-- 1600×1000；
+- 完整 Tauri 运行时下的 1280×800 / 1600×1000；
 - Light / Dark 两套主题在 History + Inspector、Overview、Coverage 上的完整视觉一致性；
-- 字体是否升级为确定性产品资产，而不是依赖系统 fallback。
 - 本轮仍未用完整 Tauri 多 fixture 取代浏览器 fallback；因此不把 focused QA 表述为最终视觉 Freeze。
 
 ---
@@ -104,7 +106,6 @@
 ## Open Questions
 
 - 最终视觉验收后，当前 Draft Design System v1 是否 Freeze；
-- Public Sans / JetBrains Mono 是否作为确定性产品字体资产随应用交付，还是继续允许系统 fallback；
 - 安装版长期数据路径规约（后续安装打包阶段确定）。
 
 ---

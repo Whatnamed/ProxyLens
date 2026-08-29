@@ -83,13 +83,18 @@ Use:
 
 ```text
 Public Sans
-→ product/navigation/explanation layer
+→ English / Latin product, navigation and explanation layer
+
+IBM Plex Sans SC
+→ Simplified Chinese product, navigation and explanation layer
 
 JetBrains Mono
 → machine/evidence layer
 ```
 
-Mono is semantic, not decorative.
+Only normal 400 and 500 WOFF2 weights are bundled. System fonts are last-resort
+fallbacks, and the root `html[lang="zh-CN"]` mapping controls Chinese leading
+and heading rhythm. Mono is semantic, not decorative.
 
 ## Theme rule
 

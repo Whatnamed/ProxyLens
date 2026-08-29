@@ -285,10 +285,16 @@ Never overload route/status semantic colors.
 
 ## 6.1 Typeface families
 
-Primary:
+English / Latin narrative:
 
 ```text
 Public Sans
+```
+
+Simplified Chinese narrative:
+
+```text
+IBM Plex Sans SC
 ```
 
 Technical:
@@ -297,7 +303,15 @@ Technical:
 JetBrains Mono
 ```
 
-Fallbacks may be used if bundling is not immediately available, but the visual system should preserve:
+These families are bundled as deterministic WOFF2 assets. The UI uses only
+normal 400 Regular and 500 Medium weights at this stage. System fonts are a
+last-resort fallback only; they are not part of the intended visual baseline.
+
+The `html[lang="zh-CN"]` typography mapping selects IBM Plex Sans SC for the
+Chinese interface, while English uses Public Sans. JetBrains Mono remains
+locale-independent for technical/evidence values.
+
+The visual system preserves:
 
 ```text
 Sans narrative layer
@@ -307,7 +321,7 @@ Mono evidence layer
 
 ## 6.2 Sans usage
 
-Use Sans for:
+Use the narrative Sans family for:
 
 - navigation;
 - page titles;
