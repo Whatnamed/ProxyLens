@@ -73,6 +73,10 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 		items = items[:limit]
 	}
 
+	if items == nil {
+		items = []*storage.ConnectionRecord{}
+	}
+
 	s.writeJSON(w, http.StatusOK, ConnectionsListResponse{
 		Items:   items,
 		Limit:   limit,
@@ -117,6 +121,9 @@ func (s *Server) handleConnectionDetailRouter(w http.ResponseWriter, r *http.Req
 			s.logInternalError("ListConnectionTraffic failed", err)
 			s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to query connection traffic")
 			return
+		}
+		if traffic == nil {
+			traffic = []*storage.ConnectionTrafficRecord{}
 		}
 		s.writeJSON(w, http.StatusOK, ConnectionTrafficResponse{
 			ConnectionID: connectionID,
@@ -180,6 +187,9 @@ func (s *Server) handleConnectionDetailRouter(w http.ResponseWriter, r *http.Req
 			}
 		}
 
+		if accEvents == nil {
+			accEvents = []*storage.AccountedTrafficRecord{}
+		}
 		s.writeJSON(w, http.StatusOK, ConnectionDetailResponse{
 			Connection:        conn,
 			AccountingEvents:  accEvents,

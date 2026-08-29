@@ -230,6 +230,10 @@ func (s *Server) handleTopQuery(w http.ResponseWriter, r *http.Request, queryNam
 		return
 	}
 
+	if items == nil {
+		items = []storage.TopDimensionItem{}
+	}
+
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"items": items,
 		"limit": filter.Limit,
