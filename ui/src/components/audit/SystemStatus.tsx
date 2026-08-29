@@ -8,7 +8,16 @@ export interface SystemStatusModel {
   db: { kind: StatusKind; label: string; title: string };
 }
 
-const HEARTBEAT_STALE_MS = 90_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
+const MIN_HEARTBEAT_GRACE_MS = 15_000;
+
+// Must match the backend Coverage grace rule: max(3 × heartbeatIntervalMs, 15000ms).
+export function heartbeatStaleThresholdMs(heartbeatIntervalMs?: number): number {
+  const interval = typeof heartbeatIntervalMs === 'number' && heartbeatIntervalMs > 0
+    ? heartbeatIntervalMs
+    : DEFAULT_HEARTBEAT_INTERVAL_MS;
+  return Math.max(3 * interval, MIN_HEARTBEAT_GRACE_MS);
+}
 
 export function deriveSystemStatus(meta: MetaResponse | undefined, now = Date.now()): SystemStatusModel {
   if (!meta) {
@@ -25,7 +34,7 @@ export function deriveSystemStatus(meta: MetaResponse | undefined, now = Date.no
     collector = { kind: 'offline', label: 'Collector offline', title: 'No collector session recorded in this database' };
   } else if (session.status === 'running') {
     const hb = session.lastHeartbeatAt ? new Date(session.lastHeartbeatAt).getTime() : NaN;
-    if (isNaN(hb) || now - hb > HEARTBEAT_STALE_MS) {
+    if (isNaN(hb) || now - hb > heartbeatStaleThresholdMs(session.heartbeatIntervalMs)) {
       collector = {
         kind: 'stale',
         label: 'Collector stale',
