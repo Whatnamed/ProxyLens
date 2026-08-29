@@ -189,7 +189,7 @@ export const OverviewPage: React.FC<{
               <>
                 <Section
                   title="Traffic summary"
-                  sub={`Routing outcome totals for ${routeFocus === 'ALL' ? 'all routes' : `route focus: ${routeFocus}`} · exact reconciled bytes`}
+                  sub={`Routing outcome totals for ${routeFocus === 'ALL' ? 'all routes' : `route focus: ${routeFocus}`} · reconciled accounted bytes`}
                 >
                   <div className="pl-overview__totals">
                     <TotalBlock label="Proxy" route="PROXY" up={summary.proxyUpload} down={summary.proxyDownload} />
