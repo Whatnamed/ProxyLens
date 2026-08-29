@@ -64,9 +64,23 @@
   --pl-analytical: #9aa39c;
   --pl-analytical-soft: #e8eae6;
 
-  /* Typography */
-  --pl-font-sans: "Public Sans", Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  /* Typography roles */
+  --pl-font-narrative: "Public Sans", "IBM Plex Sans SC", Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --pl-font-sans: var(--pl-font-narrative);
   --pl-font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --pl-font-weight-regular: 400;
+  --pl-font-weight-control: 500;
+  --pl-font-weight-heading: 500;
+  --pl-font-weight-emphasis: 500;
+  --pl-leading-body: 1.45;
+  --pl-leading-heading: 1.35;
+  --pl-leading-caption: 1.45;
+  --pl-leading-helper: 1.52;
+  --pl-leading-mono: 1.4;
+  --pl-letter-spacing-body: normal;
+  --pl-letter-spacing-heading: -0.01em;
+  --pl-letter-spacing-eyebrow: 0.04em;
+  --pl-title-subtitle-gap: 6px;
 
   --pl-text-10: 10px;
   --pl-text-11: 11px;
@@ -105,6 +119,17 @@
   --pl-history-row-h: 42px;
   --pl-sidebar-w: 208px;
   --pl-inspector-w: 410px;
+}
+
+html[lang="zh-CN"] {
+  --pl-font-narrative: "IBM Plex Sans SC", "Public Sans", Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --pl-leading-body: 1.52;
+  --pl-leading-heading: 1.36;
+  --pl-leading-caption: 1.5;
+  --pl-leading-helper: 1.54;
+  --pl-letter-spacing-heading: normal;
+  --pl-letter-spacing-eyebrow: normal;
+  --pl-title-subtitle-gap: 8px;
 }
 
 [data-theme="dark"] {

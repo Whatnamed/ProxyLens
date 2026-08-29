@@ -15,9 +15,12 @@ body,
 }
 
 body {
-  font-family: var(--pl-font-sans);
+  font-family: var(--pl-font-narrative);
   font-size: var(--pl-text-13);
-  line-height: 1.45;
+  line-height: var(--pl-leading-body);
+  font-weight: var(--pl-font-weight-regular);
+  letter-spacing: var(--pl-letter-spacing-body);
+  font-synthesis: none;
   color: var(--pl-text-primary);
   background: var(--pl-canvas);
   -webkit-font-smoothing: antialiased;
@@ -77,6 +80,7 @@ a:hover {
 /* Typography helpers */
 .pl-mono {
   font-family: var(--pl-font-mono);
+  line-height: var(--pl-leading-mono);
   font-feature-settings: normal;
 }
 
@@ -86,8 +90,9 @@ a:hover {
 
 .pl-eyebrow {
   font-size: var(--pl-text-11);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: var(--pl-font-weight-control);
+  line-height: var(--pl-leading-caption);
+  letter-spacing: var(--pl-letter-spacing-eyebrow);
   text-transform: uppercase;
   color: var(--pl-text-muted);
 }

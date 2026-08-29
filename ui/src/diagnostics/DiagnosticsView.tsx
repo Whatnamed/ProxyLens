@@ -93,7 +93,7 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
             {isTauri ? t('diagnostics.tauriShell') : t('diagnostics.browserMode')}
           </span>
         </h2>
-        <p style={{ color: '#6b7280', fontSize: '13px', margin: 0 }}>
+        <p className="diag-description">
           {t('diagnostics.description')}
         </p>
       </div>
@@ -194,7 +194,7 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
                   </tr>
                 ))}
                 {(!topProcQuery.data?.items || topProcQuery.data.items.length === 0) && (
-                  <tr><td colSpan={4} style={{ textAlign: 'center', color: '#9ca3af' }}>{t('diagnostics.noProcesses')}</td></tr>
+                  <tr><td colSpan={4} className="diag-empty">{t('diagnostics.noProcesses')}</td></tr>
                 )}
               </tbody>
             </table>
@@ -264,7 +264,7 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
                 </tr>
               ))}
               {(!connsQuery.data?.items || connsQuery.data.items.length === 0) && (
-                <tr><td colSpan={6} style={{ textAlign: 'center', color: '#9ca3af' }}>{t('diagnostics.noConnections')}</td></tr>
+                <tr><td colSpan={6} className="diag-empty">{t('diagnostics.noConnections')}</td></tr>
               )}
             </tbody>
           </table>

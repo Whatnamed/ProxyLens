@@ -15,7 +15,7 @@
   background: var(--pl-surface-raised);
   color: var(--pl-text-primary);
   font-size: var(--pl-text-13);
-  font-weight: 500;
+  font-weight: var(--pl-font-weight-control);
   cursor: pointer;
   white-space: nowrap;
   transition: background var(--pl-duration-fast) var(--pl-ease-out),
@@ -165,7 +165,7 @@
   background: var(--pl-surface-raised);
   color: var(--pl-text-primary);
   font-size: var(--pl-text-12);
-  font-weight: 500;
+  font-weight: var(--pl-font-weight-control);
   cursor: pointer;
   white-space: nowrap;
   text-align: left;
@@ -272,6 +272,7 @@
   color: var(--pl-text-secondary);
   font: inherit;
   font-size: var(--pl-text-12);
+  font-weight: var(--pl-font-weight-control);
   cursor: pointer;
   text-align: left;
   white-space: nowrap;
@@ -286,7 +287,7 @@
 .pl-select-menu__option--selected {
   background: var(--pl-surface-selected);
   color: var(--pl-text-primary);
-  font-weight: 500;
+  font-weight: var(--pl-font-weight-control);
 }
 
 .pl-select-menu__option--selected:hover,
@@ -332,7 +333,8 @@
 .pl-date-picker__header strong {
   color: var(--pl-text-primary);
   font-size: var(--pl-text-12);
-  font-weight: 600;
+  font-weight: var(--pl-font-weight-heading);
+  line-height: var(--pl-leading-heading);
 }
 
 .pl-date-picker__nav {
@@ -403,7 +405,7 @@
   border-color: var(--pl-accent);
   background: var(--pl-accent-soft);
   color: var(--pl-text-primary);
-  font-weight: 600;
+  font-weight: var(--pl-font-weight-control);
 }
 
 .pl-date-picker__day:focus-visible {
@@ -477,7 +479,7 @@
   background: transparent;
   color: var(--pl-text-muted);
   font-size: var(--pl-text-12);
-  font-weight: 500;
+  font-weight: var(--pl-font-weight-control);
   cursor: pointer;
   white-space: nowrap;
   transition: background var(--pl-duration-fast) var(--pl-ease-out),
@@ -511,7 +513,7 @@
   padding: 0 7px;
   border-radius: var(--pl-radius-xs);
   font-size: var(--pl-text-10);
-  font-weight: 600;
+  font-weight: var(--pl-font-weight-emphasis);
   letter-spacing: 0.05em;
   white-space: nowrap;
 }
@@ -571,7 +573,7 @@
   padding: 0 6px;
   border-radius: var(--pl-radius-xs);
   font-size: var(--pl-text-10);
-  font-weight: 500;
+  font-weight: var(--pl-font-weight-control);
   white-space: nowrap;
 }
 
@@ -667,13 +669,15 @@
 .pl-section__title {
   margin: 0 0 var(--pl-space-3);
   font-size: var(--pl-text-14);
-  font-weight: 600;
+  font-weight: var(--pl-font-weight-heading);
+  line-height: var(--pl-leading-heading);
   color: var(--pl-text-primary);
 }
 
 .pl-section__sub {
-  margin: -6px 0 var(--pl-space-3);
+  margin: calc(-1 * (var(--pl-space-3) - var(--pl-title-subtitle-gap))) 0 var(--pl-space-3);
   font-size: var(--pl-text-12);
+  line-height: var(--pl-leading-caption);
   color: var(--pl-text-muted);
 }
 
@@ -774,7 +778,7 @@
   background: var(--pl-workspace);
   color: var(--pl-text-muted);
   font-size: var(--pl-text-11);
-  font-weight: 500;
+  font-weight: var(--pl-font-weight-control);
   text-align: left;
   white-space: nowrap;
 }
@@ -857,7 +861,8 @@
 
 .pl-state__title {
   font-size: var(--pl-text-14);
-  font-weight: 600;
+  font-weight: var(--pl-font-weight-heading);
+  line-height: var(--pl-leading-heading);
   color: var(--pl-text-primary);
 }
 
@@ -865,7 +870,7 @@
   max-width: 480px;
   font-size: var(--pl-text-12);
   color: var(--pl-text-muted);
-  line-height: 1.6;
+  line-height: var(--pl-leading-helper);
 }
 
 .pl-state--error {
@@ -920,7 +925,7 @@
   color: var(--pl-text-primary);
   font-size: var(--pl-text-11);
   font-family: var(--pl-font-mono);
-  line-height: 1.5;
+  line-height: var(--pl-leading-helper);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   pointer-events: none;
@@ -1086,7 +1091,7 @@ details.pl-disclosure > summary {
   gap: var(--pl-space-2);
   color: var(--pl-text-secondary);
   font-size: var(--pl-text-12);
-  font-weight: 500;
+  font-weight: var(--pl-font-weight-control);
   user-select: none;
 }
 

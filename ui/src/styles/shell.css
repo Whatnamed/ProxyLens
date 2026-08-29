@@ -45,8 +45,9 @@
 
 .pl-sidebar__name {
   font-size: var(--pl-text-14);
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: var(--pl-font-weight-heading);
+  line-height: var(--pl-leading-heading);
+  letter-spacing: var(--pl-letter-spacing-heading);
   color: var(--pl-text-primary);
 }
 
@@ -75,7 +76,7 @@
   background: transparent;
   color: var(--pl-text-muted);
   font-size: var(--pl-text-13);
-  font-weight: 500;
+  font-weight: var(--pl-font-weight-control);
   cursor: pointer;
   text-align: left;
   transition: background var(--pl-duration-fast) var(--pl-ease-out),
@@ -225,8 +226,9 @@
 .pl-page__title {
   margin: 0;
   font-size: var(--pl-text-16);
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: var(--pl-font-weight-heading);
+  line-height: var(--pl-leading-heading);
+  letter-spacing: var(--pl-letter-spacing-heading);
 }
 
 .pl-page__header-right {
@@ -330,9 +332,10 @@
 .pl-total-block__value {
   font-family: var(--pl-font-mono);
   font-size: var(--pl-text-20);
-  font-weight: 600;
+  font-weight: var(--pl-font-weight-emphasis);
+  line-height: var(--pl-leading-heading);
   color: var(--pl-text-primary);
-  letter-spacing: -0.01em;
+  letter-spacing: var(--pl-letter-spacing-heading);
 }
 
 .pl-total-block__parts {
@@ -466,7 +469,8 @@
 
 .pl-inspector__title {
   font-size: var(--pl-text-13);
-  font-weight: 600;
+  font-weight: var(--pl-font-weight-heading);
+  line-height: var(--pl-leading-heading);
   color: var(--pl-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -589,7 +593,8 @@
 .pl-coverage-fact__value {
   font-family: var(--pl-font-mono);
   font-size: var(--pl-text-16);
-  font-weight: 600;
+  font-weight: var(--pl-font-weight-emphasis);
+  line-height: var(--pl-leading-heading);
   color: var(--pl-text-primary);
 }
 
