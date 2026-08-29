@@ -1,93 +1,110 @@
-# ProxyLens 项目状态与决策记录
+# ProxyLens 项目状态
 
-> 后续开发 Agent / 工具切换时优先阅读本文件，再按任务需要读取 PRODUCT、ARCHITECTURE 与 ROADMAP。
+> **用途：当前状态与 Agent handoff 的唯一快速入口。**
+> 动态进度写在这里，不写进 `AGENTS.md`。长期阶段计划见 `ROADMAP.md`，重要历史里程碑见 `DEVLOG.md`。
 
 ---
 
 ## Current State
 
-- **当前阶段**：`Phase 3B/C Directed UI (C 组) — 独立审查 Closure 完成，等待真实多状态视觉验收`
-- **Phase 3B/C 实验分支状态 (experiment/qwen38max-directed-ui)**：
-  - `96b08cb` 为 C 组原始交付（6 commits，App Shell 接管入口），保留不改写；其后 6 个提交为独立审查 Closure：
-    1. 修复 History Inspector 白屏（qualityFlags 布尔映射 wire shape 崩溃）+ ErrorBoundary + 行键盘选择 + 浏览器开发同源代理；
-    2. AuditContext 状态语义：时间范围变更一律重冻结 History snapshot 并重置 page/selected，Route Focus 重置分页，Custom 编辑器草稿与应用范围分离（只有 Apply 生效）；
-    3. Coverage gap provenance 按后端口径分类（仅 `controller_stream` 为 Controller gap，其余为 Collector offline，支持 mixed）；
-    4. Sidebar heartbeat stale 阈值对齐后端宽限规则 `max(3×heartbeatIntervalMs, 15000ms)`；
-    5. Overview 总量表述改为 "reconciled accounted bytes"（含 interval-derived，不得宣称 exact）；
-    6. 新增 25 个回归测试（共 32 个全部 PASS）并补齐 `npm test` 脚本（tsx devDependency）。
-  - 未改动：布局/配色/设计系统/组件风格、Overview 与 Inspector 结构、后端/Storage/Accounting。
-  - **待办**：healthy/gaps/stale/empty/scaled 全 fixture 与 1280×800 / 1600×1000 的真实渲染视觉验收（由用户亲自确认）。
-- **上一阶段基线（3B0）**：`Phase 3B0 Pre-UI Closure Complete (Ready for Phase 3B Visual Design & UI Implementation)`
-- **平台与契约状态**：
-  > **Pre-UI engineering is complete; next action requires UI design decisions.**
-  
-  1. **Top Rules 维度与 IA 契约精确对齐**:
-     - 只读查询 `GET /api/v1/analytics/top/rules` 专享 `TopRulesResponse`，支持 `(rule, rulePayload, route) + bytes + connectionCount`，通过独立 API 契约测试验证；
-     - 明确 IA 承诺边界：Top Processes 仅承诺 `process` name（不承诺 `processPath`），Top Hosts 仅承诺 `host`（destination-IP ranking 延后），Reject 仅承诺 bytes（连接数标记为 DEFERRED），History destinationPort 过滤标记为 Phase 3C DEFERRED；
-  2. **本地天感知时间窗口 (Local-Day Aware Quick Windows)**:
-     - Today: `[local today 00:00, now)`；
-     - Yesterday: `[local yesterday 00:00, local today 00:00)`；
-     - 7d: `[local start-of-day 6 days ago 00:00, now)`；
-     - 30d: `[local start-of-day 29 days ago 00:00, now)`；
-     - 底层转换为 UTC RFC3339 纳秒/毫秒 ISO 字符串，7 个边界断言单测 100% PASS；
-  3. **E2E 探针执行环境隔离**:
-     - 探针自检（`/meta` + `/summary` + `/connections`）仅在 `PROXYLENS_E2E_MODE=1` 时执行，普通 Tauri 启动零额外网络请求，Token 严禁暴露；
-  4. **Fixture 生成器规范化与 Fail-Closed 保证**:
-     - 删除冗余漂移的 `tools/ui-fixture/main.go`，唯一 generator 保留在 `collector/cmd/proxylens-ui-fixture/main.go`；
-     - 针对所有 Emit / Exec / Rebuild / Close 关键错误实施 fail-closed；支持可选 `--anchor <RFC3339>`；
-  5. **大规模性能实测 (100,000 Events Scaled Dataset Sanity)**:
-     - 实测覆盖 30 天、100,000 个核算事件的 `fixture_scaled.db` 数据集；
-     - 实测冷热请求延迟：`/meta` (0.89~8.87ms), `/coverage` (0.52~1.16ms), `/summary` (215~260ms), `/top/rules` (261~354ms), `/top/final-proxies` (416~546ms), `/top/processes` (521~674ms)，所有 Overview 端点全部 < 700ms（远低于 1s 阈值）；
-  6. **全量测试套件覆盖**: 全部 55 个 Go 测试 + 18 个 Phase 0 回归测试 + 7 个前端 Utility 单元测试 100% PASS，Tauri 原生 Release 冒烟 100% PASS。
-- **环境资产清单 (Environment Inventory)**：
-  - OS: Windows 11 (AMD64) / 12th Gen Intel Core i5-12400 (12 cores)
-  - 客户端: FLClash (PID 13436) + FlClashCore (PID 20320) 运行中
-  - TUN 状态: 启用 (`device: FlClash`, `find-process-mode: always`, `enhanced-mode: fake-ip`, `mode: rule`)
-  - Live 运行时内核: `Mihomo Meta v1.10.0` (GET `/version` 返回)
-  - Desktop Shell: Tauri v2.11.5 + WebView2 Runtime 151.0.4129.101
-- **双事实权威源与三层存储模型 (Dual Authority & Layered Storage)**：
-  - 网络观测权威: `event_journal`
-  - 采集生命周期权威: `collector_sessions`
-  - 原始事实层: `event_journal`, `connection_traffic`, `monitoring_gaps`
-  - 版本化核算层: `accounting_runs`, `relay_relations`, `accounted_traffic`
-  - 分时聚合层: `usage_hourly_dimensions`
-  - 本地只读查询层: `proxylens-query-api` (HTTP/JSON `/api/v1/*`)
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure，等待真实多状态视觉验收。
+- **活动分支**：`experiment/qwen38max-directed-ui`
+- **当前远端 HEAD（本次状态记录前）**：`a1b4d2b`
+- **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
+- **Closure**：`96b08cb` 之后 6 个代码/测试修复提交 + 1 个状态文档提交；工程/语义 Gate 已通过。
+- **当前唯一阻塞项**：真实渲染视觉验收，不是代码架构或产品语义 Closure。
+
+### 已实现的正式 UI
+
+- App Shell 与 V1 顶层导航：Overview / History / Coverage；
+- Light + Dark semantic token / typography / density / interaction foundation；
+- Overview：流量汇总、Evidence Trust、Top Processes / Rules / Hosts / Final Proxies；
+- History：冻结 snapshot、受支持的过滤、显式分页、键盘可选连接行；
+- Connection Inspector：Causal Path、Traffic Accounting、Evidence Quality、Lifecycle、Accounting Events、Raw Traffic Frames；
+- Coverage：Coverage summary、Gap timeline、Controller / Collector provenance、Outside Monitored History、Inspect Around Gap；
+- System Status：Collector / Accounting / DB 状态，heartbeat stale 规则与后端一致；
+- ErrorBoundary 与 Query/API 可恢复状态。
+
+### 独立审查 Closure 已完成
+
+1. 修复 History Inspector 白屏根因：`qualityFlags` wire shape 兼容 `string[]` 与 boolean map，并增加 ErrorBoundary；
+2. 时间范围变更统一走 `applyTimeRange`：重新冻结 History snapshot，并重置 page / selected；
+3. Route Focus 变更重置分页与 selection；Custom 编辑草稿与 Applied Range 分离，只有 Apply 生效；
+4. Coverage gap provenance 对齐后端：仅 `controller_stream` 为 Controller gap，其余 collector-side source 为 Collector offline，并支持 mixed；
+5. Sidebar heartbeat stale 阈值对齐后端：`max(3 × heartbeatIntervalMs, 15000ms)`；
+6. Overview `exact reconciled bytes` 修正为 `reconciled accounted bytes`，避免把 interval-derived 流量宣称为 Exact；
+7. 新增 25 个 UI 回归测试，共 32 个测试；补齐 `npm test` 脚本。
 
 ---
 
-## Confirmed Decisions
+## Current Validation
 
-1. **产品定位**：ProxyLens 是代理流量审计与分流优化辅助工具，核心是解释“谁、去哪、为什么、走哪里、多少”，不是单纯总流量计费器。
-2. **审计优先**：默认关注真实代理流量，同时正确区分 DIRECT、PROXY、REJECT 等结果。
-3. **Unknown 必须可解释**：缺进程、缺域名、仅 IP、缺规则、缺代理链等必须分别表达。
-4. **Monitoring Gap 独立建模**：Collector / Controller 中断不能伪装成 Unknown Traffic。
-5. **Collector 与 UI 解耦**：允许轻量 Collector 后台运行；UI 随用随开。
-6. **旁路只读**：ProxyLens 不修改 Mihomo 配置、规则、节点、TUN、系统代理或路由，不阻断或限速。
-7. **本地优先**：不上传网络历史，不保存 HTTP 正文、Cookie、Token、密码、TLS 明文或其他 Payload。
-8. **Mihomo First**：第一阶段先使用 Mihomo External Controller；只有实测证明存在不可接受盲区时，才评估第二观测数据源。
-9. **正确性优先于 UI**：先解决字段语义、connection diff、double counting、重启与缺口，再推进完整 UI。
-10. **Collector 语言选型 (ADR 0001)**：选定 **Go (v1.24+)** 作为生产 Collector 开发语言。
-11. **存储引擎与持久化选型 (ADR 0002)**：选定 **SQLite + WAL**（纯 Go `modernc.org/sqlite` 驱动，`synchronous=NORMAL`）；`event_journal` 与 `collector_sessions` 构成双事实权威层。
-12. **版本化核算与保守中继对账 (ADR 0003)**：原始事实永久不可变；核算与物化分时聚合带版本且支持确定性全量重算；歧义中继连接不扣减；分时聚合严格保证整数字节守恒。
-13. **运行时核算边界、Freshness 与安全保留策略 (ADR 0004)**：全局单调 `journal_sequence` 快照边界；分批短事务写让出写锁；显式 Freshness 表达；心跳存活动态缺口判定；保留策略绝对不可删除 Raw Authority。
-14. **UI 平台架构与查询语义边界 (ADR 0005)**：选定 **Tauri v2 + React 19 + TypeScript + Vite**；Tauri 仅作为桌面外壳与 Sidecar 生命周期管理者，Go Local Query API 作为查询与核算语义权威；React/Rust 严禁直接读取 SQLite，Tauri/Rust 严禁重写 Go 语义。
-15. **代理链拓扑因果顺序规约 (Hop Order Semantics)**：`chains[0]` 为最终物理出站节点，`chains[last]` 为顶层规则分流策略组，出站节点历史只从发生时的 chains 派生，绝不读取当前活动选择组状态篡改历史。
-16. **Gap 恢复与 Bootstrap 规约**：冷启动/重连首帧已有连接记录为 baseline（delta=0），跨 Gap 存活连接增量归属为 Gap 期间累积流量；Gap 期间若发生 Epoch Break 则废弃跨 Gap 增量并新建 Epoch。
+### Engineering / semantics
+
+- C 组原始交付保留：PASS；
+- Architecture boundary：PASS；
+- Product / Query semantics：PASS；
+- History snapshot / pagination state：PASS；
+- Coverage provenance：PASS；
+- System Status heartbeat consistency：PASS；
+- Inspector crash resilience：PASS；
+- UI regression coverage：32 tests（本地执行结果）；
+- TypeScript / frontend build：Closure 报告为本地 PASS；
+- 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
+
+### Rendered visual QA
+
+已人工确认：
+
+- healthy fixture 下基本运行链路；
+- 7d 切换后 History 正常出现；
+- Connection Inspector 可完整打开、关闭，无已知 console render error；
+- Custom 编辑器打开不会静默改变 Applied Range。
+
+仍待人工验收：
+
+- `healthy / gaps / stale / empty / scaled` 全 fixture；
+- 1280×800；
+- 1600×1000；
+- Light / Dark 两套主题在 History + Inspector、Overview、Coverage 上的完整视觉一致性；
+- 字体是否升级为确定性产品资产，而不是依赖系统 fallback。
+
+---
+
+## Stable Product / Architecture Decisions
+
+以下为当前实现仍必须遵守的核心事实：
+
+1. ProxyLens 是代理流量审计与分流优化辅助工具，不是普通流量计费器、VPN Controller 或 Firewall。
+2. 核心因果链：`Process → Destination → Rule → Policy / Proxy Chain → Final Physical Egress → Bytes`。
+3. Unknown 必须可解释；Monitoring Gap 必须独立建模。
+4. 产品 V1 只读，不修改 Mihomo 配置、规则、节点、TUN、系统代理或路由。
+5. 本地优先，不上传网络历史或敏感 Payload。
+6. 双事实权威：`event_journal`（网络观测）+ `collector_sessions`（采集生命周期）。
+7. 查询架构：`React → Go Local Query API → read-only SQLite`；React 不直接读 SQLite，Rust 不复制 Go analytics/accounting。
+8. Hop Order：`chains[0]` 为最终物理出站，`chains[last]` 为顶层策略组；历史不得被当前活动节点状态回写。
+9. Gap / bootstrap / Accounting 的完整长期规则以 `ARCHITECTURE.md` 与 ADR 为准。
 
 ---
 
 ## Open Questions
 
-- UI 视觉体系与组件系统选型（将在 Phase 3B 结合设计原型推进）；
-- 安装版长期数据路径规约（将在后续安装打包阶段确定）。
+- 最终视觉验收后，当前 Draft Design System v1 是否 Freeze；
+- Public Sans / JetBrains Mono 是否作为确定性产品字体资产随应用交付，还是继续允许系统 fallback；
+- 安装版长期数据路径规约（后续安装打包阶段确定）。
+
+---
+
+## Known Issues / Non-blocking Notes
+
+- `applyTimeRange()` 在 Overview/Coverage 应用 quick range 时会提前生成 History snapshot；这不会造成显示范围与查询范围不一致，但与最初“进入 History 才 freeze”的措辞存在轻微行为差异。当前视为产品行为选择，待真实使用后决定是否调整。
+- UI Design System 仍为 Draft，不应在最终视觉验收前标记 Frozen。
 
 ---
 
 ## Next Step
 
-本分支 Phase 3B/C 实现与独立审查 Closure 已完成（见 Current State）。剩余唯一阻塞项：
-
-1. 由用户对 healthy/gaps/stale/empty/scaled 各 fixture 与 1280×800 / 1600×1000 真实窗口做最终视觉验收；
-2. 验收通过后决定是否将 C 组设计系统与页面推进合并主线，并确定字体是否升级为确定性产品资产。
-
-*(注：连接明细与搜索在 Phase 3C，覆盖率下钻在 Phase 3D，Audit Intelligence 在 Phase 4)*
+1. 对 C 分支做真实 Tauri 多状态、多尺寸视觉验收：`healthy / gaps / stale / empty / scaled`，至少覆盖 1280×800 与 1600×1000，并检查 Light / Dark。
+2. 根据真实视觉问题做最小、系统性的 token / density / typography / pattern 调整；若 Design System 规则改变，同步 `docs/design/`。
+3. 视觉验收通过后，决定是否 Freeze Design System v1，并规划 C 线进入正式主线的方式。
+4. 后续功能开发按 `ROADMAP.md` 未完成项继续，不重新实现已经完成的 Phase 3 UI 基础能力。

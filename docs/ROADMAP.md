@@ -1,208 +1,167 @@
 # ProxyLens 开发与验证路线图
 
+> 本文件记录长期阶段计划和 milestone 状态，不承担当前分支 handoff。当前状态与下一步以 `docs/STATUS.md` 为准。
+
 ---
 
 ## 路线图原则
 
-1. **验证导向**：先确认 Mihomo 真实数据语义，再设计生产级 Collector。
-2. **正确性优先**：先解决归因、连接生命周期、double counting、重启与监控缺口，再做完整 UI。
-3. **逐阶段收敛技术选型**：Go / Rust、SQLite、Tauri / Web UI 等不能只凭偏好决定，应由前一阶段证据推动。
-4. **阶段验收优于时间排期**：当前不设置主观日期和未经基准测试的性能数字。
+1. **验证导向**：先确认真实数据语义，再扩大产品能力。
+2. **正确性优先**：归因、生命周期、double counting、重启与 Monitoring Gap 高于视觉丰富度。
+3. **阶段验收优于主观排期**：只把有证据的实现标为完成。
+4. **已实现不等于已验收**：工程实现、语义 Closure、视觉验收可以是不同状态。
+5. **不为路线图补齐而发明能力**：未有后端/产品契约支持的筛选、排序、评分或控制能力保持 Deferred。
 
 ---
 
 ## 阶段概览
 
 ```text
-Phase 0  Mihomo 数据源验证
+Phase 0  Mihomo 数据源验证                         [COMPLETED]
    ↓
-Phase 1  Collector 原型
+Phase 1  Collector 原型                           [COMPLETED]
    ↓
-Phase 2  持久化与正确性
+Phase 2  持久化、核算与运行时验证                  [COMPLETED]
    ↓
-Phase 3  审计 UI
+Phase 3  审计 UI                                  [IN PROGRESS — core UI implemented]
    ↓
-Phase 4  待检查流量
+Phase 4  Audit Intelligence                       [PLANNED]
    ↓
-Later    长期增强
+Later    长期增强                                 [PLANNED]
 ```
 
 ---
 
 ## Phase 0 — Mihomo Data Source Discovery [COMPLETED]
 
-### Goal
+目标：在真实 Windows 11 + Mihomo + FLClash 环境确认 External Controller 数据语义、字段覆盖、连接生命周期、代理链顺序与断线/恢复行为。
 
-在真实 Windows 11 + Mihomo + FLClash 环境下，弄清 External Controller 能够稳定提供什么数据、这些字段真实语义是什么，以及旧方案“大量 Unknown”究竟来自数据源缺失还是采集 / 计算方式错误。`[Core Blocking Evidence Complete, Live FLClash Restart Remains Scoped Non-Blocking Item]`
+已完成核心成果：
 
-### Deliverables
-
-1. `docs/research/mihomo-data-source.md`
-   - Mihomo 版本与测试环境；
-   - `/connections`、`/traffic` 等实际行为；
-   - 字段覆盖率；
-   - TCP / UDP / QUIC 差异；
-   - DIRECT / PROXY / REJECT / 多层代理链表达；
-   - 连接生命周期和重启行为；
-   - 已确认风险和仍未解决问题。
-2. 一组**本地保存、不提交 Git**的原始 JSON 样本，用于复核真实行为。
-3. 必要时提供极少量脱敏后的示例片段放进调研报告。
-4. MetaCubeXD Data Usage 等参考实现的对比结论：哪些思路可借鉴、哪些不能直接当作 Mihomo 事实。
-
-### Required scenarios
-
-至少覆盖：
-
-- 空闲 TUN 下的后台连接；
-- NTP / UDP；
-- 浏览器 HTTPS；
-- QUIC / HTTP3（在环境能够稳定触发时）；
-- 常见桌面软件；
-- 一个明确走代理的大流量场景；
-- 一个明确 DIRECT 的大流量场景；
-- 长连接；
-- 节点 / 策略切换；
-- Mihomo 重载或重启；
-- External Controller 断开和恢复。
-
-### Acceptance
-
-Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须回答的问题”，并明确区分：
-
-- **Documented**：官方文档明确说明；
-- **Observed**：当前真实环境已经复现；
-- **Inferred**：合理推断但尚未直接验证。
-
-对关键字段形成覆盖率和缺失原因表，不得只写“基本可用”。
-
-### Out of scope
-
-- 生产级 Collector；
-- 正式数据库 schema；
-- 桌面 UI；
-- 为了完成调研提前初始化完整应用技术栈。
+- 真实场景验证 DIRECT / PROXY / REJECT、TCP / UDP / QUIC、长短连接；
+- 明确 Documented / Observed / Inferred 证据等级；
+- 形成 `docs/research/mihomo-data-source.md` 与相关验证资产；
+- Mihomo First 成为后续 Collector 的事实基础。
 
 ---
 
-## Phase 1 — Collector Prototype [COMPLETED - Core Collector Complete]
+## Phase 1 — Collector Prototype [COMPLETED]
 
-### Goal
+目标：构建轻量、只读、低开销 Collector 原型与确定性连接状态机。
 
-构建轻量、只读、低开销的独立采集器原型，建立确定性状态机、Fail-Stop 错误处理与事件流标准契约。全栈端到端写入性能与长期 Soak 基准测试在 Phase 2 持久化阶段统一执行。
+已完成核心成果：
 
-### Deliverables
-
-1. 可连接指定 Mihomo External Controller 的最小 Collector；
-2. 内存 Active Connection 状态表；
-3. 基于真实语义的 upload / download 增量计算；
-4. 连接出现、更新、消失的生命周期处理；
-5. Controller 断线 / 重连处理；
-6. 对 Mihomo 重启、Collector 自身重启、未知状态转换的显式日志；
-7. 第一轮性能和资源 benchmark。
-
-### Acceptance
-
-- 常见 TCP / UDP / QUIC 场景下不会明显漏记或 double count；
-- 大量短连接下运行稳定，无明显持续内存增长；
-- Mihomo / Controller 中断后 Collector 不崩溃，并能自动恢复观察；
-- 对无法安全续算的区间明确标记，而不是猜测补齐；
-- 形成真实 benchmark，之后才决定合理的 RAM、CPU、重连延迟和采样 / 缓冲目标。
-
-### Out of scope
-
-- 完整持久化历史；
-- 图形 UI；
-- 复杂聚合统计。
+- Mihomo External Controller 采集；
+- Active Connection 状态与流量 delta；
+- 出现 / 更新 / 消失生命周期；
+- Controller 断线 / 重连；
+- 重启与不可安全续算区间的显式表达；
+- 第一轮真实性能与稳定性验证。
 
 ---
 
 ## Phase 2 — Local Storage, Accounting & Runtime Validation [COMPLETED]
 
-### Goal
-
-把已经验证可靠的连接状态转换为长期可查询的本地历史，并建立不可变事件日志、版本化核算、监控缺口与运行时运维体系。
-
 ### Phase 2A — Storage Foundation & Event Journal [COMPLETED]
-- [x] 选定 SQLite + WAL 驱动（纯 Go `modernc.org/sqlite`，ADR 0002）；
-- [x] 实现不可变权威事件日志 `event_journal` 与单调游标 `storage_cursors`；
-- [x] 实现 `connections`、`connection_traffic`、`monitoring_gaps`（支持流中断与进程级离线 Gap）、`residual_intervals` 与 `collector_health` 实时投影；
-- [x] 实现 `RebuildProjections` 支持从 Journal 100% 完整重建；
-- [x] 实现轻量 `QueryService` 并提供 `collector storage inspect / gaps / rebuild` CLI 命令；
-- [x] 端到端实测验证通过（NTP、短请求、持续下载持久化与离线 Gap 推导 100% PASS）。
 
-### Phase 2B1 — Accounting, Lifecycle Semantics & Hourly Aggregations [COMPLETED]
-- [x] 规范连接观察生命周期字段（`observation_ended_at` / `reason` / `event_id`），支持 Disappeared、Epoch Break、Clean Stop 与 Interrupted 恢复；
-- [x] 实现版本化核算架构（`accounting_runs`、`relay_relations`、`accounted_traffic`，ADR 0003）；
-- [x] 实现保守中继对账算法（Conservative Relay Reconciliation v1，歧义不扣流量）；
-- [x] 实现单层物化分时聚合（`usage_hourly_dimensions`，9 大核心维度，整数纳秒向下取整 + 确定性余数补偿，整数字节绝对守恒）；
-- [x] 实现监控覆盖率区间并集模型（`CoverageSummary`，Interval Union，Known Scope 隔离）；
-- [x] 交付面向 UI 的稳定 `AnalyticsService` 与 `collector accounting rebuild`、`collector analytics` 系列 CLI 命令。
+- [x] SQLite + WAL；
+- [x] `event_journal` 与 `collector_sessions` 双事实权威；
+- [x] `connections` / `connection_traffic` / `monitoring_gaps` 等投影；
+- [x] `RebuildProjections`；
+- [x] Storage inspect / gaps / rebuild CLI；
+- [x] 真实 NTP、短请求、持续下载、离线 Gap 验证。
 
-### Phase 2B2 — Lifecycle Ops, Full-Stack Benchmarks & PRODUCT Acceptance [COMPLETED]
-- [x] 引入全局单调序列边界 `journal_sequence` 与非阻塞短事务分批核算重构（ADR 0004）；
-- [x] 实现显式 Freshness / Staleness API（`GetAccountingFreshness`）；
-- [x] 实现 Collector 心跳机制与动态 `collector_heartbeat_stale` 存活缺口判定；
-- [x] 实现安全派生层保留策略（Safe Derived Retention，100% 保护 Raw Authority 零删除）；
-- [x] SQLite WAL 运维与 Integrity Check CLI（`collector storage integrity`）；
-- [x] 全栈 1000/500/250ms Cadence 矩阵、高并发 Rebuild 与 30s Soak 稳定性实测；
-- [x] PRODUCT.md A–E 全场景逐项机械断言 100% PASS。
+### Phase 2B1 — Accounting, Lifecycle & Aggregations [COMPLETED]
 
-### Acceptance
+- [x] 连接观察生命周期语义；
+- [x] `accounting_runs` / `relay_relations` / `accounted_traffic`；
+- [x] Conservative Relay Reconciliation v1；
+- [x] `usage_hourly_dimensions` 物化聚合；
+- [x] Coverage interval union / Known Scope；
+- [x] AnalyticsService 与 accounting/analytics CLI。
 
-必须通过 `PRODUCT.md` 中的核心场景：
+### Phase 2B2 — Runtime Ops & Validation [COMPLETED]
 
-- **后台 NTP / UDP**：连接结束后仍能完整回查；
-- **代理大文件**：能解释进程、目标、规则、代理链和流量，不出现无原因的大块 Unknown；
-- **DIRECT 大流量**：不会错误计入 Proxy Traffic；
-- **Collector / Controller 中断**：形成明确 Gap；
-- **节点切换**：历史保留发生当时的代理路径；
-- **应用 / Mihomo 重启**：不会把重启造成的数据缺口伪装成正常连续统计。
-
-### Out of scope
-
-- 完整用户界面；
-- 自动规则建议。
+- [x] `journal_sequence` 核算边界；
+- [x] Freshness / Staleness；
+- [x] Collector heartbeat 与 runtime liveness gap；
+- [x] Safe Derived Retention；
+- [x] WAL / integrity 运维；
+- [x] 多 cadence、rebuild、soak 与 PRODUCT A–E 验收。
 
 ---
 
-## Phase 3 — Audit UI
+## Phase 3 — Audit UI [IN PROGRESS]
 
 ### Phase 3A — UI Platform Foundation & Local Query API [COMPLETED]
-- [x] 确立桌面平台技术路线：Tauri v2 + React 19 + TypeScript + Vite；
-- [x] Go Local Query API (`proxylens-query-api`) 建立：只读 Loopback 随机端口绑定、单次会话高熵 Bearer Token 鉴权与严格 CORS；
-- [x] SQLite 只读访问路径（`OpenReadOnlyDB` + `query_only=ON`，绝不执行迁移与写操作）；
-- [x] 端到端 API 契约文档（`docs/ui-api-contract-v1.md`）与 18 项单测 / 冒烟集成测试；
-- [x] Tauri Go Query API Sidecar 生命周期管理（启动就绪握手、窗口销毁停止、与常驻 Collector 零耦合）；
-- [x] React 类型化客户端封装与 `Phase 3 Platform Diagnostics` 临时开发者诊断面板；
-- [x] Windows 原生桌面可执行程序构建验证通过。
 
-### Phase 3B — Audit UI Visual System & Primary Dashboard [NEXT]
-- [ ] 确立正式设计系统与视觉语言（色彩、排版、卡片密度、响应式布局）；
-- [ ] 实现主审计看板（Overview Dashboard）：流量汇总、代理节点排行、规则命中排行、进程排行；
-- [ ] 时间范围选择器与实时 Freshness 刷新指示；
-- [ ] 移除临时 Diagnostics 面板，替换为正式产品界面。
+- [x] Tauri v2 + React 19 + TypeScript + Vite；
+- [x] Go Local Query API，只读 loopback + Bearer Token + CORS；
+- [x] SQLite read-only / `query_only=ON`；
+- [x] `docs/ui-api-contract-v1.md` 与 API 测试；
+- [x] Tauri Sidecar 生命周期；
+- [x] React 类型化 Query API client；
+- [x] Windows 原生桌面构建验证。
 
-### Phase 3C — History, Search & Connection Detail
-- [ ] 历史连接列表与多维组合搜索（进程、域名/IP、规则、代理链、端口）；
-- [ ] 单连接审计因果链下钻抽屉（因果元数据、归因证据、流量增量时序帧）；
-- [ ] DIRECT / PROXY / REJECT 独立分类视图。
+### Phase 3B — Visual System & Primary Audit UI [IMPLEMENTED — VISUAL ACCEPTANCE PENDING]
 
-### Phase 3D — Coverage, Gaps, Performance & Polish
-- [ ] 监控覆盖率和 Gap 时间轴可视化；
-- [ ] 大数据量虚拟滚动与交互响应优化；
-- [ ] 桌面应用打包、图标与启动性能最终打磨。
+- [x] Draft Design System v1：Light / Dark semantic tokens、Typography、Density、Interaction；
+- [x] 正式 App Shell 与 Overview / History / Coverage 导航；
+- [x] Overview：Traffic Summary、Evidence Trust、Top Processes / Rules / Hosts / Final Proxies；
+- [x] Time Range、Route Focus、Freshness / System Status；
+- [x] Temporary Diagnostics 退出默认产品入口；
+- [x] UI semantic Closure 与 32 个前端回归测试；
+- [ ] healthy / gaps / stale / empty / scaled 全 fixture 真实视觉验收；
+- [ ] 1280×800 / 1600×1000 + Light / Dark 完整视觉验收；
+- [ ] 根据验收结果决定是否 Freeze Design System v1；
+- [ ] 决定字体是否升级为确定性产品资产。
+
+### Phase 3C — History, Search & Connection Detail [PARTIALLY IMPLEMENTED]
+
+已实现：
+
+- [x] 历史连接列表，newest-first；
+- [x] Time / Route / Process / Host / Destination IP / Network 等当前 Query API 支持的筛选；
+- [x] 冻结 History snapshot；
+- [x] 显式 offset pagination，不伪造 total count；
+- [x] Connection Inspector；
+- [x] Causal Path；
+- [x] Traffic Accounting、Evidence Quality、Lifecycle；
+- [x] Accounting Event Timeline；
+- [x] Raw Traffic Frames advanced disclosure；
+- [x] 行级键盘选择与可恢复 render error boundary。
+
+仍待后续、且不得在无后端契约时伪造：
+
+- [ ] 评估真正需要的额外搜索维度（如 Rule / Final Proxy / Port），必要时单独设计 read-only API extension；
+- [ ] 大规模 History 的虚拟化/滚动策略，仅在真实数据量证明需要时实施；
+- [ ] 更完整的键盘导航与可访问性 integration test。
+
+### Phase 3D — Coverage, Gaps, Performance & Polish [PARTIALLY IMPLEMENTED]
+
+已实现：
+
+- [x] Coverage summary；
+- [x] Covered / Controller Gap / Collector Offline / Outside Monitored History timeline；
+- [x] merged gap provenance（含 mixed）；
+- [x] Gap list；
+- [x] Inspect Around Gap → History；
+- [x] Collector heartbeat stale semantics 与 Coverage 后端一致。
+
+仍待后续：
+
+- [ ] Coverage / History 在 scaled fixture 下的真实交互性能验收；
+- [ ] 必要时针对大数据量做虚拟化或渲染优化；
+- [ ] 桌面应用打包、图标、安装版长期数据路径与启动性能最终打磨；
+- [ ] 最终视觉 polish 与 Design System freeze。
 
 ---
 
-## Phase 4 — Audit Intelligence
+## Phase 4 — Audit Intelligence [PLANNED]
 
-### Goal
+目标：在可靠历史之上，用透明、可解释的规则筛选“值得检查的代理流量”，辅助用户优化分流。
 
-在可靠历史之上，用透明、可解释的规则筛选“值得检查的代理流量”，辅助用户优化分流。
-
-### Initial checks
-
-优先考虑：
+初始候选：
 
 - 首次走代理的后台进程；
 - Windows / 安全软件后台服务走代理；
@@ -212,31 +171,18 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 - 单连接或单进程异常增长；
 - 过去长期 DIRECT、近期变成 PROXY 的目标。
 
-### Deliverables
+约束：
 
-1. 待检查流量列表；
-2. 每个检查项的触发理由；
-3. 相关历史连接快速下钻；
-4. 必要时生成**可复制但不自动应用**的 Mihomo 规则建议。
-
-### Acceptance
-
-- 能从真实历史中高亮类似“后台 NTP 被宽泛 UDP 规则送入代理”的场景；
-- 所有判断均能解释“为什么被标记”；
-- 规则建议必须由用户决定是否应用；
-- 不引入不可解释的黑盒评分作为核心依据。
-
-### Out of scope
-
-- 未经用户确认直接修改配置；
-- 自动切换节点；
-- 防火墙或阻断功能。
+- 所有判断必须解释“为什么被标记”；
+- 不引入不可解释的黑盒 Trust Score；
+- 规则建议可复制但不自动应用；
+- 不修改 Mihomo 配置、节点或系统网络状态。
 
 ---
 
-## Later — Long-term Enhancements
+## Later — Long-term Enhancements [PLANNED]
 
-核心审计链稳定后再评估：
+核心审计链稳定并完成 Phase 3 验收后再评估：
 
 - 机场套餐周期与用户自定义重置日；
 - 节点倍率和机场计费估算；
@@ -244,4 +190,4 @@ Phase 0 完成时必须能够回答 `docs/ARCHITECTURE.md` 的“Phase 0 必须�
 - CSV / JSON 导出；
 - 多 Mihomo GUI 兼容验证；
 - Linux / macOS；
-- 如果 Mihomo 数据源经长期实测确实存在无法接受的盲区，再评估第二观测数据源。
+- 若长期实测证明 Mihomo 数据源存在不可接受盲区，再评估第二观测数据源。
