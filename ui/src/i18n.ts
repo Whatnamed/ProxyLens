@@ -763,6 +763,10 @@ export function translate(locale: Locale, key: string, vars: TranslationVars = {
   return typeof entry === 'function' ? entry(vars) : interpolate(entry, vars);
 }
 
+export function localeMessageKeys(locale: Locale): string[] {
+  return Object.keys(messages[locale]);
+}
+
 export function localeTag(locale: Locale): string {
   return locale === 'zh-CN' ? 'zh-CN' : 'en-GB';
 }

@@ -1,6 +1,32 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { localeTag, translate } from './i18n.js';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { localeMessageKeys, localeTag, translate } from './i18n.js';
+
+const sourceRoot = dirname(fileURLToPath(import.meta.url));
+
+function collectSourceFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return collectSourceFiles(path);
+    return /\.(?:ts|tsx)$/.test(entry.name) && !/\.test\.(?:ts|tsx)$/.test(entry.name) ? [path] : [];
+  });
+}
+
+function collectStaticTranslationKeys(): Set<string> {
+  const keys = new Set<string>();
+  for (const path of collectSourceFiles(sourceRoot)) {
+    const source = readFileSync(path, 'utf8');
+    for (const match of source.matchAll(/\bt\(\s*['"]([^'"]+)['"]/g)) keys.add(match[1]);
+    for (const match of source.matchAll(/\btranslate\(\s*['"][^'"]+['"]\s*,\s*['"]([^'"]+)['"]/g)) keys.add(match[1]);
+    for (const match of source.matchAll(/\b(?:titleKey|labelKey)\s*(?:=|:)\s*([^;\n]+)/g)) {
+      for (const key of match[1].matchAll(/['"]([A-Za-z][\w-]*(?:\.[A-Za-z0-9_-]+)+)['"]/g)) keys.add(key[1]);
+    }
+  }
+  return keys;
+}
 
 describe('UI locale', () => {
   it('translates interface copy without changing canonical values', () => {
@@ -20,5 +46,15 @@ describe('UI locale', () => {
   it('uses explicit locale tags for UI formatting', () => {
     assert.equal(localeTag('en'), 'en-GB');
     assert.equal(localeTag('zh-CN'), 'zh-CN');
+  });
+
+  it('keeps English and Chinese dictionaries in parity', () => {
+    assert.deepEqual(localeMessageKeys('zh-CN').sort(), localeMessageKeys('en').sort());
+  });
+
+  it('keeps static UI translation keys backed by the English dictionary', () => {
+    const knownKeys = new Set(localeMessageKeys('en'));
+    const missingKeys = [...collectStaticTranslationKeys()].filter((key) => !knownKeys.has(key)).sort();
+    assert.deepEqual(missingKeys, []);
   });
 });

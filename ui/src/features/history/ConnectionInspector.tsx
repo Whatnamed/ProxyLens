@@ -95,7 +95,7 @@ const CausalPath: React.FC<{ c: ConnectionRecord; topGroup?: string }> = ({ c, t
   }
   steps.push({
     key: t('inspector.egress'),
-    value: <span className="pl-mono">{finalEgress ?? (c.route === 'DIRECT' ? 'DIRECT' : '(unknown)')}</span>,
+    value: <span className="pl-mono">{finalEgress ?? (c.route === 'DIRECT' ? 'DIRECT' : `(${t('common.unknown').toLowerCase()})`)}</span>,
     accent: (c.route || '').toUpperCase() === 'PROXY',
   });
 
