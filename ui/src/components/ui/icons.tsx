@@ -93,3 +93,34 @@ export const IconArrowRight: React.FC<IconProps> = ({ size = 12 }) => (
     <path d="M13 6l6 6-6 6" />
   </svg>
 );
+
+export const IconChevronDown: React.FC<IconProps> = ({ size = 12 }) => (
+  <svg {...base(size)}>
+    <path d="M6 9l6 6 6-6" />
+  </svg>
+);
+
+export const IconChevronLeft: React.FC<IconProps> = ({ size = 14 }) => (
+  <svg {...base(size)}>
+    <path d="M14.5 5.5L8 12l6.5 6.5" />
+  </svg>
+);
+
+export const IconChevronRight: React.FC<IconProps> = ({ size = 14 }) => (
+  <svg {...base(size)}>
+    <path d="M9.5 5.5L16 12l-6.5 6.5" />
+  </svg>
+);
+
+export const IconCheck: React.FC<IconProps> = ({ size = 13 }) => (
+  <svg {...base(size)}>
+    <path d="M5 12.5l4 4L19 7" />
+  </svg>
+);
+
+export const IconCalendar: React.FC<IconProps> = ({ size = 13 }) => (
+  <svg {...base(size)}>
+    <rect x="4" y="5.5" width="16" height="14" rx="1.5" />
+    <path d="M8 3.5v4M16 3.5v4M4 10h16" />
+  </svg>
+);

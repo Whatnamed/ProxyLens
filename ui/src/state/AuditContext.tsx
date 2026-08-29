@@ -7,6 +7,7 @@ import React, {
   useState,
 } from 'react';
 import { getQuickWindow, QuickWindowType } from '../utils/time';
+import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, Locale, translate, TranslationVars } from '../i18n';
 
 export type ViewName = 'overview' | 'history' | 'coverage';
 export type RouteFocus = 'ALL' | 'PROXY' | 'DIRECT' | 'REJECT';
@@ -98,6 +99,10 @@ interface AuditContextValue {
 
   theme: ThemeName;
   toggleTheme: () => void;
+
+  locale: Locale;
+  setLocale: (locale: Locale) => void;
+  toggleLocale: () => void;
 }
 
 const AuditContext = createContext<AuditContextValue | null>(null);
@@ -124,6 +129,13 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     return 'light';
   });
+  const [locale, setLocale] = useState<Locale>(() => {
+    try {
+      const saved = localStorage.getItem(LOCALE_STORAGE_KEY);
+      if (saved === 'en' || saved === 'zh-CN') return saved;
+    } catch {}
+    return DEFAULT_LOCALE;
+  });
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -131,6 +143,13 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       localStorage.setItem('pl-theme', theme);
     } catch {}
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    try {
+      localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+    } catch {}
+  }, [locale]);
 
   const resolvedRange = useMemo(() => resolveTimeRange(timeRange), [timeRange]);
 
@@ -254,6 +273,10 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setTheme((t) => (t === 'light' ? 'dark' : 'light'));
   }, []);
 
+  const toggleLocale = useCallback(() => {
+    setLocale((current) => (current === 'en' ? 'zh-CN' : 'en'));
+  }, []);
+
   const value: AuditContextValue = {
     view,
     setView,
@@ -280,6 +303,9 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     inspectAroundGap,
     theme,
     toggleTheme,
+    locale,
+    setLocale,
+    toggleLocale,
   };
 
   return <AuditContext.Provider value={value}>{children}</AuditContext.Provider>;
@@ -289,4 +315,13 @@ export function useAuditContext(): AuditContextValue {
   const ctx = useContext(AuditContext);
   if (!ctx) throw new Error('useAuditContext must be used within AuditProvider');
   return ctx;
+}
+
+export function useLocale(): {
+  locale: Locale;
+  t: (key: string, vars?: TranslationVars) => string;
+} {
+  const { locale } = useAuditContext();
+  const t = useCallback((key: string, vars?: TranslationVars) => translate(locale, key, vars), [locale]);
+  return { locale, t };
 }

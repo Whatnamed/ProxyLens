@@ -32,6 +32,7 @@
   --pl-accent-hover: #536d74;
   --pl-accent-soft: #e5ecec;
   --pl-focus-ring: rgba(96, 123, 130, 0.35);
+  --pl-overlay-shadow: 0 10px 24px rgba(29, 32, 30, 0.14);
 
   /* Route semantics */
   --pl-route-proxy: #5f7d8c;
@@ -132,6 +133,7 @@
   --pl-accent-hover: #99b1b6;
   --pl-accent-soft: #202b2d;
   --pl-focus-ring: rgba(134, 160, 166, 0.4);
+  --pl-overlay-shadow: 0 12px 28px rgba(0, 0, 0, 0.34);
 
   --pl-route-proxy: #8fa8b5;
   --pl-route-proxy-soft: #1d282d;
