@@ -117,7 +117,7 @@
 - `npm.cmd test`：42 项通过；`npm.cmd run build`：通过；
 - 真实 Chromium CDP：EN 使用 `Public Sans Medium`，ZH 使用 `IBM Plex Sans SC Medium`，technical evidence 使用 `JetBrains Mono Regular`；
 - 1280×800 与 1600×1000 下 Overview / History / Coverage 的 EN/ZH、Light/Dark 共 24 张截图无页面级横向溢出；日期日历、network/page-size listbox 交互回归通过；
-- 构建产物字体总量约 7.8MB，未引入字体 npm 运行时依赖；完整 Tauri 多 fixture 视觉 Freeze 仍 PENDING。
+- 构建产物字体总量为 8,049,984 bytes（约 8.05MB / 7.68MiB），未引入字体 npm 运行时依赖；完整 Tauri 多 fixture 视觉 Freeze 仍 PENDING。
 
 ---
 

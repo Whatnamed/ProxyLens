@@ -55,7 +55,7 @@
 - TypeScript / frontend build：本轮本地 PASS；
 - UI regression coverage：42 tests（本地执行结果），包含 locale dictionary parity、静态 translation-key audit 与 calendar navigation utilities；
 - Locale dictionary parity：EN / 中文各 370 个 key，静态 UI translation keys 无缺失；
-- Typography asset build：6 个 WOFF2、约 7.8MB 字体产物；无 TTF/WOFF/italic 或额外字重；
+- Typography asset build：6 个 WOFF2、8,049,984 bytes（约 8.05MB / 7.68MiB，其中 IBM SC 约 7.80MB）；无 TTF/WOFF/italic 或额外字重；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 
