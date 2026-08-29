@@ -1,5 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { localeTag } from '../i18n';
+import { useLocale } from '../state/AuditContext';
 import { QueryApiClient } from '../api/client';
 import { ConnectionRecord } from '../api/types';
 import {
@@ -17,6 +19,8 @@ interface Props {
 }
 
 export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError }) => {
+  const { locale, t } = useLocale();
+  const formatNumber = (value: number) => value.toLocaleString(localeTag(locale));
   const diagRange = React.useMemo(
     () => ({ from: new Date(0).toISOString(), to: new Date().toISOString() }),
     []
@@ -84,48 +88,50 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
     <div className="diag-container">
       <div className="diag-header">
         <h2>
-          ProxyLens Platform Diagnostics
+          {t('diagnostics.platformTitle')}
           <span className={`diag-badge ${isTauri ? 'badge-ready' : 'badge-stale'}`}>
-            {isTauri ? 'Tauri Native Shell' : 'Browser / Dev Mode'}
+            {isTauri ? t('diagnostics.tauriShell') : t('diagnostics.browserMode')}
           </span>
         </h2>
         <p style={{ color: '#6b7280', fontSize: '13px', margin: 0 }}>
-          Phase 3A Temporary Developer Surface — Proves secure Go local query sidecar IPC, SQLite read-only query path, and typed API client contract.
+          {t('diagnostics.description')}
         </p>
       </div>
 
       {sessionError && (
         <div className="alert-banner alert-err">
-          <strong>Session Initialization Error:</strong> {sessionError}
+          <strong>{t('diagnostics.sessionError')}:</strong> {sessionError}
         </div>
       )}
 
       {/* Grid 1: Meta & Freshness */}
       <div className="diag-grid">
         <div className="diag-card">
-          <h3>1. API & System Meta</h3>
+          <h3>{t('diagnostics.metaTitle')}</h3>
           {metaQuery.isLoading ? (
-            <p>Loading metadata...</p>
+            <p>{t('diagnostics.loadingMetadata')}</p>
           ) : metaQuery.isError ? (
             <div className="alert-banner alert-err">
-              <strong>Error:</strong> {metaQuery.error.message}
+              <strong>{t('diagnostics.error')}:</strong> {metaQuery.error.message}
             </div>
           ) : (
             <div>
               <table className="diag-table">
                 <tbody>
-                  <tr><th>API Version</th><td>{metaQuery.data?.apiVersion}</td></tr>
-                  <tr><th>App Version</th><td>{metaQuery.data?.appVersion}</td></tr>
-                  <tr><th>DB State</th><td><strong>{metaQuery.data?.dbState}</strong></td></tr>
-                  <tr><th>Schema Version</th><td>{metaQuery.data?.schemaVersion} (Max: {metaQuery.data?.maxBinarySchemaVersion})</td></tr>
+                  <tr><th>{t('diagnostics.apiVersion')}</th><td>{metaQuery.data?.apiVersion}</td></tr>
+                  <tr><th>{t('diagnostics.appVersion')}</th><td>{metaQuery.data?.appVersion}</td></tr>
+                  <tr><th>{t('diagnostics.dbState')}</th><td><strong>{metaQuery.data?.dbState}</strong></td></tr>
+                  <tr><th>{t('diagnostics.schemaVersion')}</th><td>{metaQuery.data?.schemaVersion} ({t('diagnostics.maxVersion')}: {metaQuery.data?.maxBinarySchemaVersion})</td></tr>
                   <tr>
-                    <th>Freshness</th>
+                    <th>{t('diagnostics.freshness')}</th>
                     <td>
                       {metaQuery.data?.freshness ? (
                         <span className={`diag-badge ${metaQuery.data.freshness.isFresh ? 'badge-ready' : 'badge-stale'}`}>
-                          {metaQuery.data.freshness.isFresh ? 'FRESH (Lag: 0)' : `STALE (Lag: ${metaQuery.data.freshness.lagEvents})`}
+                          {metaQuery.data.freshness.isFresh
+                            ? t('diagnostics.fresh', { lag: 0 })
+                            : t('diagnostics.stale', { lag: metaQuery.data.freshness.lagEvents })}
                         </span>
-                      ) : 'N/A'}
+                      ) : t('common.notAvailable')}
                     </td>
                   </tr>
                 </tbody>
@@ -135,22 +141,22 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
         </div>
 
         <div className="diag-card">
-          <h3>2. Analytics Summary (Latest Reconciled Run)</h3>
+          <h3>{t('diagnostics.summaryTitle')}</h3>
           {summaryQuery.isLoading ? (
-            <p>Loading summary...</p>
+            <p>{t('diagnostics.loadingSummary')}</p>
           ) : summaryQuery.isError ? (
             <div className="alert-banner alert-err">
-              <strong>Error:</strong> {summaryQuery.error.message}
+              <strong>{t('diagnostics.error')}:</strong> {summaryQuery.error.message}
             </div>
           ) : (
             <div>
               <table className="diag-table">
                 <tbody>
-                  <tr><th>Proxy (Up / Down)</th><td>{(summaryQuery.data?.proxyUpload ?? 0).toLocaleString()} B / {(summaryQuery.data?.proxyDownload ?? 0).toLocaleString()} B</td></tr>
-                  <tr><th>Direct (Up / Down)</th><td>{(summaryQuery.data?.directUpload ?? 0).toLocaleString()} B / {(summaryQuery.data?.directDownload ?? 0).toLocaleString()} B</td></tr>
-                  <tr><th>Missing Attribution</th><td>{(summaryQuery.data?.missingAttributionDownload ?? 0).toLocaleString()} B</td></tr>
-                  <tr><th>Ambiguous Relay</th><td>{(summaryQuery.data?.ambiguousRelayDownload ?? 0).toLocaleString()} B</td></tr>
-                  <tr><th>Accounting Version</th><td><code>{summaryQuery.data?.accountingVersion}</code></td></tr>
+                  <tr><th>{t('diagnostics.proxyTraffic')}</th><td>{formatNumber(summaryQuery.data?.proxyUpload ?? 0)} B / {formatNumber(summaryQuery.data?.proxyDownload ?? 0)} B</td></tr>
+                  <tr><th>{t('diagnostics.directTraffic')}</th><td>{formatNumber(summaryQuery.data?.directUpload ?? 0)} B / {formatNumber(summaryQuery.data?.directDownload ?? 0)} B</td></tr>
+                  <tr><th>{t('diagnostics.missingAttribution')}</th><td>{formatNumber(summaryQuery.data?.missingAttributionDownload ?? 0)} B</td></tr>
+                  <tr><th>{t('diagnostics.ambiguousRelay')}</th><td>{formatNumber(summaryQuery.data?.ambiguousRelayDownload ?? 0)} B</td></tr>
+                  <tr><th>{t('diagnostics.accountingVersion')}</th><td><code>{summaryQuery.data?.accountingVersion}</code></td></tr>
                 </tbody>
               </table>
             </div>
@@ -161,21 +167,21 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
       {/* Grid 2: Top Processes & Coverage */}
       <div className="diag-grid">
         <div className="diag-card">
-          <h3>3. Top 5 Processes</h3>
+          <h3>{t('diagnostics.processTitle', { count: 5 })}</h3>
           {topProcQuery.isLoading ? (
-            <p>Loading top processes...</p>
+            <p>{t('diagnostics.loadingProcesses')}</p>
           ) : topProcQuery.isError ? (
             <div className="alert-banner alert-err">
-              <strong>Error:</strong> {topProcQuery.error.message}
+              <strong>{t('diagnostics.error')}:</strong> {topProcQuery.error.message}
             </div>
           ) : (
             <table className="diag-table">
               <thead>
                 <tr>
-                  <th>Process</th>
-                  <th>Route</th>
-                  <th>Total Bytes</th>
-                  <th>Conns</th>
+                  <th>{t('diagnostics.process')}</th>
+                  <th>{t('diagnostics.route')}</th>
+                  <th>{t('diagnostics.totalBytes')}</th>
+                  <th>{t('diagnostics.connections')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -183,12 +189,12 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
                   <tr key={idx}>
                     <td><code>{item.key || '(empty)'}</code></td>
                     <td>{item.route}</td>
-                    <td>{item.totalBytes.toLocaleString()} B</td>
+                    <td>{formatNumber(item.totalBytes)} B</td>
                     <td>{item.connectionCount}</td>
                   </tr>
                 ))}
                 {(!topProcQuery.data?.items || topProcQuery.data.items.length === 0) && (
-                  <tr><td colSpan={4} style={{ textAlign: 'center', color: '#9ca3af' }}>No processes recorded</td></tr>
+                  <tr><td colSpan={4} style={{ textAlign: 'center', color: '#9ca3af' }}>{t('diagnostics.noProcesses')}</td></tr>
                 )}
               </tbody>
             </table>
@@ -196,28 +202,28 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
         </div>
 
         <div className="diag-card">
-          <h3>4. Monitoring Coverage</h3>
+          <h3>{t('diagnostics.coverageTitle')}</h3>
           {coverageQuery.isLoading ? (
-            <p>Loading coverage...</p>
+            <p>{t('diagnostics.loadingCoverage')}</p>
           ) : coverageQuery.isError ? (
             <div className="alert-banner alert-err">
-              <strong>Error:</strong> {coverageQuery.error.message}
+              <strong>{t('diagnostics.error')}:</strong> {coverageQuery.error.message}
             </div>
           ) : (
             <div>
               <table className="diag-table">
                 <tbody>
                   <tr>
-                    <th>Coverage Ratio</th>
+                    <th>{t('diagnostics.coverageRatio')}</th>
                     <td>
                       {coverageQuery.data?.coverageRatio !== undefined ? (
                         <strong>{(coverageQuery.data.coverageRatio * 100).toFixed(1)}%</strong>
-                      ) : 'N/A'}
+                      ) : t('common.notAvailable')}
                     </td>
                   </tr>
-                  <tr><th>Covered Duration</th><td>{((coverageQuery.data?.coveredDurationMs ?? 0) / 1000).toFixed(1)} s</td></tr>
-                  <tr><th>Uncovered Duration</th><td>{((coverageQuery.data?.uncoveredDurationMs ?? 0) / 1000).toFixed(1)} s</td></tr>
-                  <tr><th>Merged Gaps</th><td>{coverageQuery.data?.mergedGaps?.length ?? 0} gap(s)</td></tr>
+                  <tr><th>{t('diagnostics.coveredDuration')}</th><td>{((coverageQuery.data?.coveredDurationMs ?? 0) / 1000).toFixed(1)} s</td></tr>
+                  <tr><th>{t('diagnostics.uncoveredDuration')}</th><td>{((coverageQuery.data?.uncoveredDurationMs ?? 0) / 1000).toFixed(1)} s</td></tr>
+                  <tr><th>{t('diagnostics.mergedGaps')}</th><td>{t('diagnostics.gapCount', { count: coverageQuery.data?.mergedGaps?.length ?? 0 })}</td></tr>
                 </tbody>
               </table>
             </div>
@@ -227,23 +233,23 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
 
       {/* Grid 3: Connections Sample */}
       <div className="diag-card">
-        <h3>5. Connection Sample (Limit: 5)</h3>
+        <h3>{t('diagnostics.connectionTitle', { count: 5 })}</h3>
         {connsQuery.isLoading ? (
-          <p>Loading connections...</p>
+          <p>{t('diagnostics.loadingConnections')}</p>
         ) : connsQuery.isError ? (
           <div className="alert-banner alert-err">
-            <strong>Error:</strong> {connsQuery.error.message}
+            <strong>{t('diagnostics.error')}:</strong> {connsQuery.error.message}
           </div>
         ) : (
           <table className="diag-table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Process</th>
-                <th>Host / Dest</th>
-                <th>Route</th>
-                <th>Rule</th>
-                <th>Proxy Chain</th>
+                <th>{t('diagnostics.id')}</th>
+                <th>{t('diagnostics.process')}</th>
+                <th>{t('diagnostics.hostDest')}</th>
+                <th>{t('diagnostics.route')}</th>
+                <th>{t('diagnostics.rule')}</th>
+                <th>{t('diagnostics.proxyChain')}</th>
               </tr>
             </thead>
             <tbody>
@@ -258,7 +264,7 @@ export const DiagnosticsView: React.FC<Props> = ({ client, isTauri, sessionError
                 </tr>
               ))}
               {(!connsQuery.data?.items || connsQuery.data.items.length === 0) && (
-                <tr><td colSpan={6} style={{ textAlign: 'center', color: '#9ca3af' }}>No connections in database</td></tr>
+                <tr><td colSpan={6} style={{ textAlign: 'center', color: '#9ca3af' }}>{t('diagnostics.noConnections')}</td></tr>
               )}
             </tbody>
           </table>

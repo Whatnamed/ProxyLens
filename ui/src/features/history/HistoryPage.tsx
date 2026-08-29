@@ -1,27 +1,21 @@
 import React, { useEffect, useMemo } from 'react';
 import { QueryApiClient } from '../../api/client';
 import { MetaResponse, ConnectionRecord } from '../../api/types';
-import { useAuditContext, HistoryFilters } from '../../state/AuditContext';
+import { useAuditContext, HistoryFilters, useLocale } from '../../state/AuditContext';
 import { useConnectionsQuery } from '../../api/queries';
 import { PageGate, isNoAccountingRunError, errorCodeOf } from '../common/PageGate';
-import { EmptyState, ErrorState, RouteBadge, SkeletonRows, EvidenceChip } from '../../components/ui/primitives';
+import { EmptyState, ErrorState, RouteBadge, SkeletonRows, EvidenceChip, SelectMenu } from '../../components/ui/primitives';
 import { RouteControl, TimeRangeControl, HistorySnapshotControl } from '../../components/audit/AuditContextBar';
 import { ConnectionInspector } from './ConnectionInspector';
 import { formatBytes } from '../../utils/format';
+import { formatLocalDateTime, formatLocalDateTimeCompact } from '../../utils/time';
 import { IconClose } from '../../components/ui/icons';
 
 const NETWORK_OPTIONS = [
-  { value: '', label: 'All networks' },
-  { value: 'tcp', label: 'TCP' },
-  { value: 'udp', label: 'UDP' },
+  { value: '' },
+  { value: 'tcp' },
+  { value: 'udp' },
 ];
-
-function formatRowTime(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
 
 interface RowEvidence {
   kind: 'estimated' | 'ambiguous' | 'missing' | 'neutral';
@@ -29,41 +23,41 @@ interface RowEvidence {
   title: string;
 }
 
-function rowEvidence(c: ConnectionRecord): RowEvidence | null {
+function rowEvidence(c: ConnectionRecord, t: (key: string, vars?: Record<string, string | number>) => string): RowEvidence | null {
   const missing: string[] = [];
-  if (!c.metadata?.process) missing.push('missing process');
-  if (!c.metadata?.host && !c.metadata?.sniffHost) missing.push('missing host (IP-only)');
-  if (!c.rule) missing.push('missing rule');
-  if (!c.chains || c.chains.length === 0) missing.push('missing chain');
+  if (!c.metadata?.process) missing.push(t('inspector.missingProcess'));
+  if (!c.metadata?.host && !c.metadata?.sniffHost) missing.push(t('inspector.missingHost'));
+  if (!c.rule) missing.push(t('inspector.missingRule'));
+  if (!c.chains || c.chains.length === 0) missing.push(t('inspector.missingChain'));
   const cls = c.latestAttributionClass ?? '';
   if (cls.includes('ambiguous') || cls.includes('unpaired') || cls.includes('relay_candidate')) {
     return {
       kind: 'ambiguous',
-      label: 'Ambiguous relay',
-      title: `Attribution class ${cls}: relay candidate without a confirmed pairing. Kept as its own evidence, never merged into an unknown bucket.`,
+      label: t('history.ambiguousRelay'),
+      title: t('history.ambiguousRelayTitle', { cls }),
     };
   }
   if (missing.length > 0) {
-    return { kind: 'missing', label: 'Evidence gap', title: `Explainable unknown: ${missing.join(', ')}` };
+    return { kind: 'missing', label: t('history.evidenceGap'), title: t('history.evidenceGapTitle', { details: missing.join(', ') }) };
   }
   if (c.preexistingAtStart) {
     return {
       kind: 'estimated',
-      label: 'Preexisting',
-      title: 'Connection existed before this collector session started; its pre-session baseline is excluded from in-session increments.',
+      label: t('history.preexisting'),
+      title: t('history.preexistingTitle'),
     };
   }
   if (c.possibleUnobservedTail) {
     return {
       kind: 'estimated',
-      label: 'Unobserved tail',
-      title: 'Connection disappeared from snapshots; final traffic after the last observation may be unrecorded.',
+      label: t('history.unobservedTail'),
+      title: t('history.unobservedTailTitle'),
     };
   }
   return null;
 }
 
-function destinationOf(c: ConnectionRecord): { primary: string; secondary: string } {
+function destinationOf(c: ConnectionRecord, t: (key: string) => string): { primary: string; secondary: string } {
   const host = c.metadata?.host || c.metadata?.sniffHost;
   const ip = c.metadata?.destinationIP;
   const port = c.metadata?.destinationPort;
@@ -71,27 +65,28 @@ function destinationOf(c: ConnectionRecord): { primary: string; secondary: strin
     return { primary: host, secondary: ip ? `${ip}${port ? `:${port}` : ''}` : '' };
   }
   if (ip) {
-    return { primary: `${ip}${port ? `:${port}` : ''}`, secondary: 'IP-only destination' };
+    return { primary: `${ip}${port ? `:${port}` : ''}`, secondary: t('history.ipOnly') };
   }
-  return { primary: '(unknown destination)', secondary: '' };
+  return { primary: t('history.unknownDestination'), secondary: '' };
 }
 
-function egressOf(c: ConnectionRecord): string {
+function egressOf(c: ConnectionRecord, t: (key: string) => string): string {
   const route = (c.route || '').toUpperCase();
   if (route === 'DIRECT') return 'DIRECT';
   if (route === 'REJECT') return 'REJECT';
-  return c.chains?.[0] ?? '(unknown)';
+  return c.chains?.[0] ?? `(${t('common.unknown').toLowerCase()})`;
 }
 
 const FilterChipRow: React.FC = () => {
+  const { t } = useLocale();
   const { filters, setFilter, clearFilters } = useAuditContext();
   const active = Object.entries(filters).filter(([, v]) => v) as [keyof HistoryFilters, string][];
   if (active.length === 0) return null;
   const labels: Record<keyof HistoryFilters, string> = {
-    process: 'Process',
-    host: 'Host',
-    destinationIp: 'Dest IP',
-    network: 'Network',
+    process: t('history.filterLabelProcess'),
+    host: t('history.filterLabelHost'),
+    destinationIp: t('history.filterLabelDestIp'),
+    network: t('history.filterLabelNetwork'),
   };
   return (
     <>
@@ -99,13 +94,13 @@ const FilterChipRow: React.FC = () => {
         <span className="pl-chip" key={key}>
           <span className="pl-chip__label">{labels[key]}:</span>
           <span className="pl-mono">{value}</span>
-          <button className="pl-chip__remove" aria-label={`Remove ${labels[key]} filter`} onClick={() => setFilter(key, '')}>
+          <button className="pl-chip__remove" aria-label={t('history.removeFilter', { label: labels[key] })} onClick={() => setFilter(key, '')}>
             <IconClose size={10} />
           </button>
         </span>
       ))}
       <button className="pl-btn pl-btn--quiet pl-btn--compact" onClick={clearFilters}>
-        Clear all
+        {t('common.clearAll')}
       </button>
     </>
   );
@@ -116,6 +111,7 @@ export const HistoryPage: React.FC<{
   sessionError: string | null;
   meta: MetaResponse | undefined;
 }> = ({ client, sessionError, meta }) => {
+  const { locale, t } = useLocale();
   const {
     routeFocus,
     filters,
@@ -161,12 +157,9 @@ export const HistoryPage: React.FC<{
     if (noRun) {
       return (
         <EmptyState
-          title="No recorded history yet"
+          title={t('history.noRecordedTitle')}
           body={
-            <>
-              No completed accounting run exists in this database. Once the Collector records
-              connections and accounting completes, history will appear here.
-            </>
+            <>{t('history.noRecordedBody')}</>
           }
         />
       );
@@ -177,7 +170,7 @@ export const HistoryPage: React.FC<{
     if (connectionsQ.isError && !noRun) {
       return (
         <ErrorState
-          title="History query failed"
+          title={t('history.queryFailed')}
           body={String((connectionsQ.error as Error)?.message ?? connectionsQ.error)}
           code={errCode}
         />
@@ -187,19 +180,19 @@ export const HistoryPage: React.FC<{
       const hasFilters = Object.values(filters).some(Boolean);
       return (
         <EmptyState
-          title={hasFilters ? 'No connections match the current filters' : 'No connections in this window'}
+          title={hasFilters ? t('history.noMatchesTitle') : t('history.noWindowTitle')}
           body={
             hasFilters ? (
-              <>Filters are preserved. Clear them to widen the query.</>
+              <>{t('history.filtersPreserved')}</>
             ) : (
-              <>No connections were observed in the frozen snapshot window for this route focus.</>
+              <>{t('history.noConnectionsWindow')}</>
             )
           }
         />
       );
     }
     return (
-      <table className="pl-table" aria-label="Historical connections">
+      <table className="pl-table" aria-label={t('history.tableAria')}>
         <colgroup>
           <col style={{ width: 128 }} />
           <col style={{ width: 140 }} />
@@ -213,22 +206,22 @@ export const HistoryPage: React.FC<{
         </colgroup>
         <thead>
           <tr>
-            <th>Time</th>
-            <th>Process</th>
-            <th>Destination</th>
-            <th>Net</th>
-            <th>Route</th>
-            <th>Rule</th>
-            <th>Egress</th>
-            <th className="pl-num">Traffic</th>
-            <th>Evidence</th>
+            <th>{t('history.time')}</th>
+            <th>{t('history.process')}</th>
+            <th>{t('history.destination')}</th>
+            <th>{t('history.net')}</th>
+            <th>{t('history.route')}</th>
+            <th>{t('history.rule')}</th>
+            <th>{t('history.egress')}</th>
+            <th className="pl-num">{t('history.traffic')}</th>
+            <th>{t('history.evidence')}</th>
           </tr>
         </thead>
         <tbody>
           {items.map((c) => {
             const key = `${c.sessionId}/${c.epochId}/${c.connectionId}`;
-            const dest = destinationOf(c);
-            const evidence = rowEvidence(c);
+            const dest = destinationOf(c, t);
+            const evidence = rowEvidence(c, t);
             const isSelected =
               selected?.sessionId === c.sessionId &&
               selected?.epochId === c.epochId &&
@@ -250,10 +243,10 @@ export const HistoryPage: React.FC<{
                 }}
               >
                 <td>
-                  <span className="pl-mono pl-small" title={`First observed ${c.firstObservedAt}`}>
-                    {formatRowTime(c.firstObservedAt)}
+                  <span className="pl-mono pl-small" title={t('history.firstObserved', { time: formatLocalDateTime(c.firstObservedAt, locale) })}>
+                    {formatLocalDateTimeCompact(c.firstObservedAt, locale)}
                   </span>
-                  {c.observationActive && <span className="pl-cell-sub">active</span>}
+                  {c.observationActive && <span className="pl-cell-sub">{t('history.active')}</span>}
                 </td>
                 <td>
                   <span className="pl-truncate" style={{ display: 'block' }} title={c.metadata?.processPath || c.metadata?.process}>
@@ -273,18 +266,18 @@ export const HistoryPage: React.FC<{
                   <RouteBadge route={c.route} />
                 </td>
                 <td>
-                  <span className="pl-truncate pl-mono pl-small" style={{ display: 'block' }} title={c.rule ? `${c.rule}${c.rulePayload ? ` · ${c.rulePayload}` : ''}` : 'No rule recorded'}>
+                  <span className="pl-truncate pl-mono pl-small" style={{ display: 'block' }} title={c.rule ? `${c.rule}${c.rulePayload ? ` · ${c.rulePayload}` : ''}` : t('history.noRuleRecorded')}>
                     {c.rule || <span className="pl-muted">—</span>}
                     {c.rulePayload ? <span className="pl-muted"> {c.rulePayload}</span> : null}
                   </span>
                 </td>
                 <td>
-                  <span className="pl-truncate pl-mono pl-small" style={{ display: 'block' }} title={egressOf(c)}>
-                    {egressOf(c)}
+                  <span className="pl-truncate pl-mono pl-small" style={{ display: 'block' }} title={egressOf(c, t)}>
+                    {egressOf(c, t)}
                   </span>
                 </td>
                 <td className="pl-cell-num">
-                  <span title={`Upload ${up} B · Download ${down} B (monitored totals)`}>{formatBytes(up + down)}</span>
+                  <span title={t('history.monitoredTotals', { upload: up, download: down })}>{formatBytes(up + down)}</span>
                   <span className="pl-cell-sub" style={{ textAlign: 'right' }}>
                     ↑{formatBytes(up)} ↓{formatBytes(down)}
                   </span>
@@ -296,15 +289,15 @@ export const HistoryPage: React.FC<{
         </tbody>
       </table>
     );
-  }, [items, selected, connectionsQ, noRun, filters, errCode, setSelected]);
+  }, [items, selected, connectionsQ, noRun, filters, errCode, setSelected, locale, t]);
 
   return (
     <PageGate client={client} sessionError={sessionError} meta={meta}>
       <div className="pl-page">
         <div className="pl-page__header">
-          <h1 className="pl-page__title">History</h1>
+          <h1 className="pl-page__title">{t('history.title')}</h1>
           <div className="pl-page__header-right">
-            <span className="pl-muted pl-small">Newest first · frozen snapshot</span>
+            <span className="pl-muted pl-small">{t('history.subtitle')}</span>
           </div>
         </div>
 
@@ -320,35 +313,35 @@ export const HistoryPage: React.FC<{
             <div className="pl-history-toolbar">
               <input
                 className="pl-input pl-history-toolbar__input"
-                placeholder="Filter process…"
-                aria-label="Filter by process name"
+                placeholder={t('history.filterProcessPlaceholder')}
+                aria-label={t('history.filterProcessAria')}
                 value={filters.process ?? ''}
                 onChange={(e) => setFilter('process', e.target.value)}
               />
               <input
                 className="pl-input pl-history-toolbar__input"
-                placeholder="Filter host…"
-                aria-label="Filter by host"
+                placeholder={t('history.filterHostPlaceholder')}
+                aria-label={t('history.filterHostAria')}
                 value={filters.host ?? ''}
                 onChange={(e) => setFilter('host', e.target.value)}
               />
               <input
                 className="pl-input pl-history-toolbar__input pl-history-toolbar__input--ip pl-input--mono"
-                placeholder="Dest IP…"
-                aria-label="Filter by destination IP"
+                placeholder={t('history.filterIpPlaceholder')}
+                aria-label={t('history.filterIpAria')}
                 value={filters.destinationIp ?? ''}
                 onChange={(e) => setFilter('destinationIp', e.target.value)}
               />
-              <select
-                className="pl-select"
-                aria-label="Filter by network"
+              <SelectMenu
+                className="pl-select-menu--network"
+                ariaLabel={t('history.filterNetworkAria')}
+                options={NETWORK_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.value === '' ? t('history.allNetworks') : option.value === 'tcp' ? t('history.networkTcp') : t('history.networkUdp'),
+                }))}
                 value={filters.network ?? ''}
-                onChange={(e) => setFilter('network', e.target.value)}
-              >
-                {NETWORK_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
+                onChange={(value) => setFilter('network', value)}
+              />
               <FilterChipRow />
             </div>
 
@@ -357,36 +350,34 @@ export const HistoryPage: React.FC<{
             <div className="pl-history__footer">
               {items.length > 0 && (
                 <span className="pl-mono pl-small">
-                  Showing {rangeStart + 1}–{rangeEnd}
+                  {t('common.showingRange', { from: rangeStart + 1, to: rangeEnd })}
                 </span>
               )}
               <div className="pl-history__footer-right">
-                <select
-                  className="pl-select"
-                  aria-label="Page size"
+                <SelectMenu
+                  className="pl-select-menu--page-size"
+                  placement="up"
+                  ariaLabel={t('history.pageSizeAria')}
+                  options={[50, 100, 200].map((size) => ({ value: size, label: t('history.pageSize', { size }) }))}
                   value={pageSize}
-                  onChange={(e) => setPageSize(Number(e.target.value))}
-                >
-                  {[50, 100, 200].map((s) => (
-                    <option key={s} value={s}>{s} / page</option>
-                  ))}
-                </select>
+                  onChange={setPageSize}
+                />
                 <div className="pl-pagination">
                   <button
                     className="pl-btn pl-btn--quiet pl-btn--compact"
                     disabled={page === 0}
                     onClick={() => setPage(Math.max(0, page - 1))}
                   >
-                    Previous
+                    {t('common.previous')}
                   </button>
-                  <span className="pl-pagination__page">Page {page + 1}</span>
+                  <span className="pl-pagination__page">{t('common.page', { page: page + 1 })}</span>
                   <button
                     className="pl-btn pl-btn--quiet pl-btn--compact"
                     disabled={!hasMore}
                     onClick={() => setPage(page + 1)}
-                    title={hasMore ? undefined : 'No more rows reported by the API (hasMore=false)'}
+                    title={hasMore ? undefined : t('common.noMoreRows')}
                   >
-                    Next
+                    {t('common.next')}
                   </button>
                 </div>
               </div>

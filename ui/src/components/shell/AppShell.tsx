@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { QueryApiClient } from '../../api/client';
-import { useAuditContext, ViewName } from '../../state/AuditContext';
+import { useAuditContext, useLocale, ViewName } from '../../state/AuditContext';
 import { useMetaQuery } from '../../api/queries';
 import { SystemStatusFooter } from '../audit/SystemStatus';
 import { OverviewPage } from '../../features/overview/OverviewPage';
@@ -9,10 +9,10 @@ import { CoveragePage } from '../../features/coverage/CoveragePage';
 import { DiagnosticsView } from '../../diagnostics/DiagnosticsView';
 import { IconCoverage, IconHistory, IconLens, IconMoon, IconOverview, IconSun } from '../ui/icons';
 
-const NAV_ITEMS: { view: ViewName; label: string; icon: React.ReactNode }[] = [
-  { view: 'overview', label: 'Overview', icon: <IconOverview /> },
-  { view: 'history', label: 'History', icon: <IconHistory /> },
-  { view: 'coverage', label: 'Coverage', icon: <IconCoverage /> },
+const NAV_ITEMS: { view: ViewName; labelKey: string; icon: React.ReactNode }[] = [
+  { view: 'overview', labelKey: 'nav.overview', icon: <IconOverview /> },
+  { view: 'history', labelKey: 'nav.history', icon: <IconHistory /> },
+  { view: 'coverage', labelKey: 'nav.coverage', icon: <IconCoverage /> },
 ];
 
 function useHashDiagnostics(): boolean {
@@ -30,7 +30,8 @@ export const AppShell: React.FC<{
   isTauri: boolean;
   sessionError: string | null;
 }> = ({ client, isTauri, sessionError }) => {
-  const { view, setView, theme, toggleTheme } = useAuditContext();
+  const { view, setView, theme, toggleTheme, locale, setLocale } = useAuditContext();
+  const { t } = useLocale();
   const metaQuery = useMetaQuery(client);
   const showDiagnostics = useHashDiagnostics();
 
@@ -38,8 +39,8 @@ export const AppShell: React.FC<{
     return (
       <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--pl-border-muted)', display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span className="pl-eyebrow">Development diagnostics</span>
-          <a href="#/" style={{ fontSize: 12 }}>Return to product UI</a>
+          <span className="pl-eyebrow">{t('diagnostics.title')}</span>
+          <a href="#/" style={{ fontSize: 12 }}>{t('diagnostics.return')}</a>
         </div>
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
           <DiagnosticsView client={client} isTauri={isTauri} sessionError={sessionError} />
@@ -54,9 +55,9 @@ export const AppShell: React.FC<{
         <div className="pl-sidebar__brand">
           <span className="pl-sidebar__mark"><IconLens /></span>
           <span className="pl-sidebar__name">ProxyLens</span>
-          <span className="pl-sidebar__version">v1 audit</span>
+          <span className="pl-sidebar__version">{t('brand.version')}</span>
         </div>
-        <nav className="pl-nav" aria-label="Primary">
+        <nav className="pl-nav" aria-label={t('nav.primary')}>
           {NAV_ITEMS.map((item) => (
             <button
               key={item.view}
@@ -65,16 +66,46 @@ export const AppShell: React.FC<{
               onClick={() => setView(item.view)}
             >
               {item.icon}
-              {item.label}
+              {t(item.labelKey)}
             </button>
           ))}
         </nav>
         <div className="pl-sidebar__footer">
           <SystemStatusFooter meta={metaQuery.data} />
-          <button className="pl-sidebar__theme-toggle" onClick={toggleTheme} title="Switch Light/Dark theme">
-            {theme === 'light' ? <IconMoon /> : <IconSun />}
-            {theme === 'light' ? 'Dark theme' : 'Light theme'}
-          </button>
+          <div className="pl-sidebar__utility">
+            <button
+              className="pl-sidebar__theme-toggle"
+              onClick={toggleTheme}
+              title={theme === 'light' ? t('theme.switchToDark') : t('theme.switchToLight')}
+              aria-label={theme === 'light' ? t('theme.switchToDark') : t('theme.switchToLight')}
+            >
+              {theme === 'light' ? <IconMoon /> : <IconSun />}
+              {theme === 'light' ? t('theme.dark') : t('theme.light')}
+            </button>
+            <div className="pl-sidebar__locale-row">
+              <span className="pl-sidebar__locale-label">{t('locale.label')}</span>
+              <div className="pl-locale-control" role="group" aria-label={t('locale.switch')}>
+                <button
+                  type="button"
+                  className={`pl-locale-control__item${locale === 'en' ? ' pl-locale-control__item--active' : ''}`}
+                  aria-pressed={locale === 'en'}
+                  title={t('locale.english')}
+                  onClick={() => setLocale('en')}
+                >
+                  {t('locale.shortEnglish')}
+                </button>
+                <button
+                  type="button"
+                  className={`pl-locale-control__item${locale === 'zh-CN' ? ' pl-locale-control__item--active' : ''}`}
+                  aria-pressed={locale === 'zh-CN'}
+                  title={t('locale.chinese')}
+                  onClick={() => setLocale('zh-CN')}
+                >
+                  {t('locale.shortChinese')}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </aside>
       <main className="pl-workspace">

@@ -1,24 +1,10 @@
 import React from 'react';
 import { QuickWindowType } from '../../utils/time';
-import { RouteFocus, useAuditContext } from '../../state/AuditContext';
-import { Segmented } from '../ui/primitives';
+import { RouteFocus, useAuditContext, useLocale } from '../../state/AuditContext';
+import { DateTimePicker, Segmented } from '../ui/primitives';
 import { IconRefresh, IconSnapshot } from '../ui/icons';
 import { formatLocalDateTime } from '../../utils/time';
-
-const WINDOW_OPTIONS: { value: QuickWindowType | 'custom'; label: string }[] = [
-  { value: 'today', label: 'Today' },
-  { value: 'yesterday', label: 'Yesterday' },
-  { value: '7d', label: '7d' },
-  { value: '30d', label: '30d' },
-  { value: 'custom', label: 'Custom' },
-];
-
-const ROUTE_OPTIONS: { value: RouteFocus; label: string; dotColor?: string; title: string }[] = [
-  { value: 'PROXY', label: 'Proxy', dotColor: 'var(--pl-route-proxy)', title: 'Focus on traffic routed through proxy nodes' },
-  { value: 'DIRECT', label: 'Direct', dotColor: 'var(--pl-route-direct)', title: 'Focus on direct (non-proxied) traffic' },
-  { value: 'REJECT', label: 'Reject', dotColor: 'var(--pl-route-reject)', title: 'Focus on rejected traffic' },
-  { value: 'ALL', label: 'All', title: 'All routing outcomes' },
-];
+import { parseLocalDateTimeInput } from '../../utils/localDateTime';
 
 function toLocalInputValue(iso?: string): string {
   if (!iso) return '';
@@ -29,11 +15,22 @@ function toLocalInputValue(iso?: string): string {
 }
 
 export const TimeRangeControl: React.FC = () => {
+  const { t } = useLocale();
   const { timeRange, setQuickWindow, setCustomRange, customEditorOpen, openCustomEditor } = useAuditContext();
   const [draftFrom, setDraftFrom] = React.useState('');
   const [draftTo, setDraftTo] = React.useState('');
+  const windowOptions = [
+    { value: 'today' as const, label: t('timeRange.today') },
+    { value: 'yesterday' as const, label: t('timeRange.yesterday') },
+    { value: '7d' as const, label: t('timeRange.sevenDays') },
+    { value: '30d' as const, label: t('timeRange.thirtyDays') },
+    { value: 'custom' as const, label: t('timeRange.custom') },
+  ];
 
   const editorVisible = customEditorOpen || timeRange.kind === 'custom';
+  const parsedFrom = parseLocalDateTimeInput(draftFrom);
+  const parsedTo = parseLocalDateTimeInput(draftTo);
+  const invalidRange = !!draftFrom && !!draftTo && (!parsedFrom || !parsedTo || parsedFrom.getTime() >= parsedTo.getTime());
 
   React.useEffect(() => {
     if (editorVisible) {
@@ -47,8 +44,8 @@ export const TimeRangeControl: React.FC = () => {
   return (
     <div className="pl-context-bar__group">
       <Segmented
-        ariaLabel="Time range"
-        options={WINDOW_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+        ariaLabel={t('timeRange.aria')}
+        options={windowOptions}
         value={editorVisible ? 'custom' : timeRange.kind}
         onChange={(v) => {
           if (v === 'custom') {
@@ -60,27 +57,26 @@ export const TimeRangeControl: React.FC = () => {
       />
       {editorVisible && (
         <>
-          <input
-            className="pl-input pl-input--mono"
-            type="datetime-local"
-            aria-label="Custom range start (local time)"
+          <DateTimePicker
             value={draftFrom}
-            onChange={(e) => setDraftFrom(e.target.value)}
+            onChange={setDraftFrom}
+            label={t('timeRange.start')}
+            defaultTime="00:00"
           />
-          <span className="pl-muted pl-small">to</span>
-          <input
-            className="pl-input pl-input--mono"
-            type="datetime-local"
-            aria-label="Custom range end (local time)"
+          <span className="pl-muted pl-small">{t('common.to')}</span>
+          <DateTimePicker
             value={draftTo}
-            onChange={(e) => setDraftTo(e.target.value)}
+            onChange={setDraftTo}
+            label={t('timeRange.end')}
+            defaultTime="23:59"
           />
+          {invalidRange && <span className="pl-date-range__error" role="alert">{t('timeRange.invalid')}</span>}
           <button
             className="pl-btn pl-btn--compact"
-            disabled={!draftFrom || !draftTo}
+            disabled={!draftFrom || !draftTo || invalidRange}
             onClick={() => setCustomRange(draftFrom, draftTo)}
           >
-            Apply
+            {t('common.apply')}
           </button>
         </>
       )}
@@ -89,11 +85,18 @@ export const TimeRangeControl: React.FC = () => {
 };
 
 export const RouteControl: React.FC = () => {
+  const { t } = useLocale();
   const { routeFocus, setRouteFocus } = useAuditContext();
+  const routeOptions: { value: RouteFocus; label: string; dotColor?: string; title: string }[] = [
+    { value: 'PROXY', label: t('route.proxy'), dotColor: 'var(--pl-route-proxy)', title: t('route.proxyTitle') },
+    { value: 'DIRECT', label: t('route.direct'), dotColor: 'var(--pl-route-direct)', title: t('route.directTitle') },
+    { value: 'REJECT', label: t('route.reject'), dotColor: 'var(--pl-route-reject)', title: t('route.rejectTitle') },
+    { value: 'ALL', label: t('route.all'), title: t('route.allTitle') },
+  ];
   return (
     <Segmented
-      ariaLabel="Route focus"
-      options={ROUTE_OPTIONS}
+      ariaLabel={t('route.aria')}
+      options={routeOptions}
       value={routeFocus}
       onChange={setRouteFocus}
     />
@@ -101,17 +104,18 @@ export const RouteControl: React.FC = () => {
 };
 
 export const HistorySnapshotControl: React.FC = () => {
+  const { locale, t } = useLocale();
   const { snapshot, refreshHistory } = useAuditContext();
   if (!snapshot) return null;
   return (
     <div className="pl-context-bar__right">
-      <span className="pl-snapshot-chip" title="History snapshot boundary — pagination is evaluated against this frozen [from, to) window. Refresh advances the boundary and returns to page 1.">
+      <span className="pl-snapshot-chip" title={t('snapshot.title')}>
         <IconSnapshot />
-        Snapshot to {formatLocalDateTime(snapshot.to)}
+        {t('snapshot.label', { time: formatLocalDateTime(snapshot.to, locale) })}
       </span>
-      <button className="pl-btn pl-btn--quiet pl-btn--compact" onClick={refreshHistory} title="Advance snapshot to now and return to page 1">
+      <button className="pl-btn pl-btn--quiet pl-btn--compact" onClick={refreshHistory} title={t('snapshot.refreshTitle')}>
         <IconRefresh />
-        Refresh
+        {t('common.refresh')}
       </button>
     </div>
   );

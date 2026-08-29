@@ -2,6 +2,7 @@ import React from 'react';
 import { MetaResponse } from '../../api/types';
 import { ApiClientError } from '../../api/client';
 import { ErrorState, SkeletonRows } from '../../components/ui/primitives';
+import { useLocale } from '../../state/AuditContext';
 
 /**
  * Shared gate for page content: distinguishes session/API unavailability,
@@ -14,20 +15,20 @@ export const PageGate: React.FC<{
   meta: MetaResponse | undefined;
   children: React.ReactNode;
 }> = ({ client, sessionError, meta, children }) => {
+  const { t } = useLocale();
+
   if (sessionError) {
     return (
       <div className="pl-gate">
         <div className="pl-gate__panel">
           <ErrorState
-            title="Local Query API unavailable"
+            title={t('gate.apiUnavailable')}
             body={
               <>
-                The desktop shell could not establish a session with the local read-only Query
-                API. Audit data cannot be displayed until the sidecar starts successfully.
+                {t('gate.apiUnavailableBody')}
                 <br />
                 <span className="pl-secondary">
-                  Common cause: no database configured. Set <code className="pl-state__code">PROXYLENS_DB_PATH</code> to
-                  an existing ProxyLens SQLite database and restart the app.
+                  {t('gate.commonCause')} <code className="pl-state__code">PROXYLENS_DB_PATH</code> {t('gate.restart')}
                 </span>
               </>
             }
@@ -52,16 +53,12 @@ export const PageGate: React.FC<{
       <div className="pl-gate">
         <div className="pl-gate__panel">
           <ErrorState
-            title={incompatible ? 'Database schema incompatible' : `Database ${meta.dbState.toLowerCase()}`}
+            title={incompatible ? t('gate.databaseIncompatible') : t('gate.databaseUnavailable', { state: meta.dbState.toLowerCase() })}
             body={
               incompatible ? (
-                <>
-                  This database uses schema v{meta.schemaVersion}, newer than the v
-                  {meta.maxBinarySchemaVersion} supported by this ProxyLens build. Data is shown
-                  read-only once versions align; no migration is performed here.
-                </>
+                <>{t('gate.incompatibleBody', { version: meta.schemaVersion, max: meta.maxBinarySchemaVersion })}</>
               ) : (
-                <>The database is not available for read-only queries right now.</>
+                <>{t('gate.unavailableBody')}</>
               )
             }
             code={`dbState=${meta.dbState} schema=v${meta.schemaVersion}`}

@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryApiClient } from '../../api/client';
 import { MetaResponse } from '../../api/types';
-import { useAuditContext } from '../../state/AuditContext';
+import { useAuditContext, useLocale } from '../../state/AuditContext';
 import {
   useCoverageQuery,
   useProtocolsQuery,
@@ -25,15 +25,15 @@ import { formatBytes } from '../../utils/format';
 import { IconArrowRight } from '../../components/ui/icons';
 import { TopRuleItem } from '../../api/types';
 
-function formatDuration(ms: number): string {
-  if (!ms || ms <= 0) return '0m';
+function formatDuration(ms: number, t: (key: string, vars?: Record<string, string | number>) => string): string {
+  if (!ms || ms <= 0) return t('common.durationMinutes', { value: 0 });
   const totalSec = Math.round(ms / 1000);
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  if (h > 0) return `${t('common.durationHours', { value: h })} ${t('common.durationMinutes', { value: m })}`;
+  if (m > 0) return `${t('common.durationMinutes', { value: m })} ${t('common.durationSeconds', { value: s })}`;
+  return t('common.durationSeconds', { value: s });
 }
 
 const TotalBlock: React.FC<{ label: string; route?: string; up: number; down: number }> = ({
@@ -41,18 +41,21 @@ const TotalBlock: React.FC<{ label: string; route?: string; up: number; down: nu
   route,
   up,
   down,
-}) => (
-  <div className="pl-total-block">
-    <div className="pl-total-block__label">
-      {route ? <RouteBadge route={route} /> : <span className="pl-eyebrow">{label}</span>}
+}) => {
+  const { t } = useLocale();
+  return (
+    <div className="pl-total-block">
+      <div className="pl-total-block__label">
+        {route ? <RouteBadge route={route} /> : <span className="pl-eyebrow">{label}</span>}
+      </div>
+      <div className="pl-total-block__value">{formatBytes(up + down)}</div>
+      <div className="pl-total-block__parts">
+        <span title={t('overview.uploadTitle')}>↑ {formatBytes(up)}</span>
+        <span title={t('overview.downloadTitle')}>↓ {formatBytes(down)}</span>
+      </div>
     </div>
-    <div className="pl-total-block__value">{formatBytes(up + down)}</div>
-    <div className="pl-total-block__parts">
-      <span title="Upload">↑ {formatBytes(up)}</span>
-      <span title="Download">↓ {formatBytes(down)}</span>
-    </div>
-  </div>
-);
+  );
+};
 
 interface RankBase {
   uploadBytes: number;
@@ -72,8 +75,9 @@ const RankingList = <T extends RankBase>({
   onDrill?: (item: T) => void;
   drillHint?: string;
 }) => {
+  const { t } = useLocale();
   if (items.length === 0) {
-    return <div className="pl-muted pl-small" style={{ padding: '4px 8px' }}>No recorded traffic in this scope.</div>;
+    return <div className="pl-muted pl-small" style={{ padding: '4px 8px' }}>{t('overview.noTraffic')}</div>;
   }
   const max = Math.max(...items.map((i) => i.totalBytes), 1);
   return (
@@ -102,11 +106,11 @@ const RankingList = <T extends RankBase>({
           >
             <span className="pl-rank__index">{idx + 1}</span>
             <span className="pl-rank__label">{renderLabel(item)}</span>
-            <span className="pl-rank__value" title={`Upload ${item.uploadBytes} B / Download ${item.downloadBytes} B (exact integers)`}>
+            <span className="pl-rank__value" title={t('overview.exactIntegerTitle', { upload: item.uploadBytes, download: item.downloadBytes })}>
               {formatBytes(item.totalBytes)}
             </span>
-            <span className="pl-rank__count" title="Connection count">
-              {item.connectionCount} cn
+            <span className="pl-rank__count" title={t('overview.connectionCountTitle')}>
+              {t('overview.connectionCount', { count: item.connectionCount })}
             </span>
             <span className="pl-rank__bar">
               <span className="pl-rank__bar-fill" style={{ width: `${pct}%` }} />
@@ -123,6 +127,7 @@ export const OverviewPage: React.FC<{
   sessionError: string | null;
   meta: MetaResponse | undefined;
 }> = ({ client, sessionError, meta }) => {
+  const { t } = useLocale();
   const { resolvedRange, routeFocus, drillToHistory } = useAuditContext();
   const { from, to } = resolvedRange;
 
@@ -143,16 +148,16 @@ export const OverviewPage: React.FC<{
     <PageGate client={client} sessionError={sessionError} meta={meta}>
       <div className="pl-page">
         <div className="pl-page__header">
-          <h1 className="pl-page__title">Overview</h1>
+          <h1 className="pl-page__title">{t('overview.title')}</h1>
           <div className="pl-page__header-right">
             {freshness && (
               <StatusIndicator
                 kind={freshness.isFresh ? 'fresh' : 'stale'}
-                label={freshness.isFresh ? 'Accounting fresh' : `As of last run · ${freshness.lagEvents} events behind`}
+                label={freshness.isFresh ? t('overview.accountingFresh') : t('overview.asOfLastRun', { count: freshness.lagEvents })}
                 title={
                   freshness.isFresh
-                    ? 'The latest completed accounting run covers all recorded journal events.'
-                    : `isFresh=false is not a failure: ${freshness.lagEvents} journal events are still awaiting the next accounting rebuild. Values are as of the last completed run.`
+                    ? t('overview.accountingFreshTitle')
+                    : t('overview.accountingStaleTitle', { count: freshness.lagEvents })
                 }
               />
             )}
@@ -169,36 +174,32 @@ export const OverviewPage: React.FC<{
           <div className="pl-overview">
             {noRun ? (
               <EmptyState
-                title="No completed accounting run"
+                title={t('history.noRecordedTitle')}
                 body={
-                  <>
-                    This database has no completed accounting run yet, so reconciled traffic
-                    summaries are not available. Once the Collector records events and accounting
-                    completes, this page will populate automatically.
-                  </>
+                  <>{t('overview.noCompletedRunBody')}</>
                 }
               />
             ) : summaryQ.isLoading ? (
               <SkeletonRows rows={8} />
             ) : summaryQ.isError && !noRun ? (
               <ErrorState
-                title="Summary query failed"
+                title={t('overview.summaryQueryFailed')}
                 body={String((summaryQ.error as Error)?.message ?? summaryQ.error)}
               />
             ) : summary ? (
               <>
                 <Section
-                  title="Traffic summary"
-                  sub={`Routing outcome totals for ${routeFocus === 'ALL' ? 'all routes' : `route focus: ${routeFocus}`} · reconciled accounted bytes`}
+                  title={t('overview.trafficSummary')}
+                  sub={t('overview.trafficSummarySub', { focus: routeFocus === 'ALL' ? t('overview.allRoutes') : t('overview.routeFocus', { route: routeFocus }) })}
                 >
                   <div className="pl-overview__totals">
-                    <TotalBlock label="Proxy" route="PROXY" up={summary.proxyUpload} down={summary.proxyDownload} />
-                    <TotalBlock label="Direct" route="DIRECT" up={summary.directUpload} down={summary.directDownload} />
-                    <TotalBlock label="Reject" route="REJECT" up={summary.rejectUpload} down={summary.rejectDownload} />
+                    <TotalBlock label={t('route.proxy')} route="PROXY" up={summary.proxyUpload} down={summary.proxyDownload} />
+                    <TotalBlock label={t('route.direct')} route="DIRECT" up={summary.directUpload} down={summary.directDownload} />
+                    <TotalBlock label={t('route.reject')} route="REJECT" up={summary.rejectUpload} down={summary.rejectDownload} />
                   </div>
                   {routeFocus !== 'ALL' && (
                     <div className="pl-evidence-fact" style={{ marginTop: 'var(--pl-space-4)', maxWidth: 420 }}>
-                      <span className="pl-evidence-fact__label">In-scope total ({routeFocus})</span>
+                      <span className="pl-evidence-fact__label">{t('overview.inScopeTotal', { route: routeFocus })}</span>
                       <span className="pl-evidence-fact__value">
                         {formatBytes(
                           (routeFocus === 'PROXY'
@@ -213,48 +214,48 @@ export const OverviewPage: React.FC<{
                 </Section>
 
                 <Section
-                  title="Evidence trust"
-                  sub="Explicit evidence-quality facts — no composite score"
+                  title={t('overview.evidenceTrust')}
+                  sub={t('overview.evidenceTrustSub')}
                 >
                   <div className="pl-evidence-facts">
                     <div className="pl-evidence-fact">
-                      <span className="pl-evidence-fact__label">Monitoring coverage</span>
+                      <span className="pl-evidence-fact__label">{t('overview.monitoringCoverage')}</span>
                       <span className="pl-evidence-fact__value">
                         {coverage?.coverageRatio !== undefined
                           ? `${(coverage.coverageRatio * 100).toFixed(1)}%`
-                          : 'n/a'}
+                          : t('common.notAvailable')}
                       </span>
                     </div>
                     <div className="pl-evidence-fact">
-                      <span className="pl-evidence-fact__label">Covered / uncovered</span>
+                      <span className="pl-evidence-fact__label">{t('overview.coveredUncovered')}</span>
                       <span className="pl-evidence-fact__value">
-                        {coverage ? `${formatDuration(coverage.coveredDurationMs)} / ${formatDuration(coverage.uncoveredDurationMs)}` : '-'}
+                        {coverage ? `${formatDuration(coverage.coveredDurationMs, t)} / ${formatDuration(coverage.uncoveredDurationMs, t)}` : '-'}
                       </span>
                     </div>
                     <div className="pl-evidence-fact">
-                      <span className="pl-evidence-fact__label">Missing attribution</span>
-                      <span className="pl-evidence-fact__value" title="Traffic observed without process attribution">
+                      <span className="pl-evidence-fact__label">{t('overview.missingAttribution')}</span>
+                      <span className="pl-evidence-fact__value" title={t('overview.trafficObservedWithoutProcess')}>
                         {formatBytes(summary.missingAttributionUpload + summary.missingAttributionDownload)}
                       </span>
                     </div>
                     <div className="pl-evidence-fact">
-                      <span className="pl-evidence-fact__label">Ambiguous relay</span>
-                      <span className="pl-evidence-fact__value" title="Relay candidates not confidently paired; kept, never silently dropped">
+                      <span className="pl-evidence-fact__label">{t('overview.ambiguousRelay')}</span>
+                      <span className="pl-evidence-fact__value" title={t('overview.relayCandidates')}>
                         {formatBytes(summary.ambiguousRelayUpload + summary.ambiguousRelayDownload)}
                       </span>
                     </div>
                     <div className="pl-evidence-fact">
-                      <span className="pl-evidence-fact__label">Sampling residual</span>
-                      <span className="pl-evidence-fact__value" title="Phase difference between global counters and per-connection sums">
+                      <span className="pl-evidence-fact__label">{t('overview.samplingResidual')}</span>
+                      <span className="pl-evidence-fact__value" title={t('overview.samplingPhase')}>
                         {formatBytes(summary.samplingResidualUpload + summary.samplingResidualDownload)}
                       </span>
                     </div>
                     <div className="pl-evidence-fact">
                       <span className="pl-evidence-fact__label">
-                        Gap physical traffic
-                        <span className="pl-evidence-chip pl-evidence-chip--estimated" style={{ marginLeft: 6 }}>estimated</span>
+                        {t('overview.gapPhysicalTraffic')}
+                        <span className="pl-evidence-chip pl-evidence-chip--estimated" style={{ marginLeft: 6 }}>{t('common.estimated')}</span>
                       </span>
-                      <span className="pl-evidence-fact__value" title="Interval-derived estimate from global counter deltas across controller gaps — not exact per-connection traffic">
+                      <span className="pl-evidence-fact__value" title={t('overview.gapPhysicalTrafficTitle')}>
                         {formatBytes(summary.controllerGapPhysicalUpload + summary.controllerGapPhysicalDownload)}
                       </span>
                     </div>
@@ -262,33 +263,33 @@ export const OverviewPage: React.FC<{
                 </Section>
 
                 <div className="pl-rankings-grid">
-                  <Section title="Top processes" sub="Ranked by exact + estimated bytes in scope">
+                  <Section title={t('overview.topProcesses')} sub={t('overview.topProcessesSub')}>
                     {processesQ.isLoading ? (
                       <SkeletonRows rows={5} />
                     ) : (
                       <RankingList
                         items={processesQ.data?.items ?? []}
-                        renderLabel={(i) => <>{i.key || <span className="pl-muted">(missing process)</span>}</>}
+                        renderLabel={(i) => <>{i.key || <span className="pl-muted">{t('overview.missingProcess')}</span>}</>}
                         onDrill={(i) => i.key && drillToHistory({ process: i.key })}
-                        drillHint="Open History filtered by this process"
+                        drillHint={t('overview.drillHintProcess')}
                       />
                     )}
                   </Section>
 
-                  <Section title="Top hosts" sub="Destination domains ranked by traffic">
+                  <Section title={t('overview.topHosts')} sub={t('overview.topHostsSub')}>
                     {hostsQ.isLoading ? (
                       <SkeletonRows rows={5} />
                     ) : (
                       <RankingList
                         items={hostsQ.data?.items ?? []}
-                        renderLabel={(i) => <>{i.key || <span className="pl-muted">(IP-only destination)</span>}</>}
+                        renderLabel={(i) => <>{i.key || <span className="pl-muted">{t('overview.ipOnlyDestination')}</span>}</>}
                         onDrill={(i) => i.key && drillToHistory({ host: i.key })}
-                        drillHint="Open History filtered by this host"
+                        drillHint={t('overview.drillHintHost')}
                       />
                     )}
                   </Section>
 
-                  <Section title="Top rules" sub="Rule + payload ranked by traffic">
+                  <Section title={t('overview.topRules')} sub={t('overview.topRulesSub')}>
                     {rulesQ.isLoading ? (
                       <SkeletonRows rows={5} />
                     ) : (
@@ -308,30 +309,30 @@ export const OverviewPage: React.FC<{
                     )}
                   </Section>
 
-                  <Section title="Top final proxies" sub="Physical egress nodes ranked by traffic">
+                  <Section title={t('overview.topFinalProxies')} sub={t('overview.topFinalProxiesSub')}>
                     {proxiesQ.isLoading ? (
                       <SkeletonRows rows={5} />
                     ) : (
                       <RankingList
                         items={proxiesQ.data?.items ?? []}
-                        renderLabel={(i) => <span className="pl-mono">{i.key || '(none)'}</span>}
+                        renderLabel={(i) => <span className="pl-mono">{i.key || t('overview.none')}</span>}
                       />
                     )}
                   </Section>
                 </div>
 
-                <Section title="Protocols & networks" sub="Secondary distribution">
+                <Section title={t('overview.protocols')} sub={t('overview.protocolsSub')}>
                   {protocolsQ.isLoading ? (
                     <SkeletonRows rows={2} />
                   ) : (protocolsQ.data?.items ?? []).length === 0 ? (
-                    <div className="pl-muted pl-small">No protocol breakdown available in this scope.</div>
+                    <div className="pl-muted pl-small">{t('overview.noProtocolBreakdown')}</div>
                   ) : (
                     <div style={{ display: 'flex', gap: 'var(--pl-space-6)', flexWrap: 'wrap' }}>
                       {(protocolsQ.data?.items ?? []).map((p, idx) => (
                         <div key={idx} style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--pl-space-2)' }}>
                           <span className="pl-net-token">{p.key}</span>
                           <span className="pl-rank__value">{formatBytes(p.totalBytes)}</span>
-                          <span className="pl-rank__count">{p.connectionCount} cn</span>
+                          <span className="pl-rank__count">{t('overview.connectionCount', { count: p.connectionCount })}</span>
                         </div>
                       ))}
                     </div>
@@ -340,8 +341,7 @@ export const OverviewPage: React.FC<{
 
                 <div className="pl-muted pl-small" style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8 }}>
                   <IconArrowRight />
-                  Top Processes and Top Hosts drill down into a filtered History; rule/egress drill-down is not
-                  supported by the current read-only API and is intentionally omitted.
+                  {t('overview.drillNote')}
                 </div>
               </>
             ) : null}
