@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "sidecar:build": "node scripts/build-sidecar.mjs",
     "tauri": "tauri",
     "tauri:dev": "node scripts/build-sidecar.mjs && tauri dev",
@@ -25,6 +26,7 @@
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",
+    "tsx": "^4.23.12",
     "typescript": "^5.7.3",
     "vite": "^6.1.0"
   }
