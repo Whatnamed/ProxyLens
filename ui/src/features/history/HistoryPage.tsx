@@ -240,7 +240,14 @@ export const HistoryPage: React.FC<{
                 key={key}
                 className={isSelected ? 'pl-row--selected' : ''}
                 aria-selected={isSelected}
+                tabIndex={0}
                 onClick={() => setSelected({ sessionId: c.sessionId, epochId: c.epochId, connectionId: c.connectionId })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setSelected({ sessionId: c.sessionId, epochId: c.epochId, connectionId: c.connectionId });
+                  }
+                }}
               >
                 <td>
                   <span className="pl-mono pl-small" title={`First observed ${c.firstObservedAt}`}>

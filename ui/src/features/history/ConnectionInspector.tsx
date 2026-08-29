@@ -15,6 +15,7 @@ import {
 import { IconClose } from '../../components/ui/icons';
 import { formatBytes } from '../../utils/format';
 import { formatLocalDateTime } from '../../utils/time';
+import { qualityFlagLabels } from '../../utils/qualityFlags';
 import { isNoAccountingRunError } from '../common/PageGate';
 
 function formatTs(iso: string): string {
@@ -270,7 +271,7 @@ export const ConnectionInspector: React.FC<{ client: QueryApiClient | null }> = 
                 {c.possibleUnobservedTail && (
                   <EvidenceChip kind="estimated" label="Possible unobserved tail" title="Final traffic after last observation may be unrecorded" />
                 )}
-                {(c.qualityFlags ?? []).map((f) => (
+                {qualityFlagLabels(c.qualityFlags).map((f) => (
                   <EvidenceChip key={f} kind="neutral" label={f} />
                 ))}
                 {!c.metadata?.process && <EvidenceChip kind="missing" label="Missing process" />}
@@ -344,7 +345,13 @@ export const ConnectionInspector: React.FC<{ client: QueryApiClient | null }> = 
               </details>
             </Section>
           </>
-        ) : null}
+        ) : (
+          <div className="pl-muted pl-small" style={{ padding: '12px 0' }}>
+            The Query API returned no connection payload for this identity
+            ({identity}). The connection may have been removed by a newer
+            accounting run. Close the inspector to return to the history list.
+          </div>
+        )}
       </div>
     </aside>
   );

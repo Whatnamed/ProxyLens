@@ -190,7 +190,8 @@ export interface ConnectionRecord {
   providerChains?: string[];
   route: string;
   latestAttributionClass?: string;
-  qualityFlags?: string[];
+  /** Wire shape varies by API build: string list or boolean flag map. Normalize via qualityFlagLabels(). */
+  qualityFlags?: string[] | Record<string, boolean>;
   relayEvidence?: Record<string, unknown>;
   baselineUploadCounter: number;
   baselineDownloadCounter: number;

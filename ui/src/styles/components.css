@@ -489,6 +489,11 @@
   background: var(--pl-surface-hover);
 }
 
+.pl-table tbody tr:focus-visible {
+  outline: 2px solid var(--pl-accent);
+  outline-offset: -2px;
+}
+
 .pl-table tbody tr.pl-row--selected td {
   background: var(--pl-surface-selected);
 }

@@ -4,6 +4,7 @@ import { getQueryApiSession, isTauriEnvironment } from './platform/tauri';
 import { QueryApiClient } from './api/client';
 import { AuditProvider } from './state/AuditContext';
 import { AppShell } from './components/shell/AppShell';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import './styles/tokens.css';
 import './styles/globals.css';
 import './styles/components.css';
@@ -51,7 +52,9 @@ export const App: React.FC = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <AuditProvider>
-        <AppShell client={apiClient} isTauri={isTauri} sessionError={sessionError} />
+        <ErrorBoundary>
+          <AppShell client={apiClient} isTauri={isTauri} sessionError={sessionError} />
+        </ErrorBoundary>
       </AuditProvider>
     </QueryClientProvider>
   );

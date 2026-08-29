@@ -6,11 +6,14 @@ export function isTauriEnvironment(): boolean {
 
 export async function getQueryApiSession(): Promise<QueryApiSession> {
   if (!isTauriEnvironment()) {
-    // 浏览器独立运行模式（用于 Vite 开发或脱机诊断调试）
+    // 浏览器独立运行模式（用于 Vite 开发或脱机诊断调试）。
+    // Query API 不响应 CORS 预检（它只服务 Tauri WebView），因此浏览器模式
+    // 默认走 Vite 同源 /api 代理；VITE_PROXYLENS_API_DIRECT=1 时直连端口。
     const devPort = import.meta.env.VITE_PROXYLENS_API_PORT || '49152';
     const devToken = import.meta.env.VITE_PROXYLENS_API_TOKEN || 'dev-local-session-token';
+    const direct = import.meta.env.VITE_PROXYLENS_API_DIRECT === '1';
     return {
-      baseUrl: `http://127.0.0.1:${devPort}`,
+      baseUrl: direct ? `http://127.0.0.1:${devPort}` : window.location.origin,
       token: devToken,
       apiVersion: 'v1'
     };
