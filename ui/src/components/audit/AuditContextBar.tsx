@@ -29,29 +29,36 @@ function toLocalInputValue(iso?: string): string {
 }
 
 export const TimeRangeControl: React.FC = () => {
-  const { timeRange, setQuickWindow, setCustomRange } = useAuditContext();
+  const { timeRange, setQuickWindow, setCustomRange, customEditorOpen, openCustomEditor } = useAuditContext();
   const [draftFrom, setDraftFrom] = React.useState('');
   const [draftTo, setDraftTo] = React.useState('');
+
+  const editorVisible = customEditorOpen || timeRange.kind === 'custom';
+
+  React.useEffect(() => {
+    if (editorVisible) {
+      setDraftFrom(toLocalInputValue(timeRange.customFrom));
+      setDraftTo(toLocalInputValue(timeRange.customTo));
+    }
+    // Seed drafts only when the editor opens, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorVisible]);
 
   return (
     <div className="pl-context-bar__group">
       <Segmented
         ariaLabel="Time range"
         options={WINDOW_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-        value={timeRange.kind}
+        value={editorVisible ? 'custom' : timeRange.kind}
         onChange={(v) => {
           if (v === 'custom') {
-            setDraftFrom(toLocalInputValue(timeRange.customFrom));
-            setDraftTo(toLocalInputValue(timeRange.customTo));
-            if (timeRange.kind !== 'custom') {
-              setCustomRange('', '');
-            }
+            openCustomEditor();
           } else {
             setQuickWindow(v as QuickWindowType);
           }
         }}
       />
-      {timeRange.kind === 'custom' && (
+      {editorVisible && (
         <>
           <input
             className="pl-input pl-input--mono"

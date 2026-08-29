@@ -71,6 +71,9 @@ interface AuditContextValue {
   resolvedRange: ResolvedRange;
   setQuickWindow: (k: QuickWindowType) => void;
   setCustomRange: (fromLocal: string, toLocal: string) => void;
+  /** Custom editor is open; the applied range only changes on Apply. */
+  customEditorOpen: boolean;
+  openCustomEditor: () => void;
 
   routeFocus: RouteFocus;
   setRouteFocus: (r: RouteFocus) => void;
@@ -104,7 +107,8 @@ const GAP_CONTEXT_MS = 15 * 60 * 1000;
 export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [view, setViewRaw] = useState<ViewName>('overview');
   const [timeRange, setTimeRange] = useState<TimeRangeState>({ kind: 'today' });
-  const [routeFocus, setRouteFocus] = useState<RouteFocus>('PROXY');
+  const [customEditorOpen, setCustomEditorOpen] = useState(false);
+  const [routeFocus, setRouteFocusRaw] = useState<RouteFocus>('PROXY');
   const [filters, setFilters] = useState<HistoryFilters>({});
   const [page, setPage] = useState(0);
   const [pageSize, setPageSizeRaw] = useState(50);
@@ -137,6 +141,20 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setSelected(null);
   }, []);
 
+  /**
+   * Single path for applied time-range changes. The History snapshot is
+   * re-frozen on every applied change so the displayed audit window and the
+   * queried [from, to) window can never diverge.
+   */
+  const applyTimeRange = useCallback(
+    (t: TimeRangeState) => {
+      setTimeRange(t);
+      setCustomEditorOpen(false);
+      freezeSnapshot(t);
+    },
+    [freezeSnapshot]
+  );
+
   const setView = useCallback(
     (v: ViewName) => {
       setViewRaw(v);
@@ -150,17 +168,36 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [timeRange, snapshot, freezeSnapshot]
   );
 
-  const setQuickWindow = useCallback((k: QuickWindowType) => {
-    setTimeRange({ kind: k });
-  }, []);
+  const setQuickWindow = useCallback(
+    (k: QuickWindowType) => {
+      applyTimeRange({ kind: k });
+    },
+    [applyTimeRange]
+  );
 
-  const setCustomRange = useCallback((fromLocal: string, toLocal: string) => {
-    setTimeRange({ kind: 'custom', customFrom: fromLocal, customTo: toLocal });
+  const setCustomRange = useCallback(
+    (fromLocal: string, toLocal: string) => {
+      if (!fromLocal || !toLocal) return;
+      applyTimeRange({ kind: 'custom', customFrom: fromLocal, customTo: toLocal });
+    },
+    [applyTimeRange]
+  );
+
+  const openCustomEditor = useCallback(() => {
+    // Opening the editor is a draft action only: the applied range (and the
+    // frozen History snapshot) stay unchanged until Apply is pressed.
+    setCustomEditorOpen(true);
   }, []);
 
   const refreshHistory = useCallback(() => {
     freezeSnapshot(timeRange);
   }, [timeRange, freezeSnapshot]);
+
+  const setRouteFocus = useCallback((r: RouteFocus) => {
+    setRouteFocusRaw(r);
+    setPage(0);
+    setSelected(null);
+  }, []);
 
   const setPageSize = useCallback((s: number) => {
     setPageSizeRaw(s);
@@ -206,20 +243,11 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const pad = (n: number) => String(n).padStart(2, '0');
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
       };
-      setTimeRange({ kind: 'custom', customFrom: toLocalInput(start), customTo: toLocalInput(end) });
       setFilters({});
-      setPage(0);
-      setSelected(null);
       setViewRaw('history');
-      const r = { from: start.toISOString(), to: end.toISOString() };
-      setSnapshot({
-        from: r.from,
-        to: r.to,
-        frozenAt: Date.now(),
-        sourceKey: `custom|${toLocalInput(start)}|${toLocalInput(end)}`,
-      });
+      applyTimeRange({ kind: 'custom', customFrom: toLocalInput(start), customTo: toLocalInput(end) });
     },
-    []
+    [applyTimeRange]
   );
 
   const toggleTheme = useCallback(() => {
@@ -233,6 +261,8 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     resolvedRange,
     setQuickWindow,
     setCustomRange,
+    customEditorOpen,
+    openCustomEditor,
     routeFocus,
     setRouteFocus,
     filters,
