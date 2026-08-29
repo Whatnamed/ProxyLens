@@ -7,6 +7,7 @@ import { PageGate } from '../common/PageGate';
 import { EmptyState, ErrorState, Section, SkeletonRows, StatusIndicator } from '../../components/ui/primitives';
 import { TimeRangeControl } from '../../components/audit/AuditContextBar';
 import { formatLocalDateTime } from '../../utils/time';
+import { classifyGapSources, GapProvenance } from '../../utils/coverage';
 import { IconArrowRight } from '../../components/ui/icons';
 
 function formatDuration(ms: number): string {
@@ -20,16 +21,10 @@ function formatDuration(ms: number): string {
   return `${s}s`;
 }
 
-const gapSourceLabel = (g: MergedGap): { label: string; kind: 'controller' | 'collector' } => {
-  const sources = g.sources ?? [g.source];
-  if (sources.includes('collector_session_boundary')) {
-    return { label: 'Collector offline', kind: 'collector' };
-  }
-  return { label: 'Controller gap', kind: 'controller' };
-};
+const gapProvenance = (g: MergedGap): GapProvenance => classifyGapSources(g.sources ?? [g.source]);
 
 interface TimelineSegment {
-  kind: 'covered' | 'controller' | 'collector' | 'outside';
+  kind: 'covered' | 'controller' | 'collector' | 'mixed' | 'outside';
   from: number;
   to: number;
   title: string;
@@ -65,7 +60,7 @@ function buildSegments(coverage: CoverageSummary, windowStart: number, windowEnd
       if (gs > cursor) {
         segments.push({ kind: 'covered', from: cursor, to: gs, title: 'Covered — continuous monitoring' });
       }
-      const src = gapSourceLabel(g);
+      const src = gapProvenance(g);
       segments.push({
         kind: src.kind,
         from: gs,
@@ -83,12 +78,12 @@ function buildSegments(coverage: CoverageSummary, windowStart: number, windowEnd
 }
 
 const GapRow: React.FC<{ gap: MergedGap; onInspect: () => void }> = ({ gap, onInspect }) => {
-  const src = gapSourceLabel(gap);
+  const src = gapProvenance(gap);
   return (
     <tr>
       <td>
         <StatusIndicator
-          kind={src.kind === 'collector' ? 'offline' : 'gap'}
+          kind={src.kind === 'controller' ? 'gap' : 'offline'}
           label={src.label}
           title={`Provenance source: ${(gap.sources ?? [gap.source]).join(', ')}`}
         />
@@ -218,7 +213,7 @@ export const CoveragePage: React.FC<{
                         {segments.map((seg, idx) => (
                           <span
                             key={idx}
-                            className={`pl-timeline__seg pl-timeline__seg--${seg.kind}`}
+                            className={`pl-timeline__seg pl-timeline__seg--${seg.kind === 'mixed' ? 'collector' : seg.kind}`}
                             style={{ width: `${Math.max(0.4, ((seg.to - seg.from) / totalSpan) * 100)}%` }}
                             title={seg.title}
                           />
