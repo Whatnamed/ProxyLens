@@ -7,12 +7,12 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure，等待真实多状态视觉验收。
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure；本轮已完成 focused UI polish、统一 overlay 控件与 EN / 中文 locale 基础能力，仍等待完整真实多状态视觉验收。
 - **活动分支**：`experiment/qwen38max-directed-ui`
 - **当前远端 HEAD（本次状态记录前）**：`a1b4d2b`
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
 - **Closure**：`96b08cb` 之后 6 个代码/测试修复提交 + 1 个状态文档提交；工程/语义 Gate 已通过。
-- **当前唯一阻塞项**：真实渲染视觉验收，不是代码架构或产品语义 Closure。
+- **当前唯一阻塞项**：完整真实 Tauri 多状态视觉验收，不是代码架构、产品语义或本轮 UI polish 实现本身。
 
 ### 已实现的正式 UI
 
@@ -24,6 +24,8 @@
 - Coverage：Coverage summary、Gap timeline、Controller / Collector provenance、Outside Monitored History、Inspect Around Gap；
 - System Status：Collector / Accounting / DB 状态，heartbeat stale 规则与后端一致；
 - ErrorBoundary 与 Query/API 可恢复状态。
+- Design System family overlays：自定义 date/time picker、network/page-size listbox，共用 surface / border / radius / selected / hover / focus / shadow 语言；
+- 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译。
 
 ### 独立审查 Closure 已完成
 
@@ -48,8 +50,10 @@
 - Coverage provenance：PASS；
 - System Status heartbeat consistency：PASS；
 - Inspector crash resilience：PASS；
-- UI regression coverage：32 tests（本地执行结果）；
-- TypeScript / frontend build：Closure 报告为本地 PASS；
+- UI regression coverage：38 tests（本地执行结果）；
+- TypeScript / frontend build：本轮本地 PASS；
+- Locale dictionary parity：EN / 中文各 370 个 key，使用到的 357 个 key 无缺失；
+- Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 
 ### Rendered visual QA
@@ -61,6 +65,14 @@
 - Connection Inspector 可完整打开、关闭，无已知 console render error；
 - Custom 编辑器打开不会静默改变 Applied Range。
 
+本轮 focused polish 已通过本地健康 synthetic fixture 的真实浏览器 fallback 验证：
+
+- Light / Dark：Overview、History、Coverage、History Inspector 基本渲染；
+- EN / 中文：导航、标题、筛选、日期控件、分页、状态、空/错误/加载文案与日期格式同步；
+- Custom date/time：日期选择、24 小时输入、非法时间提示、Apply 前后状态；
+- Network / page size：统一 listbox 打开、选中、关闭与值更新；
+- 824px 保底窗口无页面级横向溢出，1280px 桌面窗口完成布局几何检查。
+
 仍待人工验收：
 
 - `healthy / gaps / stale / empty / scaled` 全 fixture；
@@ -68,6 +80,7 @@
 - 1600×1000；
 - Light / Dark 两套主题在 History + Inspector、Overview、Coverage 上的完整视觉一致性；
 - 字体是否升级为确定性产品资产，而不是依赖系统 fallback。
+- 本轮仍未用完整 Tauri 多 fixture 取代浏览器 fallback；因此不把 focused QA 表述为最终视觉 Freeze。
 
 ---
 

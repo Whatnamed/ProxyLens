@@ -181,7 +181,9 @@ Validate:
 - Inspector width;
 - table readability;
 - sidebar dominance;
-- popover positioning.
+- popover positioning;
+- calendar and listbox overlays use the shared surface/border/radius/shadow family;
+- no browser-native select or datetime picker remains on official product surfaces.
 
 ---
 
@@ -297,7 +299,9 @@ Verify:
 - closing Inspector does not lose History context;
 - filters are obvious;
 - Refresh behavior advances the frozen History snapshot;
-- pagination does not imply nonexistent totals.
+- pagination does not imply nonexistent totals;
+- switching EN / 中文 updates visible UI copy immediately and survives reload;
+- date/time display follows the active locale while raw technical values remain unchanged.
 
 ---
 

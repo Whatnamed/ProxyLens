@@ -55,6 +55,26 @@
 
 ---
 
+## 2026-08-29 — Focused UI polish and locale foundation
+
+**Scope:** C 分支前端视觉一致性与 EN / 中文界面语言能力；不涉及 Query API、Collector 或 Storage。
+
+### Completed
+
+- 用受控组合式 date/time picker 替换 custom range 的 native `datetime-local` 控件；
+- 用共享 listbox/menu primitive 统一 History network 与 page-size 选择器；
+- 将菜单、日历、选择态、hover、focus、overlay shadow 对齐同一套 Design System token；
+- 在 sidebar footer 的 Theme 同级 utility 区增加紧凑 EN / 中 segmented locale switch，并持久化到 `pl-locale`；
+- 覆盖正式页面、Gate、ErrorBoundary 与开发诊断界面的可见 UI 文案，并让本地日期时间随 locale 呈现；
+- 增加 locale、date/time utility 回归测试；本地测试总计 38 项，TypeScript / Vite build 通过。
+
+### Validation state
+
+- 健康 synthetic fixture 的本地真实浏览器 fallback：Light / Dark / EN / 中文、日期交互、network/page-size listbox、窄窗口无页面级横向溢出：PASS；
+- 完整 Tauri 多状态（healthy / gaps / stale / empty / scaled）与最终 Design System Freeze：仍 PENDING。
+
+---
+
 ## Earlier milestones
 
 更早的 Phase 0–2 与 Phase 3A 过程已有 `ROADMAP.md`、`STATUS.md` 历史版本、`docs/decisions/`、专项 handoff 与 Git commit 记录支撑。

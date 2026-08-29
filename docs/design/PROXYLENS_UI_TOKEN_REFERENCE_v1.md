@@ -48,7 +48,13 @@ Most application code should consume semantic tokens.
 --pl-text-secondary;
 --pl-text-muted;
 --pl-text-disabled;
+
+--pl-overlay-shadow;
 ```
+
+`--pl-overlay-shadow` is reserved for temporary floating UI such as menus,
+popovers and calendars. Core workspace surfaces continue to use tonal contrast
+and borders rather than elevation.
 
 ---
 

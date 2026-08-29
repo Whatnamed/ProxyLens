@@ -82,6 +82,11 @@ Use for bounded choices such as:
 
 Compact.
 
+Application selects use a controlled listbox/menu composition rather than the
+browser-native select popup when the surface must match the product shell.
+Network and page-size menus share the same trigger height, raised surface,
+border, radius, selected/hover/focus states and temporary elevation.
+
 Menu uses raised surface, border and temporary elevation.
 
 ---
@@ -144,6 +149,11 @@ Must reflect local-time semantics defined by frozen contract.
 
 Custom range UI should expose clear start/end context.
 
+The custom range editor uses a composed date/time picker: a compact trigger,
+tokenized calendar popover and 24-hour time input. It must not expose the
+browser-native datetime picker, default blue calendar selection or an
+un-themed system panel.
+
 Do not silently convert to ambiguous rolling-day semantics.
 
 ---
@@ -165,7 +175,22 @@ Tooltip is explanatory, not a replacement for core labels.
 
 Use for compact contextual choices/details.
 
+Menus, listboxes and date pickers are one overlay family: the same raised
+surface, neutral border, 6px radius, restrained shadow and focus-ring language.
+Temporary overlays close on outside pointer interaction and Escape where the
+interaction supports it.
+
 Popover should not become a substitute for the persistent Connection Inspector.
+
+---
+
+## 2.9 LocalePreference
+
+Language is a global UI preference, not a page filter. Keep its entry point in
+the sidebar footer utility area alongside Theme, use a compact segmented
+control, apply changes immediately and persist the choice locally. Translate
+interface copy and locale-aware date/time presentation; preserve process names,
+domains, addresses, protocols, route values and other raw technical evidence.
 
 ---
 
