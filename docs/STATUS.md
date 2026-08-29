@@ -6,7 +6,18 @@
 
 ## Current State
 
-- **当前阶段**：`Phase 3B0 Pre-UI Closure Complete (Ready for Phase 3B Visual Design & UI Implementation)`
+- **当前阶段**：`Phase 3B/C Directed UI (C 组) — 独立审查 Closure 完成，等待真实多状态视觉验收`
+- **Phase 3B/C 实验分支状态 (experiment/qwen38max-directed-ui)**：
+  - `96b08cb` 为 C 组原始交付（6 commits，App Shell 接管入口），保留不改写；其后 6 个提交为独立审查 Closure：
+    1. 修复 History Inspector 白屏（qualityFlags 布尔映射 wire shape 崩溃）+ ErrorBoundary + 行键盘选择 + 浏览器开发同源代理；
+    2. AuditContext 状态语义：时间范围变更一律重冻结 History snapshot 并重置 page/selected，Route Focus 重置分页，Custom 编辑器草稿与应用范围分离（只有 Apply 生效）；
+    3. Coverage gap provenance 按后端口径分类（仅 `controller_stream` 为 Controller gap，其余为 Collector offline，支持 mixed）；
+    4. Sidebar heartbeat stale 阈值对齐后端宽限规则 `max(3×heartbeatIntervalMs, 15000ms)`；
+    5. Overview 总量表述改为 "reconciled accounted bytes"（含 interval-derived，不得宣称 exact）；
+    6. 新增 25 个回归测试（共 32 个全部 PASS）并补齐 `npm test` 脚本（tsx devDependency）。
+  - 未改动：布局/配色/设计系统/组件风格、Overview 与 Inspector 结构、后端/Storage/Accounting。
+  - **待办**：healthy/gaps/stale/empty/scaled 全 fixture 与 1280×800 / 1600×1000 的真实渲染视觉验收（由用户亲自确认）。
+- **上一阶段基线（3B0）**：`Phase 3B0 Pre-UI Closure Complete (Ready for Phase 3B Visual Design & UI Implementation)`
 - **平台与契约状态**：
   > **Pre-UI engineering is complete; next action requires UI design decisions.**
   
@@ -74,9 +85,9 @@
 
 ## Next Step
 
-进入 **Phase 3B — Audit UI Visual System & Primary Dashboard**：
-1. 建立正式设计系统与视觉规范（色彩、排版、卡片层次、数据密度）；
-2. 实现主总览看板（Overview Dashboard）：流量汇总、出站代理节点排行、规则命中排行、进程归因排行；
-3. 对接时间范围选择器与实时 Freshness 刷新指示；
-4. 替换临时 Diagnostics 面板为正式产品界面。
+本分支 Phase 3B/C 实现与独立审查 Closure 已完成（见 Current State）。剩余唯一阻塞项：
+
+1. 由用户对 healthy/gaps/stale/empty/scaled 各 fixture 与 1280×800 / 1600×1000 真实窗口做最终视觉验收；
+2. 验收通过后决定是否将 C 组设计系统与页面推进合并主线，并确定字体是否升级为确定性产品资产。
+
 *(注：连接明细与搜索在 Phase 3C，覆盖率下钻在 Phase 3D，Audit Intelligence 在 Phase 4)*
