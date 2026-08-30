@@ -42,7 +42,7 @@ export const StatusIndicator: React.FC<{ kind: StatusKind; label: string; title?
   title,
 }) => (
   <span className={`pl-status pl-status--${kind}`} title={title}>
-    <span className="pl-status__dot" />
+    <span className="pl-optical-marker pl-optical-marker--status" aria-hidden="true" />
     <span className="pl-status__label pl-compact-label">{label}</span>
   </span>
 );

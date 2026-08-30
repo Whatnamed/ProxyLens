@@ -539,20 +539,27 @@
   border-left: 1px solid var(--pl-border-muted);
   position: relative;
   font-size: var(--pl-text-11);
+  line-height: var(--pl-leading-control);
 }
 
-.pl-event-row__marker {
+.pl-optical-marker--event {
   grid-column: 1;
-  align-self: baseline;
+  align-self: start;
   justify-self: start;
-  margin-left: -3px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
+  --pl-marker-leading: var(--pl-leading-control);
+  --pl-marker-size: 5px;
+  --pl-marker-slot-width: var(--pl-space-3);
+  --pl-marker-inline-shift: -3px;
+  font-size: var(--pl-text-11);
+  position: relative;
+  z-index: 1;
+}
+
+.pl-optical-marker--event::before {
   background: var(--pl-text-disabled);
 }
 
-.pl-event-row--changed .pl-event-row__marker {
+.pl-event-row--changed .pl-optical-marker--event::before {
   background: var(--pl-evidence-ambiguous);
 }
 

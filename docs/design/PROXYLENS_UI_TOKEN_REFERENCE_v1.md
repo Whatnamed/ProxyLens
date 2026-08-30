@@ -291,6 +291,7 @@ Typography roles:
 --pl-leading-helper        1.52
 --pl-leading-mono          1.40
 --pl-leading-control       1.20
+--pl-marker-optical-shift -0.08em
 --pl-letter-spacing-body   normal
 --pl-letter-spacing-heading -0.01em
 --pl-letter-spacing-eyebrow 0.04em
@@ -305,10 +306,14 @@ optical centering inside fixed-height primitives; it does not change their
 heights or spacing.
 
 Multi-column key/value rows and evidence timelines align to the first baseline.
-Their marker follows the first line of content, even when the value wraps. Do
-not compensate for a locale or font with a local top padding, pixel offset or
-`translateY`. Where supported, `text-box: trim-both text` is progressive
-enhancement only; the explicit leading and layout alignment are the fallback.
+Their shared optical marker anchor follows the first line of content, even when
+the value wraps. The dot is centered in that first-line slot and uses the one
+shared `--pl-marker-optical-shift` correction; it is not aligned to the full
+multiline block. Connector segments are drawn behind the marker, and the
+hollow marker surface masks the segment. Do not compensate for a locale or font
+with a local top padding, pixel offset or `translateY`. Where supported,
+`text-box: trim-both text` is progressive enhancement only; the explicit
+leading and layout alignment are the fallback.
 
 Do not apply positive letter-spacing globally to Chinese. Body, controls,
 tables, technical values, IP/domain/protocol tokens and buttons keep normal

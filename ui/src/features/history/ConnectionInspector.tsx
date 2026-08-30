@@ -103,7 +103,7 @@ const CausalPath: React.FC<{ c: ConnectionRecord; topGroup?: string }> = ({ c, t
     <ol className="pl-causal">
       {steps.map((s) => (
         <li key={s.key} className={`pl-causal__step${s.accent ? ' pl-causal__step--accent' : ''}`}>
-          <span className="pl-causal__marker" aria-hidden="true" />
+          <span className="pl-optical-marker pl-optical-marker--causal" aria-hidden="true" />
           <span className="pl-causal__key">{s.key}</span>
           <span className={`pl-causal__value${s.mono ? ' pl-causal__value--mono' : ''}`}>{s.value}</span>
         </li>
@@ -132,7 +132,7 @@ const EventTimeline: React.FC<{ events: AccountedTrafficRecord[] }> = ({ events 
         prev = ev;
         return (
           <div key={`${ev.sourceEventId}-${idx}`} className={`pl-event-row${changed ? ' pl-event-row--changed' : ''}`}>
-            <span className="pl-event-row__marker" aria-hidden="true" />
+            <span className="pl-optical-marker pl-optical-marker--event" aria-hidden="true" />
             <span className="pl-event-row__time">{formatLocalDateTimeCompact(ev.observedAt, locale)}</span>
             <span className="pl-event-row__body">
               <span>{ev.process ?? '-'}</span>

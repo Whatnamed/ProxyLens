@@ -318,12 +318,16 @@ Verify the alignment model by category:
   are optically centered;
 - Causal Path, key/value lists and Accounting Events: time/key and content
   share the first baseline;
-- causal/timeline markers align to the first visible line of wrapped content;
+- causal/timeline markers align to the optical center of the first visible line
+  of wrapped content, using the shared marker primitive; hollow markers mask
+  the connector and the connector never renders over the dot;
 - English and Simplified Chinese use the same leading and geometry.
 
 Do not accept a fix that relies on a locale-, font- or string-specific top
-padding, pixel offset or transform. `text-box: trim-both text` may be tested as
-progressive enhancement, but the fallback must remain correct when unsupported.
+padding, pixel offset or transform. A shared primitive-level marker correction
+is acceptable when it is applied identically across locales, fonts and strings.
+`text-box: trim-both text` may be tested as progressive enhancement, but the
+fallback must remain correct when unsupported.
 
 ---
 
