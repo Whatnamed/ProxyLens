@@ -278,6 +278,7 @@
 .pl-date-range__error {
   color: var(--pl-status-stale);
   font-size: var(--pl-text-11);
+  line-height: var(--pl-leading-control);
   white-space: nowrap;
 }
 
@@ -439,6 +440,7 @@
   padding: var(--pl-space-2) var(--pl-space-4);
   border-top: 1px solid var(--pl-border-muted);
   font-size: var(--pl-text-12);
+  line-height: var(--pl-leading-control);
   color: var(--pl-text-secondary);
 }
 

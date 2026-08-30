@@ -468,6 +468,7 @@
   padding: 0 var(--pl-space-3) var(--pl-space-3);
   color: var(--pl-status-stale);
   font-size: var(--pl-text-11);
+  line-height: var(--pl-leading-control);
 }
 
 @keyframes pl-overlay-in {
@@ -1084,12 +1085,14 @@
   align-items: center;
   gap: var(--pl-space-2);
   font-size: var(--pl-text-12);
+  line-height: var(--pl-leading-control);
   color: var(--pl-text-secondary);
 }
 
 .pl-pagination__page {
   font-family: var(--pl-font-mono);
   font-size: var(--pl-text-12);
+  line-height: var(--pl-leading-control);
   min-width: 40px;
   text-align: center;
 }
