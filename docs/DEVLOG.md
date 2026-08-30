@@ -5,20 +5,23 @@
 
 ---
 
-## 2026-08-31 — Script-aware narrative pairing and adjacent marker anchors
+## 2026-08-31 — Script-aware narrative pairing and primary-first-line marker alignment
 
 **Scope:** 在既有 Directed UI 与正式 IBM Plex Sans SC / JetBrains Mono 基线之上，
-完成一轮 typography script pairing 与 Causal Path / Accounting Events / Status
-marker 结构打磨；不改变产品语义、布局方向、Query API、Collector 或 Storage。
+完成一轮 typography script pairing，并校正 Causal Path / Accounting Events / Status
+的 marker 对齐模型；不改变产品语义、布局方向、Query API、Collector 或 Storage。
+本轮 marker 工作是 alignment model correction，不是 1px polish。
 
 ### Root causes
 
 - Font Lab 仍按 UI locale 切换整套 Narrative family，English / Chinese selector
   与 locale 绑定，无法真实评估 Latin 与 CJK 的独立脚本配对；OPPO Sans 4.0
   manifest 还把变量字体错误声明成单一 400 face；
-- Causal Path 与 Accounting Events 的 marker 仍是独立 line-slot，marker 的
-  位置和 connector 受 multiline value / row baseline 影响；Status 也没有显式
-  的相邻文本 anchor 结构。
+- Causal Path 与 Accounting Events 的 marker 被放在次级 key/timestamp 行盒中，
+  因而没有稳定地跟随真正代表证据的 primary 首行；secondary path/IP、wrapped
+  evidence 与 changed chip 会让旧模型产生错误的视觉锚点。
+- Status、Causal Path 与 Accounting Events 需要明确区分 primary 内容和 secondary
+  内容，避免用整块高度或次级标签推导 marker 位置。
 
 ### Completed
 
@@ -30,10 +33,16 @@ marker 结构打磨；不改变产品语义、布局方向、Query API、Collect
   候选不进入 cycle；
 - 依据官方 OPPO 4.0 包 metadata 修正变量范围为 `100–700`，明确 Regular 400、
   Medium 500 为同一变量轴命名实例；正式 release packaging 仍 pending；
-- Status、Causal Path、Accounting Events 改为相邻文本 anchor，保留原有密度、
-  connector 层级与语义颜色，并移除不再需要的 shared optical-shift token；
+- Status 保持 `marker + primary label`；Causal Path 改为首行
+  `marker | key | primary value`，path/IP 进入 value 列下方的 secondary；Rule、
+  Top policy、Proxy chain、Egress 保持单一 primary；
+- Accounting Events 改为首行 `marker | timestamp | primary event content`，
+  rule/proxy/bytes/evidence chip 独立下沉；marker 与 connector 只依据 primary
+  首行的结构性行高，不被 secondary 或整块 multiline 高度移动；
 - Design System、token reference、component pattern、implementation QA、
-  `STATUS.md` 与本日志同步为 script-aware typography 和 adjacent-anchor 规则。
+  `STATUS.md` 与本日志同步为 primary-first-line 规则；保留无 `text-box` 的
+  fallback，不增加 locale/font/string-specific offset，也不改变字体冻结与 OPPO
+  license 状态。
 
 ### Validation state
 
@@ -42,9 +51,10 @@ marker 结构打磨；不改变产品语义、布局方向、Query API、Collect
 - Playwright CLI + CDP Rendered Fonts：混合样本分别识别 Manrope / OPPO Sans 4.0，
   technical sample 识别 JetBrains Mono；Light / Dark、EN / 中文切换保持脚本配对，
   `font-synthesis` 为 `none`；
-- 实际布局测量：Status marker 与 label、Accounting Event marker 与 timestamp
-  中心一致；Causal marker 与 key 处于同一 adjacent anchor；单行/多行值未按整块
-  高度定位 marker；
+- 实际截图与布局测量：Status marker 与 primary label 对齐；Causal marker 与
+  primary value 首行对齐而不跟随 key；Accounting Event marker 与 primary event
+  首行对齐而不跟随 timestamp；secondary path/IP、wrapped evidence 与 changed chip
+  不改变 marker 的首行位置；
 - 完整 Tauri 多 fixture visual Freeze 仍 PENDING；OPPO 生产打包仍需单独 license
   review。
 

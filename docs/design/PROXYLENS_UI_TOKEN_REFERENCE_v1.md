@@ -310,15 +310,19 @@ Typography roles:
 optical centering inside fixed-height primitives; it does not change their
 heights or spacing.
 
-Multi-column key/value rows and evidence timelines align to the first baseline.
-Their marker is a child of the adjacent text anchor: `(marker + key) | value`
-for Causal Path and `(marker + timestamp) | body` for Accounting Events. The
-dot is centered against that compact anchor, not the full multiline block.
-Connector segments are drawn behind the marker, and the hollow marker surface
-masks the segment. There is no optical-shift token and no locale-, font- or
-string-specific `top`, padding or `translateY` correction. Where supported,
-`text-box: trim-both text` is progressive enhancement only; the explicit
-leading and layout alignment are the fallback.
+Multi-column key/value rows and evidence timelines align the key/timestamp and
+primary content to the first baseline. Their marker is anchored to the primary
+first line: Causal Path uses `marker | key | primary value`, with secondary
+path/IP content below the value column; Accounting Events uses
+`marker | timestamp | primary event content`, with later evidence details in a
+separate secondary row. The key/timestamp may baseline-align for scanning but
+never defines marker position. The dot is optically centered on the primary
+first-line content, not on the full multiline block. Connector segments are
+drawn behind the marker, and the hollow marker surface masks the segment. There
+is no optical-shift token and no locale-, font- or string-specific `top`,
+padding or `translateY` correction. Where supported,
+`text-box: trim-both text` is progressive enhancement for single-line primary
+wrappers only; explicit leading and layout alignment are the fallback.
 
 Do not apply positive letter-spacing globally to Chinese. Body, controls,
 tables, technical values, IP/domain/protocol tokens and buttons keep normal

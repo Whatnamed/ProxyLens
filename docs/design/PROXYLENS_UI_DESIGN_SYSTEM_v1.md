@@ -373,20 +373,25 @@ Use two alignment models rather than one blanket centering rule:
 - fixed-height controls, segmented items, selects, chips, badges, status
   indicators and legend items use optical vertical centering;
 - multi-column key/value rows and timelines use first-baseline alignment so the
-  marker and labels follow the first visible line of a multi-line value.
+  key/timestamp and primary content share the first visible line; secondary
+  content is allowed to wrap below without moving the marker.
 
-Non-text markers are structurally paired with the adjacent text anchor: Status
-uses `marker + label`, Causal Path uses `(marker + key) | value`, and
-Accounting Events uses `(marker + timestamp) | event body`. The dot is centered
-against that compact anchor, never against the total height of a wrapped value.
-Connector segments stay behind the marker; a hollow marker uses its surface
-fill to mask the segment. No locale-, font-, string- or page-specific optical
-correction is permitted.
+Non-text markers are anchored to the primary content they represent: Status uses
+`marker + primary label`; Causal Path uses the first line `marker | key |
+primary value`, with secondary path/IP content starting under the value column;
+Accounting Events uses `marker | timestamp | primary event content`, with later
+evidence details in a separate secondary row. The key/timestamp may share the
+first baseline for scanning, but never defines marker position. The marker is
+optically centered on the primary first-line content, independent of wrapped or
+secondary content. Connector segments stay behind the marker; a hollow marker
+uses its surface fill to mask the segment. No locale-, font-, string- or
+page-specific optical correction is permitted.
 
 Compact UI must use an explicit control/token text role and
 `--pl-leading-control`; it must not inherit body leading by accident. A
-`text-box` trim rule may progressively improve the visible text box when the
-browser supports it, but the explicit leading and flex/grid alignment remain the
+`text-box` trim may progressively improve a single-line primary wrapper when the
+browser supports it; it must not be applied to multiline body content. Explicit
+leading, grid/flex structure and the primary-first-line anchor remain the
 fallback. Do not add locale-, font- or string-specific top, padding or
 `translateY` corrections.
 

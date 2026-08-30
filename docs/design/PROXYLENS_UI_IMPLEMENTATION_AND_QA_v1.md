@@ -318,20 +318,25 @@ Verify the alignment model by category:
 
 - fixed-height controls and compact primitives: visible text, dot and swatch
   are optically centered;
-- Causal Path, key/value lists and Accounting Events: time/key and content
-  share the first baseline;
-- causal/timeline markers are children of the adjacent text anchor: Causal
-  Path `(marker + key) | value`, Accounting Events `(marker + timestamp) |
-  body`; they align to that compact first-line anchor, never the full wrapped
-  block; hollow markers mask the connector and the connector never renders
-  over the dot;
+- Causal Path, key/value lists and Accounting Events: key/timestamp and primary
+  content share the first baseline;
+- causal/timeline markers are anchored to the primary first line: Causal Path
+  renders `marker | key | primary value` with secondary path/IP content below
+  the value column, and Accounting Events renders `marker | timestamp | primary
+  event content` with later evidence details in a separate secondary row. The
+  key/timestamp never defines marker position; hollow markers mask the
+  connector and the connector never renders over the dot;
 - English and Simplified Chinese use the same leading and geometry.
+- Verify this from screenshots/rendered glyph pixels or equivalent rendered text
+  quads, not only from outer DOM bounding boxes: marker center must track the
+  primary first-line content while secondary and wrapped content remain below.
 
 Do not accept a fix that relies on a locale-, font-, string- or page-specific
 top padding, pixel offset or transform. Marker placement must come from the
-adjacent anchor layout; there is no shared optical-shift token. `text-box:
-trim-both text` may be tested as progressive enhancement, but the fallback must
-remain correct when unsupported.
+explicit primary-first-line layout; there is no shared optical-shift token.
+`text-box: trim-both text` may be tested as progressive enhancement on
+single-line primary wrappers only, but the fallback must remain correct when
+unsupported.
 
 ---
 
