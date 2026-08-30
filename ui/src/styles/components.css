@@ -14,8 +14,8 @@
   }
 }
 
-/* Shared non-text marker. Each component pairs the marker with its adjacent
- * text anchor; the dot remains a primitive-level optical rule. */
+/* Shared non-text marker. Each component places the marker in the same
+ * first-line layout as its primary content; secondary content is separate. */
 .pl-optical-marker {
   --pl-marker-leading: var(--pl-leading-control);
   --pl-marker-size: 7px;
@@ -1017,15 +1017,14 @@
 .pl-causal__step {
   --pl-causal-row-padding: 5px;
   --pl-causal-key-width: 110px;
-  --pl-causal-anchor-width: calc(var(--pl-space-4) + var(--pl-causal-key-width));
-  --pl-causal-anchor-center-offset: calc(var(--pl-causal-row-padding) + var(--pl-leading-control) * 0.5em);
+  --pl-causal-primary-leading: var(--pl-leading-body);
+  --pl-causal-marker-center-offset: calc(var(--pl-causal-row-padding) + var(--pl-causal-primary-leading) * 0.5em);
   position: relative;
-  display: grid;
-  grid-template-columns: var(--pl-causal-anchor-width) minmax(0, 1fr);
-  gap: 0;
-  align-items: baseline;
+  display: flex;
+  flex-direction: column;
   padding: var(--pl-causal-row-padding) 0;
-  font-size: var(--pl-text-11);
+  font-size: var(--pl-text-12);
+  line-height: var(--pl-leading-body);
 }
 
 .pl-causal__step:not(:last-child)::after {
@@ -1033,30 +1032,30 @@
   position: absolute;
   z-index: 0;
   left: 3px;
-  top: var(--pl-causal-anchor-center-offset);
-  bottom: calc(-1 * var(--pl-causal-anchor-center-offset));
+  top: var(--pl-causal-marker-center-offset);
+  bottom: calc(-1 * var(--pl-causal-marker-center-offset));
   width: 1px;
   background: var(--pl-border-muted);
   pointer-events: none;
 }
 
-.pl-causal__anchor {
-  grid-column: 1;
+.pl-causal__first-line {
   display: grid;
-  grid-template-columns: var(--pl-space-4) var(--pl-causal-key-width);
-  align-items: center;
+  grid-template-columns: var(--pl-space-4) var(--pl-causal-key-width) minmax(0, 1fr);
+  align-items: baseline;
   min-width: 0;
-  line-height: var(--pl-leading-control);
+  font-size: var(--pl-text-12);
+  line-height: var(--pl-causal-primary-leading);
 }
 
 .pl-optical-marker--causal {
   grid-column: 1;
-  align-self: center;
+  align-self: start;
   justify-self: start;
-  --pl-marker-leading: var(--pl-leading-control);
+  --pl-marker-leading: var(--pl-causal-primary-leading);
   --pl-marker-size: 7px;
   --pl-marker-slot-width: var(--pl-space-4);
-  font-size: var(--pl-text-11);
+  font-size: var(--pl-text-12);
   position: relative;
   z-index: 1;
 }
@@ -1079,16 +1078,27 @@
   white-space: nowrap;
 }
 
-.pl-causal__value {
-  grid-column: 2;
-  padding-left: var(--pl-space-3);
+.pl-causal__primary {
+  grid-column: 3;
+  display: block;
+  min-width: 0;
   color: var(--pl-text-primary);
   font-size: var(--pl-text-12);
+  line-height: var(--pl-causal-primary-leading);
+  overflow-wrap: anywhere;
+}
+
+.pl-causal__secondary {
+  margin-left: calc(var(--pl-space-4) + var(--pl-causal-key-width));
+  padding-left: var(--pl-space-3);
+  color: var(--pl-text-muted);
+  font-size: var(--pl-text-11);
+  line-height: var(--pl-leading-body);
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.pl-causal__value--mono {
+.pl-causal__primary--mono {
   font-family: var(--pl-font-mono);
 }
 

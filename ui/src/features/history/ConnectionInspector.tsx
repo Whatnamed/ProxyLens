@@ -45,28 +45,25 @@ const CausalPath: React.FC<{ c: ConnectionRecord; topGroup?: string }> = ({ c, t
   const ip = c.metadata?.destinationIP;
   const port = c.metadata?.destinationPort;
 
-  const steps: { key: string; value: React.ReactNode; mono?: boolean; accent?: boolean }[] = [
+  const steps: {
+    key: string;
+    primary: React.ReactNode;
+    secondary?: React.ReactNode;
+    mono?: boolean;
+    accent?: boolean;
+  }[] = [
     {
       key: t('inspector.process'),
-      value: c.metadata?.process ? (
-        <>
-          {c.metadata.process}
-          {c.metadata.processPath && (
-            <span className="pl-cell-sub pl-mono" title={c.metadata.processPath}>{c.metadata.processPath}</span>
-          )}
-        </>
-      ) : (
+      primary: c.metadata?.process ? c.metadata.process : (
         <EvidenceChip kind="missing" label={t('inspector.missingProcess')} title={t('inspector.missingProcessTitle')} />
       ),
+      secondary: c.metadata?.process && c.metadata.processPath ? (
+        <span className="pl-cell-sub pl-mono" title={c.metadata.processPath}>{c.metadata.processPath}</span>
+      ) : undefined,
     },
     {
       key: t('inspector.destination'),
-      value: dest ? (
-        <>
-          {dest}
-          {ip && <span className="pl-cell-sub pl-mono">{ip}{port ? `:${port}` : ''}</span>}
-        </>
-      ) : ip ? (
+      primary: dest ? dest : ip ? (
         <>
           <EvidenceChip kind="missing" label={t('inspector.ipOnly')} title={t('inspector.ipOnlyTitle')} />{' '}
           {ip}{port ? `:${port}` : ''}
@@ -74,11 +71,12 @@ const CausalPath: React.FC<{ c: ConnectionRecord; topGroup?: string }> = ({ c, t
       ) : (
         <EvidenceChip kind="missing" label={t('inspector.missingDestination')} />
       ),
+      secondary: dest && ip ? <span className="pl-cell-sub pl-mono">{ip}{port ? `:${port}` : ''}</span> : undefined,
       mono: !dest,
     },
     {
       key: t('inspector.rule'),
-      value: c.rule ? (
+      primary: c.rule ? (
         <span className="pl-mono">
           {c.rule}
           {c.rulePayload ? <span className="pl-secondary"> · {c.rulePayload}</span> : null}
@@ -89,13 +87,13 @@ const CausalPath: React.FC<{ c: ConnectionRecord; topGroup?: string }> = ({ c, t
     },
   ];
 
-  if (top) steps.push({ key: t('inspector.topPolicy'), value: <span className="pl-mono">{top}</span> });
+  if (top) steps.push({ key: t('inspector.topPolicy'), primary: <span className="pl-mono">{top}</span> });
   if (intermediates.length > 0) {
-    steps.push({ key: t('inspector.proxyChain'), value: <span className="pl-mono">{intermediates.join(' → ')}</span> });
+    steps.push({ key: t('inspector.proxyChain'), primary: <span className="pl-mono">{intermediates.join(' → ')}</span> });
   }
   steps.push({
     key: t('inspector.egress'),
-    value: <span className="pl-mono">{finalEgress ?? (c.route === 'DIRECT' ? 'DIRECT' : `(${t('common.unknown').toLowerCase()})`)}</span>,
+    primary: <span className="pl-mono">{finalEgress ?? (c.route === 'DIRECT' ? 'DIRECT' : `(${t('common.unknown').toLowerCase()})`)}</span>,
     accent: (c.route || '').toUpperCase() === 'PROXY',
   });
 
@@ -103,11 +101,12 @@ const CausalPath: React.FC<{ c: ConnectionRecord; topGroup?: string }> = ({ c, t
     <ol className="pl-causal">
       {steps.map((s) => (
         <li key={s.key} className={`pl-causal__step${s.accent ? ' pl-causal__step--accent' : ''}`}>
-          <span className="pl-causal__anchor">
+          <div className="pl-causal__first-line">
             <span className="pl-optical-marker pl-optical-marker--causal" aria-hidden="true" />
             <span className="pl-causal__key">{s.key}</span>
-          </span>
-          <span className={`pl-causal__value${s.mono ? ' pl-causal__value--mono' : ''}`}>{s.value}</span>
+            <span className={`pl-causal__primary${s.mono ? ' pl-causal__primary--mono' : ''}`}>{s.primary}</span>
+          </div>
+          {s.secondary ? <div className="pl-causal__secondary">{s.secondary}</div> : null}
         </li>
       ))}
     </ol>
@@ -134,13 +133,12 @@ const EventTimeline: React.FC<{ events: AccountedTrafficRecord[] }> = ({ events 
         prev = ev;
         return (
           <div key={`${ev.sourceEventId}-${idx}`} className={`pl-event-row${changed ? ' pl-event-row--changed' : ''}`}>
-            <span className="pl-event-row__anchor">
+            <div className="pl-event-row__first-line">
               <span className="pl-optical-marker pl-optical-marker--event" aria-hidden="true" />
               <span className="pl-event-row__time">{formatLocalDateTimeCompact(ev.observedAt, locale)}</span>
-            </span>
-            <span className="pl-event-row__body">
-              <span>{ev.process ?? '-'}</span>
-              <span>→ {ev.host ?? ev.destinationIp ?? '-'}</span>
+              <span className="pl-event-row__primary">{ev.process ?? '-'} → {ev.host ?? ev.destinationIp ?? '-'}</span>
+            </div>
+            <div className="pl-event-row__secondary">
               {ev.rule && <span>· {ev.rule}{ev.rulePayload ? ` ${ev.rulePayload}` : ''}</span>}
               {ev.finalProxy && <span>· {ev.finalProxy}</span>}
               <span>· ↑{formatBytes(ev.accountedUpload)} ↓{formatBytes(ev.accountedDownload)}</span>
@@ -150,7 +148,7 @@ const EventTimeline: React.FC<{ events: AccountedTrafficRecord[] }> = ({ events 
               {changed && (
                 <EvidenceChip kind="ambiguous" label={t('inspector.accountingEvent')} title={t('inspector.accountingEventTitle')} />
               )}
-            </span>
+            </div>
           </div>
         );
       })}
