@@ -64,8 +64,10 @@
   --pl-analytical: #9aa39c;
   --pl-analytical-soft: #e8eae6;
 
-  /* Typography roles */
-  --pl-font-narrative: "IBM Plex Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  /* Typography roles: narrative is composed by script, not by UI locale. */
+  --pl-font-narrative-latin: "IBM Plex Sans SC";
+  --pl-font-narrative-cjk: "IBM Plex Sans SC";
+  --pl-font-narrative: var(--pl-font-narrative-latin), var(--pl-font-narrative-cjk), "Microsoft YaHei", system-ui, sans-serif;
   --pl-font-sans: var(--pl-font-narrative);
   --pl-font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
   --pl-font-weight-regular: 400;
@@ -78,7 +80,6 @@
   --pl-leading-helper: 1.52;
   --pl-leading-mono: 1.4;
   --pl-leading-control: 1.2;
-  --pl-marker-optical-shift: -0.08em;
   --pl-letter-spacing-body: normal;
   --pl-letter-spacing-heading: -0.01em;
   --pl-letter-spacing-eyebrow: 0.04em;

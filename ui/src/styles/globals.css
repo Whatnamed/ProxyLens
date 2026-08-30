@@ -15,7 +15,7 @@ body,
 }
 
 body {
-  font-family: var(--pl-narrative-override, var(--pl-font-narrative));
+  font-family: var(--pl-font-narrative);
   font-size: var(--pl-text-13);
   line-height: var(--pl-leading-body);
   font-weight: var(--pl-font-weight-regular);

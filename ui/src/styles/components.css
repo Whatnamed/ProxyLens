@@ -14,8 +14,8 @@
   }
 }
 
-/* Shared non-text marker anchor. The slot follows the first line; the dot's
- * optical correction is deliberately one component-level relative rule. */
+/* Shared non-text marker. Each component pairs the marker with its adjacent
+ * text anchor; the dot remains a primitive-level optical rule. */
 .pl-optical-marker {
   --pl-marker-leading: var(--pl-leading-control);
   --pl-marker-size: 7px;
@@ -40,7 +40,7 @@
   flex: none;
   margin-inline-start: var(--pl-marker-inline-shift);
   border-radius: 50%;
-  transform: translateY(var(--pl-marker-optical-shift));
+  transform: none;
 }
 
 .pl-btn {
@@ -592,12 +592,17 @@
 
 .pl-status {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
   font-size: var(--pl-text-12);
   line-height: var(--pl-leading-control);
   color: var(--pl-text-secondary);
   white-space: nowrap;
+}
+
+.pl-status__anchor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: var(--pl-leading-control);
 }
 
 .pl-optical-marker--status {
@@ -1010,13 +1015,17 @@
 }
 
 .pl-causal__step {
-  --pl-marker-center-offset: calc(5px + var(--pl-leading-body) * 0.5em + var(--pl-marker-optical-shift));
+  --pl-causal-row-padding: 5px;
+  --pl-causal-key-width: 110px;
+  --pl-causal-anchor-width: calc(var(--pl-space-4) + var(--pl-causal-key-width));
+  --pl-causal-anchor-center-offset: calc(var(--pl-causal-row-padding) + var(--pl-leading-control) * 0.5em);
   position: relative;
   display: grid;
-  grid-template-columns: var(--pl-space-4) 110px minmax(0, 1fr);
+  grid-template-columns: var(--pl-causal-anchor-width) minmax(0, 1fr);
   gap: 0;
   align-items: baseline;
-  padding: 5px 0;
+  padding: var(--pl-causal-row-padding) 0;
+  font-size: var(--pl-text-11);
 }
 
 .pl-causal__step:not(:last-child)::after {
@@ -1024,21 +1033,30 @@
   position: absolute;
   z-index: 0;
   left: 3px;
-  top: var(--pl-marker-center-offset);
-  bottom: calc(-1 * var(--pl-marker-center-offset));
+  top: var(--pl-causal-anchor-center-offset);
+  bottom: calc(-1 * var(--pl-causal-anchor-center-offset));
   width: 1px;
   background: var(--pl-border-muted);
   pointer-events: none;
 }
 
+.pl-causal__anchor {
+  grid-column: 1;
+  display: grid;
+  grid-template-columns: var(--pl-space-4) var(--pl-causal-key-width);
+  align-items: center;
+  min-width: 0;
+  line-height: var(--pl-leading-control);
+}
+
 .pl-optical-marker--causal {
   grid-column: 1;
-  align-self: start;
+  align-self: center;
   justify-self: start;
-  --pl-marker-leading: var(--pl-leading-body);
+  --pl-marker-leading: var(--pl-leading-control);
   --pl-marker-size: 7px;
   --pl-marker-slot-width: var(--pl-space-4);
-  font-size: var(--pl-text-12);
+  font-size: var(--pl-text-11);
   position: relative;
   z-index: 1;
 }
@@ -1062,7 +1080,7 @@
 }
 
 .pl-causal__value {
-  grid-column: 3;
+  grid-column: 2;
   padding-left: var(--pl-space-3);
   color: var(--pl-text-primary);
   font-size: var(--pl-text-12);
