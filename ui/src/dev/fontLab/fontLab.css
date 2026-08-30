@@ -33,6 +33,10 @@
   color: var(--pl-text-secondary);
 }
 
+.pl-font-lab__field[data-active='true'] > label {
+  color: var(--pl-text-primary);
+}
+
 .pl-font-lab__select-wrap {
   position: relative;
 }
@@ -108,17 +112,26 @@
   margin-top: 11px;
 }
 
-.pl-font-lab__link {
-  display: inline-flex;
+.pl-font-lab__fixed {
+  min-height: 26px;
+  display: flex;
   align-items: center;
-  gap: 5px;
-  color: var(--pl-text-secondary);
+  padding: 0 8px;
+  border: 1px solid var(--pl-border-muted);
+  border-radius: var(--pl-radius-sm);
+  background: var(--pl-surface-subtle);
+  color: var(--pl-text-muted);
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-text-10);
   line-height: var(--pl-leading-control);
 }
 
-.pl-font-lab__link input {
-  margin: 0;
-  accent-color: var(--pl-accent);
+.pl-font-lab__focus {
+  margin-top: 10px;
+  color: var(--pl-accent);
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-text-10);
+  line-height: var(--pl-leading-mono);
 }
 
 .pl-font-lab__button {

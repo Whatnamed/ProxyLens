@@ -258,14 +258,14 @@
       "license": "OPPO custom font license",
       "licenseUrl": "https://open.oppomobile.com/new/developmentDoc/info?id=13223",
       "sourceUrl": "https://open.oppomobile.com/new/developmentDoc/info?id=13223",
-      "redistribution": "Dev-only local evaluation; free commercial use under OPPO terms, keep the notice, do not modify, and do not redistribute through the ProxyLens repository.",
+      "redistribution": "Dev-only local evaluation; the official license permits unmodified embedding, bundling, and redistribution with software when the notice is prominent and the copyright/agreement are retained. Do not modify or redistribute the font standalone; release packaging remains pending review.",
       "assets": [
         {
           "type": "archive",
           "archiveUrl": "https://openfs.oppomobile.com/open/oop/202412/05/0f155015fff7700fbbcef7fa2aad78dc.zip",
           "entry": "OPPO_Sans_4.0/OPPO Sans 4.0.ttf",
           "file": "oppo-sans-4-regular.ttf",
-          "weight": "400",
+          "weight": "100 700",
           "format": "truetype"
         }
       ]

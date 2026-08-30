@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useLocale } from '../../state/AuditContext';
 import manifest from './font-lab-manifest.json';
 import './fontLab.css';
 
 type FontLanguage = 'en' | 'zh-CN';
+type FontAxis = 'latin' | 'cjk';
 type FontKind = 'bundled' | 'system' | 'local';
 type FontLabStatus = 'loading' | 'loaded' | 'system' | 'unavailable';
 
@@ -23,6 +23,7 @@ interface FontCandidate {
   families?: Partial<Record<FontLanguage, string>>;
   systemFamily?: string;
   coverage: FontLanguage[];
+  assets?: FontFaceAsset[];
 }
 
 interface LocalCandidate {
@@ -43,7 +44,8 @@ interface FontManifest {
 
 const FONT_MANIFEST = manifest as FontManifest;
 const BASE_CANDIDATES = FONT_MANIFEST.candidates;
-const DEFAULT_FONT_ID = 'ibm-plex-sans-sc';
+const DEFAULT_LATIN_FONT_ID = 'manrope';
+const DEFAULT_CJK_FONT_ID = 'oppo-sans-4';
 const FONT_LAB_MANIFEST_URL = '/__proxylens_font_lab__/manifest';
 const MISSING_FONT_FAMILY = '__ProxyLens_Font_Lab_Missing__';
 
@@ -54,10 +56,19 @@ const STATUS_LABELS: Record<FontLabStatus, string> = {
   unavailable: 'Unavailable',
 };
 
+const COVERAGE_SAMPLES: Record<FontLanguage, string> = {
+  en: 'AaMmWw0123',
+  'zh-CN': '中文测试',
+};
+
 function initialStatuses(): Record<string, FontLabStatus> {
   return Object.fromEntries(
     BASE_CANDIDATES.map((candidate) => [candidate.id, candidate.kind === 'bundled' ? 'loaded' : 'loading']),
   );
+}
+
+function axisLanguage(axis: FontAxis): FontLanguage {
+  return axis === 'latin' ? 'en' : 'zh-CN';
 }
 
 function candidateFamily(candidate: FontCandidate, language: FontLanguage): string {
@@ -66,7 +77,7 @@ function candidateFamily(candidate: FontCandidate, language: FontLanguage): stri
 
 function cssFamily(family: string): string {
   const safeFamily = family.replace(/["\\]/g, '');
-  return `"${safeFamily}", var(--pl-font-narrative)`;
+  return `"${safeFamily}"`;
 }
 
 function supportsLanguage(candidate: FontCandidate, language: FontLanguage): boolean {
@@ -78,31 +89,55 @@ function isSelectable(candidate: FontCandidate, language: FontLanguage, statuses
   return supportsLanguage(candidate, language) && (status === 'loaded' || status === 'system');
 }
 
-function isBilingualSelectable(candidate: FontCandidate, statuses: Record<string, FontLabStatus>): boolean {
-  return isSelectable(candidate, 'en', statuses) && isSelectable(candidate, 'zh-CN', statuses);
-}
-
 function fontFileUrl(file: string): string {
   return `/__proxylens_font_lab__/file?name=${encodeURIComponent(file)}`;
 }
 
-function measureTextWidth(fontFamily: string, text: string): number {
+function renderText(fontFamily: string, text: string): { width: number; alpha: Uint8ClampedArray } | null {
   const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 96;
   const context = canvas.getContext('2d');
-  if (!context) return 0;
+  if (!context) return null;
   context.font = `400 64px ${fontFamily}`;
-  return context.measureText(text).width;
+  context.textBaseline = 'top';
+  context.fillStyle = '#000';
+  context.fillText(text, 8, 8);
+  return {
+    width: context.measureText(text).width,
+    alpha: context.getImageData(0, 0, canvas.width, canvas.height).data,
+  };
 }
 
 function hasGlyphs(fontFamily: string, text: string): boolean {
-  const fallback = measureTextWidth(`"${MISSING_FONT_FAMILY}", sans-serif`, text);
-  const actual = measureTextWidth(`"${fontFamily}", "${MISSING_FONT_FAMILY}", sans-serif`, text);
-  return Math.abs(actual - fallback) > 0.5;
+  const fallbackFamily = `"${MISSING_FONT_FAMILY}", sans-serif`;
+  const actualFamily = `"${fontFamily}", ${fallbackFamily}`;
+  const fallback = renderText(fallbackFamily, text);
+  const actual = renderText(actualFamily, text);
+  if (!fallback || !actual) return false;
+  if (Math.abs(actual.width - fallback.width) > 0.5) return true;
+
+  let differenceScore = 0;
+  for (let index = 3; index < actual.alpha.length; index += 4) {
+    differenceScore += Math.abs(actual.alpha[index] - fallback.alpha[index]);
+  }
+  return differenceScore > 128;
 }
 
-function systemFontAvailable(family: string): boolean {
-  if (!document.fonts.check(`400 16px "${family}"`, 'AaMm')) return false;
-  return ['AaMmWw0123', '中文测试'].some((sample) => hasGlyphs(family, sample));
+function systemFontAvailable(candidate: FontCandidate): boolean {
+  const family = candidate.systemFamily ?? candidate.family ?? '';
+  if (!family || !document.fonts.check(`400 16px "${family}"`)) return false;
+  return candidate.coverage.every((language) => hasGlyphs(family, COVERAGE_SAMPLES[language]));
+}
+
+function candidateWeightDescription(candidate: FontCandidate): string {
+  const weights = [...new Set((candidate.assets ?? []).map((asset) => asset.weight.trim()).filter(Boolean))];
+  if (weights.length === 0) return 'UI 400 / 500';
+  if (weights.length === 1) {
+    const variableRange = weights[0].match(/^(\d+)\s+(\d+)$/);
+    if (variableRange) return `Axis: ${variableRange[1]}–${variableRange[2]} · UI 400 / 500`;
+  }
+  return `Faces: ${weights.join(' / ')}`;
 }
 
 async function readLocalManifest(): Promise<{ manifest: LocalManifest; error: string | null }> {
@@ -136,9 +171,14 @@ async function loadLocalCandidate(candidate: FontCandidate, localCandidate: Loca
       weight: face.weight,
       ...(face.unicodeRange ? { unicodeRange: face.unicodeRange } : {}),
     });
-    await fontFace.load();
-    document.fonts.add(fontFace);
+    const loadedFace = await fontFace.load();
+    document.fonts.add(loadedFace);
   }));
+
+  const missingLanguage = candidate.coverage.find((language) => (
+    !hasGlyphs(candidateFamily(candidate, language), COVERAGE_SAMPLES[language])
+  ));
+  if (missingLanguage) throw new Error(`loaded font does not cover ${missingLanguage === 'en' ? 'Latin' : 'CJK'} sample text`);
 }
 
 function firstSelectable(
@@ -147,10 +187,6 @@ function firstSelectable(
   statuses: Record<string, FontLabStatus>,
 ): FontCandidate | undefined {
   return candidates.find((candidate) => isSelectable(candidate, language, statuses));
-}
-
-function firstBilingualSelectable(candidates: FontCandidate[], statuses: Record<string, FontLabStatus>): FontCandidate | undefined {
-  return candidates.find((candidate) => isBilingualSelectable(candidate, statuses));
 }
 
 function safeLocalFamily(fileName: string): string {
@@ -169,36 +205,33 @@ const FontProbe: React.FC<{
   message?: string;
 }> = ({ candidate, language, status, message }) => {
   const family = candidateFamily(candidate, language);
-  const coverage = candidate.coverage.length === 2 ? 'EN + ZH' : candidate.coverage[0] === 'en' ? 'EN only' : 'ZH only';
   const renderedFamily = status === 'loaded' || status === 'system' ? family : '—';
+  const axisLabel = language === 'en' ? 'Latin' : 'CJK';
 
   return (
     <div className="pl-font-lab__probe" data-font-lab-probe data-status={status} data-font-lab-rendered-family={renderedFamily}>
       <span className="pl-font-lab__status">Status: {STATUS_LABELS[status]}</span>
-      <span>Rendered: {renderedFamily} · {coverage} · 400 / 500</span>
+      <span>Rendered: {renderedFamily} · {axisLabel} · {candidateWeightDescription(candidate)}</span>
       {message && <span className="pl-font-lab__probe-note">{message}</span>}
     </div>
   );
 };
 
 export const FontLab: React.FC = () => {
-  const { locale } = useLocale();
   const [manualCandidates, setManualCandidates] = useState<FontCandidate[]>([]);
   const [statuses, setStatuses] = useState<Record<string, FontLabStatus>>(initialStatuses);
   const [statusMessages, setStatusMessages] = useState<Record<string, string>>({});
   const [ready, setReady] = useState(false);
-  const [englishFontId, setEnglishFontId] = useState(DEFAULT_FONT_ID);
-  const [chineseFontId, setChineseFontId] = useState(DEFAULT_FONT_ID);
-  const [linked, setLinked] = useState(false);
+  const [latinFontId, setLatinFontId] = useState(DEFAULT_LATIN_FONT_ID);
+  const [cjkFontId, setCjkFontId] = useState(DEFAULT_CJK_FONT_ID);
+  const [activeAxis, setActiveAxis] = useState<FontAxis>('latin');
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const candidates = useMemo(() => [...BASE_CANDIDATES, ...manualCandidates], [manualCandidates]);
-  const activeLanguage: FontLanguage = locale === 'zh-CN' ? 'zh-CN' : 'en';
-  const englishOptions = candidates.filter((candidate) => supportsLanguage(candidate, 'en'));
-  const chineseOptions = candidates.filter((candidate) => supportsLanguage(candidate, 'zh-CN'));
-  const englishFont = candidates.find((candidate) => candidate.id === englishFontId) ?? candidates[0];
-  const chineseFont = candidates.find((candidate) => candidate.id === chineseFontId) ?? candidates[0];
-  const activeFont = activeLanguage === 'en' ? englishFont : chineseFont;
+  const latinOptions = candidates.filter((candidate) => supportsLanguage(candidate, 'en'));
+  const cjkOptions = candidates.filter((candidate) => supportsLanguage(candidate, 'zh-CN'));
+  const latinFont = candidates.find((candidate) => candidate.id === latinFontId);
+  const cjkFont = candidates.find((candidate) => candidate.id === cjkFontId);
 
   useEffect(() => {
     let active = true;
@@ -214,8 +247,7 @@ export const FontLab: React.FC = () => {
         if (candidate.kind === 'bundled') {
           nextStatuses[candidate.id] = 'loaded';
         } else if (candidate.kind === 'system') {
-          const systemFamily = candidate.systemFamily ?? candidate.family ?? '';
-          nextStatuses[candidate.id] = systemFontAvailable(systemFamily) ? 'system' : 'unavailable';
+          nextStatuses[candidate.id] = systemFontAvailable(candidate) ? 'system' : 'unavailable';
           if (nextStatuses[candidate.id] === 'unavailable') nextMessages[candidate.id] = 'This Windows system font is not available.';
         } else {
           const localCandidate = localManifest.candidates[candidate.id];
@@ -262,103 +294,72 @@ export const FontLab: React.FC = () => {
 
   useEffect(() => {
     if (!ready) return;
-    if (linked) {
-      const current = candidates.find((candidate) => candidate.id === englishFontId && isBilingualSelectable(candidate, statuses));
-      const next = current ?? firstBilingualSelectable(candidates, statuses);
-      if (next && (englishFontId !== next.id || chineseFontId !== next.id)) {
-        setEnglishFontId(next.id);
-        setChineseFontId(next.id);
-      }
-      return;
-    }
-
-    const nextEnglish = candidates.find((candidate) => candidate.id === englishFontId && isSelectable(candidate, 'en', statuses))
+    const nextLatin = candidates.find((candidate) => candidate.id === latinFontId && isSelectable(candidate, 'en', statuses))
       ?? firstSelectable(candidates, 'en', statuses);
-    const nextChinese = candidates.find((candidate) => candidate.id === chineseFontId && isSelectable(candidate, 'zh-CN', statuses))
+    const nextCjk = candidates.find((candidate) => candidate.id === cjkFontId && isSelectable(candidate, 'zh-CN', statuses))
       ?? firstSelectable(candidates, 'zh-CN', statuses);
-    if (nextEnglish && nextEnglish.id !== englishFontId) setEnglishFontId(nextEnglish.id);
-    if (nextChinese && nextChinese.id !== chineseFontId) setChineseFontId(nextChinese.id);
-  }, [candidates, chineseFontId, englishFontId, linked, ready, statuses]);
+    if (nextLatin && nextLatin.id !== latinFontId) setLatinFontId(nextLatin.id);
+    if (nextCjk && nextCjk.id !== cjkFontId) setCjkFontId(nextCjk.id);
+  }, [cjkFontId, candidates, latinFontId, ready, statuses]);
 
   useEffect(() => {
     const root = document.documentElement;
-    if (!ready || !activeFont || !isSelectable(activeFont, activeLanguage, statuses)) {
-      root.style.removeProperty('--pl-narrative-override');
-      return;
+    const previousLatin = root.style.getPropertyValue('--pl-font-narrative-latin');
+    const previousLatinPriority = root.style.getPropertyPriority('--pl-font-narrative-latin');
+    const previousCjk = root.style.getPropertyValue('--pl-font-narrative-cjk');
+    const previousCjkPriority = root.style.getPropertyPriority('--pl-font-narrative-cjk');
+
+    root.style.removeProperty('--pl-narrative-override');
+    if (ready && latinFont && cjkFont && isSelectable(latinFont, 'en', statuses) && isSelectable(cjkFont, 'zh-CN', statuses)) {
+      root.style.setProperty('--pl-font-narrative-latin', cssFamily(candidateFamily(latinFont, 'en')));
+      root.style.setProperty('--pl-font-narrative-cjk', cssFamily(candidateFamily(cjkFont, 'zh-CN')));
+    } else {
+      root.style.removeProperty('--pl-font-narrative-latin');
+      root.style.removeProperty('--pl-font-narrative-cjk');
     }
-    root.style.setProperty('--pl-narrative-override', cssFamily(candidateFamily(activeFont, activeLanguage)));
+
     return () => {
-      root.style.removeProperty('--pl-narrative-override');
+      if (previousLatin) root.style.setProperty('--pl-font-narrative-latin', previousLatin, previousLatinPriority);
+      else root.style.removeProperty('--pl-font-narrative-latin');
+      if (previousCjk) root.style.setProperty('--pl-font-narrative-cjk', previousCjk, previousCjkPriority);
+      else root.style.removeProperty('--pl-font-narrative-cjk');
     };
-  }, [activeFont, activeLanguage, ready, statuses]);
+  }, [cjkFont, latinFont, ready, statuses]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!event.altKey || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) return;
       event.preventDefault();
-      const cycleCandidates = candidates.filter((candidate) => (
-        isSelectable(candidate, activeLanguage, statuses) && (!linked || isBilingualSelectable(candidate, statuses))
-      ));
+      const language = axisLanguage(activeAxis);
+      const cycleCandidates = candidates.filter((candidate) => isSelectable(candidate, language, statuses));
       if (cycleCandidates.length < 2) return;
-      const currentId = activeLanguage === 'en' ? englishFontId : chineseFontId;
+      const currentId = activeAxis === 'latin' ? latinFontId : cjkFontId;
       const currentIndex = Math.max(0, cycleCandidates.findIndex((candidate) => candidate.id === currentId));
       const direction = event.key === 'ArrowDown' ? 1 : -1;
       const next = cycleCandidates[(currentIndex + direction + cycleCandidates.length) % cycleCandidates.length];
-      if (linked) {
-        setEnglishFontId(next.id);
-        setChineseFontId(next.id);
-      } else if (activeLanguage === 'en') {
-        setEnglishFontId(next.id);
-      } else {
-        setChineseFontId(next.id);
-      }
+      if (activeAxis === 'latin') setLatinFontId(next.id);
+      else setCjkFontId(next.id);
       setActionMessage(null);
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeLanguage, candidates, chineseFontId, englishFontId, linked, statuses]);
+  }, [activeAxis, candidates, cjkFontId, latinFontId, statuses]);
 
-  const selectFont = (language: FontLanguage, id: string) => {
+  const selectFont = (axis: FontAxis, id: string) => {
+    const language = axisLanguage(axis);
     const candidate = candidates.find((item) => item.id === id);
+    setActiveAxis(axis);
     if (!candidate || !isSelectable(candidate, language, statuses)) return;
-    if (linked) {
-      if (!isBilingualSelectable(candidate, statuses)) {
-        setActionMessage('Link EN / ZH requires a loaded bilingual candidate.');
-        return;
-      }
-      setEnglishFontId(id);
-      setChineseFontId(id);
-    } else if (language === 'en') {
-      setEnglishFontId(id);
-    } else {
-      setChineseFontId(id);
-    }
-    setActionMessage(null);
-  };
-
-  const handleLinkChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (!event.target.checked) {
-      setLinked(false);
-      setActionMessage(null);
-      return;
-    }
-    const current = candidates.find((candidate) => candidate.id === englishFontId && isBilingualSelectable(candidate, statuses));
-    const next = current ?? firstBilingualSelectable(candidates, statuses);
-    if (!next) {
-      setActionMessage('No loaded bilingual candidate is available.');
-      return;
-    }
-    setEnglishFontId(next.id);
-    setChineseFontId(next.id);
-    setLinked(true);
+    if (axis === 'latin') setLatinFontId(id);
+    else setCjkFontId(id);
     setActionMessage(null);
   };
 
   const reset = () => {
-    setEnglishFontId(DEFAULT_FONT_ID);
-    setChineseFontId(DEFAULT_FONT_ID);
-    setLinked(false);
+    setLatinFontId(DEFAULT_LATIN_FONT_ID);
+    setCjkFontId(DEFAULT_CJK_FONT_ID);
+    setActiveAxis('latin');
     setActionMessage(null);
     setLoadError(null);
   };
@@ -371,21 +372,27 @@ export const FontLab: React.FC = () => {
     const family = `ProxyLens Font Lab - ${displayFamily}`;
     setActionMessage(null);
     try {
-      const face = new FontFace(family, await file.arrayBuffer(), { style: 'normal', weight: '400 900' });
-      await face.load();
-      document.fonts.add(face);
-      const hasHan = hasGlyphs(family, '中文');
+      const face = new FontFace(family, await file.arrayBuffer(), { style: 'normal', weight: '400' });
+      const loadedFace = await face.load();
+      document.fonts.add(loadedFace);
+      const hasLatin = hasGlyphs(family, COVERAGE_SAMPLES.en);
+      const hasCjk = hasGlyphs(family, COVERAGE_SAMPLES['zh-CN']);
+      if (!hasLatin && !hasCjk) throw new Error('font does not cover the Font Lab Latin or CJK sample');
+      const coverage: FontLanguage[] = [
+        ...(hasLatin ? ['en' as const] : []),
+        ...(hasCjk ? ['zh-CN' as const] : []),
+      ];
       const id = `manual-${displayFamily.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`;
       const candidate: FontCandidate = {
         id,
         label: `${displayFamily} (local)`,
         kind: 'local',
         family,
-        coverage: hasHan ? ['en', 'zh-CN'] : ['en'],
+        coverage,
       };
       setManualCandidates((current) => [...current, candidate]);
       setStatuses((current) => ({ ...current, [id]: 'loaded' }));
-      setActionMessage(`Loaded ${displayFamily} · ${hasHan ? 'EN + ZH' : 'EN only'}`);
+      setActionMessage(`Loaded ${displayFamily} · ${coverage.map((language) => language === 'en' ? 'Latin' : 'CJK').join(' + ')}`);
     } catch (error: unknown) {
       setActionMessage(error instanceof Error ? error.message : 'Unable to load the local font.');
     }
@@ -394,52 +401,55 @@ export const FontLab: React.FC = () => {
   return (
     <aside className="pl-font-lab" aria-label="Typography Lab">
       <div className="pl-font-lab__title">Typography Lab</div>
-      <div className="pl-font-lab__field">
-        <label htmlFor="font-lab-english">English Narrative</label>
+      <div className="pl-font-lab__field" data-active={activeAxis === 'latin'}>
+        <label htmlFor="font-lab-latin">Latin Narrative</label>
         <div className="pl-font-lab__select-wrap">
-          <select id="font-lab-english" value={englishFontId} onChange={(event) => selectFont('en', event.target.value)}>
-            {englishOptions.map((candidate) => (
-              <option
-                key={candidate.id}
-                value={candidate.id}
-                disabled={!isSelectable(candidate, 'en', statuses) || (linked && !isBilingualSelectable(candidate, statuses))}
-              >
+          <select
+            id="font-lab-latin"
+            value={latinFontId}
+            onFocus={() => setActiveAxis('latin')}
+            onChange={(event) => selectFont('latin', event.target.value)}
+          >
+            {latinOptions.map((candidate) => (
+              <option key={candidate.id} value={candidate.id} disabled={!isSelectable(candidate, 'en', statuses)}>
                 {candidate.label} · {STATUS_LABELS[statuses[candidate.id] ?? 'loading']}
               </option>
             ))}
           </select>
         </div>
-        <FontProbe candidate={englishFont} language="en" status={statuses[englishFont.id] ?? 'loading'} message={statusMessages[englishFont.id]} />
+        {latinFont && <FontProbe candidate={latinFont} language="en" status={statuses[latinFont.id] ?? 'loading'} message={statusMessages[latinFont.id]} />}
       </div>
-      <div className="pl-font-lab__field">
-        <label htmlFor="font-lab-chinese">Chinese Narrative</label>
+      <div className="pl-font-lab__field" data-active={activeAxis === 'cjk'}>
+        <label htmlFor="font-lab-cjk">CJK Narrative</label>
         <div className="pl-font-lab__select-wrap">
-          <select id="font-lab-chinese" value={chineseFontId} onChange={(event) => selectFont('zh-CN', event.target.value)}>
-            {chineseOptions.map((candidate) => (
-              <option
-                key={candidate.id}
-                value={candidate.id}
-                disabled={!isSelectable(candidate, 'zh-CN', statuses) || (linked && !isBilingualSelectable(candidate, statuses))}
-              >
+          <select
+            id="font-lab-cjk"
+            value={cjkFontId}
+            onFocus={() => setActiveAxis('cjk')}
+            onChange={(event) => selectFont('cjk', event.target.value)}
+          >
+            {cjkOptions.map((candidate) => (
+              <option key={candidate.id} value={candidate.id} disabled={!isSelectable(candidate, 'zh-CN', statuses)}>
                 {candidate.label} · {STATUS_LABELS[statuses[candidate.id] ?? 'loading']}
               </option>
             ))}
           </select>
         </div>
-        <FontProbe candidate={chineseFont} language="zh-CN" status={statuses[chineseFont.id] ?? 'loading'} message={statusMessages[chineseFont.id]} />
+        {cjkFont && <FontProbe candidate={cjkFont} language="zh-CN" status={statuses[cjkFont.id] ?? 'loading'} message={statusMessages[cjkFont.id]} />}
       </div>
+      <div className="pl-font-lab__field">
+        <label>Technical / Evidence</label>
+        <div className="pl-font-lab__fixed">JetBrains Mono · fixed</div>
+      </div>
+      <div className="pl-font-lab__focus">Focused: {activeAxis === 'latin' ? 'Latin Narrative' : 'CJK Narrative'}</div>
       <div className="pl-font-lab__actions">
-        <label className="pl-font-lab__link">
-          <input type="checkbox" checked={linked} onChange={handleLinkChange} />
-          Link EN / ZH
-        </label>
         <button type="button" className="pl-font-lab__button" onClick={reset}>Reset</button>
       </div>
       <label className="pl-font-lab__button pl-font-lab__load">
         Load local font
         <input type="file" accept=".ttf,.otf,.woff,.woff2" onChange={handleLocalFont} />
       </label>
-      <div className="pl-font-lab__note">Alt+↑ / Alt+↓ &nbsp;Cycle font</div>
+      <div className="pl-font-lab__note">Alt+↑ / Alt+↓ &nbsp;Cycle focused font</div>
       <div className="pl-font-lab__note">Run <code>npm run fontlab:setup</code> for official local candidates.</div>
       <div className="pl-font-lab__note">Fonts stay outside the build in <code>ui/.font-lab/</code>.</div>
       {loadError && <div className="pl-font-lab__message pl-font-lab__message--error">Setup manifest: {loadError}</div>}
