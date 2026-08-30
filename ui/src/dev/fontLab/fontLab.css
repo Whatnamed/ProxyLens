@@ -1,0 +1,155 @@
+.pl-font-lab {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 100;
+  width: 286px;
+  padding: 12px;
+  border: 1px solid var(--pl-border-strong);
+  border-radius: var(--pl-radius-md);
+  background: var(--pl-surface-raised);
+  box-shadow: var(--pl-overlay-shadow);
+  color: var(--pl-text-primary);
+  font-family: var(--pl-font-narrative);
+  font-size: var(--pl-text-11);
+}
+
+.pl-font-lab__title {
+  margin-bottom: 10px;
+  font-size: var(--pl-text-12);
+  font-weight: var(--pl-font-weight-heading);
+}
+
+.pl-font-lab__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 9px;
+}
+
+.pl-font-lab__field > label {
+  color: var(--pl-text-secondary);
+}
+
+.pl-font-lab__select-wrap {
+  position: relative;
+}
+
+.pl-font-lab__select-wrap::after {
+  content: '⌄';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  color: var(--pl-text-muted);
+  pointer-events: none;
+}
+
+.pl-font-lab select {
+  width: 100%;
+  height: 26px;
+  padding: 0 25px 0 8px;
+  appearance: none;
+  border: 1px solid var(--pl-border);
+  border-radius: var(--pl-radius-sm);
+  background: var(--pl-surface-inset);
+  color: var(--pl-text-primary);
+  font: inherit;
+  line-height: var(--pl-leading-control);
+}
+
+.pl-font-lab select:focus-visible,
+.pl-font-lab button:focus-visible,
+.pl-font-lab input:focus-visible {
+  outline: 2px solid var(--pl-focus-ring);
+  outline-offset: 1px;
+}
+
+.pl-font-lab__probe {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--pl-text-muted);
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-text-10);
+  line-height: var(--pl-leading-mono);
+}
+
+.pl-font-lab__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.pl-font-lab__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--pl-text-secondary);
+  line-height: var(--pl-leading-control);
+}
+
+.pl-font-lab__link input {
+  margin: 0;
+  accent-color: var(--pl-accent);
+}
+
+.pl-font-lab__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--pl-border);
+  border-radius: var(--pl-radius-sm);
+  background: var(--pl-surface-inset);
+  color: var(--pl-text-secondary);
+  font: inherit;
+  line-height: var(--pl-leading-control);
+  cursor: pointer;
+}
+
+.pl-font-lab__button:hover {
+  border-color: var(--pl-border-strong);
+  background: var(--pl-surface-hover);
+  color: var(--pl-text-primary);
+}
+
+.pl-font-lab__load {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.pl-font-lab__load input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.pl-font-lab__note,
+.pl-font-lab__message {
+  margin-top: 7px;
+  color: var(--pl-text-muted);
+  font-size: var(--pl-text-10);
+  line-height: var(--pl-leading-helper);
+}
+
+.pl-font-lab__note code {
+  font-family: var(--pl-font-mono);
+}
+
+.pl-font-lab__message {
+  color: var(--pl-status-fresh);
+}
+
+.pl-font-lab__message--error {
+  color: var(--pl-status-stale);
+}

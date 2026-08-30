@@ -7,7 +7,7 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure；focused UI polish、EN / 中文 locale、overlay accessibility 与确定性 typography asset Closure 已完成，仍等待完整真实多状态视觉验收。
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure；focused UI polish、EN / 中文 locale、overlay accessibility、确定性 typography asset 与 compact inline alignment Closure 已完成，仍等待完整真实多状态视觉验收。
 - **活动分支**：`experiment/qwen38max-directed-ui`
 - **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
@@ -26,6 +26,7 @@
 - ErrorBoundary 与 Query/API 可恢复状态。
 - Design System family overlays：自定义 date/time picker、network/page-size listbox，共用 surface / border / radius / selected / hover / focus / shadow 语言；
 - Overlay accessibility：Select 使用单一 listbox focus + `aria-activedescendant`；DatePicker 使用 `grid → row → gridcell` 与单一 roving day focus，支持方向键跨月移动和 focus-out close；
+- Compact inline alignment：固定高度控件统一 optical center；多列、因果链和事件时间线统一 first-baseline；marker 对齐首行；共用 `--pl-leading-control` 与 compact label/text-box progressive enhancement；
 - 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译。
 - 确定性 typography：仓库内 bundled IBM Plex Sans SC、JetBrains Mono 的 400/500 WOFF2；EN / 中文共用 IBM Plex Sans SC Narrative family 与同一套 typography metrics，系统字体只作最后 fallback，不要求系统安装。
 
@@ -57,6 +58,8 @@
 - Locale dictionary parity：EN / 中文各 370 个 key，静态 UI translation keys 无缺失；
 - Typography asset build：4 个 WOFF2、7,982,696 bytes（约 7.98MB / 7.61MiB，其中 IBM SC 约 7.80MB）；无 TTF/WOFF/italic 或额外字重；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；
+- Compact inline alignment：Time Range / Route / badge / chip / network token / status / legend，以及 Causal Path / Accounting Events 的 first-baseline 规则已在 Light / Dark、EN / 中文浏览器 fallback 中核验；
+- Temporary Typography Lab：仅 DEV + `?fontlab=1` 动态加载；production build 不包含面板、候选字体或本地字体目录引用；
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 
 ### Rendered visual QA
@@ -77,6 +80,8 @@
 - 824px 保底窗口无页面级横向溢出，1280px 桌面窗口完成布局几何检查。
 - 本轮确定性字体渲染：EN / 中文标题与控件均由 CDP 识别为 `IBM Plex Sans SC Medium`，技术时间证据为 `JetBrains Mono Regular`；字体加载状态为 `loaded`。
 - 本轮 1280×800 与 1600×1000 的 Overview / History / Coverage、EN / 中文、Light / Dark 共 24 个截图无页面级横向溢出；EN / 中文共用 body 1.45、heading 1.35、caption 1.45、helper 1.52、mono 1.40 与标题副标题 6px 节奏，未保留 locale-specific structural typography。
+- 本轮 compact alignment focused QA：DatePicker、network/page-size listbox、segmented controls、RouteBadge / EvidenceChip / Network token / StatusIndicator / Coverage legend、Causal Path 与 Accounting Events 均通过实际渲染的 optical center / first-baseline / marker 首行检查；未新增 locale-specific 或 font-specific offset。
+- Temporary Typography Lab：DEV URL `http://127.0.0.1:1420/?fontlab=1` 可独立选择 EN / ZH Narrative 字体、Link、Reset 和加载本地 `.ttf/.otf/.woff/.woff2`；production preview 的 `?fontlab=1` 未显示面板，产物仅保留正式 IBM Plex Sans SC 与 JetBrains Mono 字体。
 
 仍待人工验收：
 

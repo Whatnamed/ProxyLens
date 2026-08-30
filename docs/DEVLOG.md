@@ -156,6 +156,44 @@ Design System 仍保持 Draft，未标记 Freeze。
 
 ---
 
+## 2026-08-30 — Compact inline alignment and temporary typography lab
+
+**Scope:** 在既有 Directed UI 与共享 Narrative typography 基线之上，完成一轮
+compact control / baseline alignment polish，并增加仅开发态的临时字体对比工具；不改变
+产品语义、Query API、Collector、Storage 或正式 Design System 的视觉方向。
+
+### Root cause
+
+- 字体 family 已统一，但 compact 控件仍依赖匿名文本节点与 `normal` line box；同一行的
+  segmented、badge、chip、status、network token 与 legend 因此出现轻微 optical center 差异；
+- Causal Path 与 Accounting Events 使用 marker 的固定 `top` 偏移，换行后 marker 不能稳定
+  对齐首行；Network token 仍有独立的 inline-block padding 观感。
+
+### Completed
+
+- 新增 `--pl-leading-control: 1.20` 与 `.pl-compact-label`，统一 compact label 的 leading、
+  optical center 与 `text-box` progressive enhancement；保留无 `text-box` 浏览器的 fallback，
+  未增加控件高度；
+- 固定高度控件使用 optical center，多列 / timeline 使用 first-baseline，因果链与事件 marker
+  对齐内容首行；移除 Causal Path / Accounting Events 的 per-location `top` / padding offset；
+- DatePicker、network/page-size listbox、segmented、badge / chip / token / status / legend
+  落入同一套 compact typography 与 surface family；
+- 增加 DEV-only `?fontlab=1` Typography Lab：EN / ZH 独立选字体、Link、Reset、加载本地字体，
+  只覆盖 Narrative font-family；technical / evidence 始终保持 JetBrains Mono，候选字体不入库；
+- 真实浏览器 fallback 下完成 Light / Dark、EN / 中文的 Overview / History / Inspector /
+  Coverage 与 overlay focused QA；production build 未包含 Font Lab 面板或候选字体。
+
+### Validation state
+
+- `npm.cmd test`：42 项通过；`npm.cmd run build`：通过；
+- 浏览器 CDP / screenshot：compact 控件 optical center、Causal Path / Accounting Events
+  first-baseline、marker 首行、Coverage legend 与 Light / Dark / EN / 中文状态均通过；
+- production preview `?fontlab=1`：面板数量为 0；`dist` 仅包含正式 IBM Plex Sans SC 与
+  JetBrains Mono WOFF2；
+- 完整 Tauri 多 fixture visual Freeze 仍 PENDING；Design System 仍保持 Draft，未标记 Freeze。
+
+---
+
 ## Earlier milestones
 
 更早的 Phase 0–2 与 Phase 3A 过程已有 `ROADMAP.md`、`STATUS.md` 历史版本、`docs/decisions/`、专项 handoff 与 Git commit 记录支撑。

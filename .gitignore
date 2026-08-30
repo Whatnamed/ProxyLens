@@ -38,3 +38,6 @@ ui/dist/
 ui/src-tauri/target/
 ui/src-tauri/binaries/
 
+# Temporary local-only typography lab fonts
+ui/.font-lab/
+
