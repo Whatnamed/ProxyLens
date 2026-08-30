@@ -5,6 +5,26 @@
 
 ---
 
+## 2026-08-31 — Focused CJK Font Lab candidate supplement
+
+**Scope:** 在保持正式 Manrope + OPPO Sans 4.0 评估配对、脚本轴模型、默认值与既有 Design System 规则不变的前提下，补充 4 个 CJK 候选；不进入正式产品构建，不改变业务数据或技术证据呈现。
+
+### Completed
+
+- 从官方 Glow Sans v0.93 release 增加 Glow Sans SC Normal 与 Condensed，均使用真实 `Regular 400` / `Book 500` OTF face，字体文件按 SIL Open Font License 1.1 记录；
+- 从官方 Sarasa Gothic v1.0.41 release 增加 Sarasa Gothic UI SC，使用 UI SC TTF 的真实 `Regular 400` / `SemiBold 600` face，诚实保留无 500 face 的事实，字体文件按 SIL Open Font License 1.1 记录；
+- 从官方 Alibaba Fonts CDN 增加 Alibaba PuHuiTi 3.0，使用真实 `Regular 400` / `Medium 500` WOFF2 face；现有 setup downloader 仅增加可选 request headers 透传以满足官方 `Referer` 要求；官方站点的商用说明已记录，但 standalone redistribution / bundling 条款仍不够明确，因此保持 dev-only，不提交二进制；
+- 新候选仅进入 CJK selector；Latin 默认仍为 Manrope，CJK 默认仍为 OPPO Sans 4.0，JetBrains Mono 继续固定用于 Technical / Evidence；未修改 marker alignment、layout 或正式 Design System。
+
+### Validation state
+
+- `npm.cmd run fontlab:setup`：14 个 local candidates 准备完成，新增字体文件均留在 ignored `ui/.font-lab/`；
+- Playwright CLI：4 个新候选均可选择，`document.fonts` status 为 `loaded`，Han glyph probe 通过，实际 faces 分别为 `400 / 500`、`400 / 500`、`400 / 600`、`400 / 500`，`font-synthesis` 为 `none`；Manrope Latin 与 JetBrains Mono technical family 保持不变；
+- Alt+Down / Alt+Up 从 OPPO Sans 4.0 往返经过 4 个新增候选；EN / 中文、Light / Dark 与 390×844 / 1280×800 viewport 均能渲染；
+- `npm.cmd test`：42 项通过；`npm.cmd run build`：通过；production `dist` 不包含新候选、Font Lab manifest 或 `.font-lab` 资源。
+
+---
+
 ## 2026-08-31 — Script-aware narrative pairing and primary-first-line marker alignment
 
 **Scope:** 在既有 Directed UI 与正式 IBM Plex Sans SC / JetBrains Mono 基线之上，

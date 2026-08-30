@@ -271,6 +271,126 @@
       ]
     },
     {
+      "id": "glow-sans-sc-normal",
+      "label": "Glow Sans SC Normal",
+      "kind": "local",
+      "family": "ProxyLens Font Lab - Glow Sans SC Normal",
+      "coverage": ["zh-CN"],
+      "license": "SIL Open Font License 1.1",
+      "licenseUrl": "https://github.com/welai/glow-sans/blob/master/OFL.txt",
+      "sourceUrl": "https://github.com/welai/glow-sans/releases/tag/v0.93",
+      "redistribution": "Dev-only local evaluation; preserve the SIL OFL notice and do not commit or redistribute the font file from the ProxyLens repository.",
+      "assets": [
+        {
+          "type": "archive",
+          "archiveUrl": "https://github.com/welai/glow-sans/releases/download/v0.93/GlowSansSC-Normal-v0.93.zip",
+          "entry": "GlowSansSC-Normal-Regular.otf",
+          "file": "glow-sans-sc-normal-regular.otf",
+          "weight": "400",
+          "format": "opentype"
+        },
+        {
+          "type": "archive",
+          "archiveUrl": "https://github.com/welai/glow-sans/releases/download/v0.93/GlowSansSC-Normal-v0.93.zip",
+          "entry": "GlowSansSC-Normal-Book.otf",
+          "file": "glow-sans-sc-normal-book.otf",
+          "weight": "500",
+          "format": "opentype"
+        }
+      ]
+    },
+    {
+      "id": "glow-sans-sc-condensed",
+      "label": "Glow Sans SC Condensed",
+      "kind": "local",
+      "family": "ProxyLens Font Lab - Glow Sans SC Condensed",
+      "coverage": ["zh-CN"],
+      "license": "SIL Open Font License 1.1",
+      "licenseUrl": "https://github.com/welai/glow-sans/blob/master/OFL.txt",
+      "sourceUrl": "https://github.com/welai/glow-sans/releases/tag/v0.93",
+      "redistribution": "Dev-only local evaluation; preserve the SIL OFL notice and do not commit or redistribute the font file from the ProxyLens repository.",
+      "assets": [
+        {
+          "type": "archive",
+          "archiveUrl": "https://github.com/welai/glow-sans/releases/download/v0.93/GlowSansSC-Condensed-v0.93.zip",
+          "entry": "GlowSansSC-Condensed-Regular.otf",
+          "file": "glow-sans-sc-condensed-regular.otf",
+          "weight": "400",
+          "format": "opentype"
+        },
+        {
+          "type": "archive",
+          "archiveUrl": "https://github.com/welai/glow-sans/releases/download/v0.93/GlowSansSC-Condensed-v0.93.zip",
+          "entry": "GlowSansSC-Condensed-Book.otf",
+          "file": "glow-sans-sc-condensed-book.otf",
+          "weight": "500",
+          "format": "opentype"
+        }
+      ]
+    },
+    {
+      "id": "sarasa-gothic-ui-sc",
+      "label": "Sarasa Gothic UI SC",
+      "kind": "local",
+      "family": "ProxyLens Font Lab - Sarasa Gothic UI SC",
+      "coverage": ["zh-CN"],
+      "license": "SIL Open Font License 1.1",
+      "licenseUrl": "https://github.com/be5invis/Sarasa-Gothic/blob/main/LICENSE",
+      "sourceUrl": "https://github.com/be5invis/Sarasa-Gothic/releases/tag/v1.0.41",
+      "redistribution": "Dev-only local evaluation; preserve the SIL OFL notice and do not commit or redistribute the font file from the ProxyLens repository.",
+      "assets": [
+        {
+          "type": "archive",
+          "archiveUrl": "https://github.com/be5invis/Sarasa-Gothic/releases/download/v1.0.41/SarasaUiSC-TTF-1.0.41.7z",
+          "entry": "SarasaUiSC-Regular.ttf",
+          "file": "sarasa-ui-sc-regular.ttf",
+          "weight": "400",
+          "format": "truetype"
+        },
+        {
+          "type": "archive",
+          "archiveUrl": "https://github.com/be5invis/Sarasa-Gothic/releases/download/v1.0.41/SarasaUiSC-TTF-1.0.41.7z",
+          "entry": "SarasaUiSC-SemiBold.ttf",
+          "file": "sarasa-ui-sc-semibold.ttf",
+          "weight": "600",
+          "format": "truetype"
+        }
+      ]
+    },
+    {
+      "id": "alibaba-puhuiti-3",
+      "label": "Alibaba PuHuiTi 3.0",
+      "kind": "local",
+      "family": "ProxyLens Font Lab - Alibaba PuHuiTi 3.0",
+      "coverage": ["zh-CN"],
+      "license": "Alibaba Fonts official commercial-use terms (PuHuiTi 3.0)",
+      "licenseUrl": "https://www.alibabafonts.com/",
+      "sourceUrl": "https://www.alibabafonts.com/",
+      "redistribution": "Dev-only local evaluation. The official site states perpetual free commercial use; standalone redistribution and bundling terms are not independently explicit here, so do not commit or redistribute the binary.",
+      "assets": [
+        {
+          "type": "file",
+          "url": "https://fonts.alibabadesign.com/AlibabaPuHuiTi-3/AlibabaPuHuiTi-3-55-Regular/AlibabaPuHuiTi-3-55-Regular.woff2",
+          "file": "alibaba-puhuiti-3-55-regular.woff2",
+          "weight": "400",
+          "format": "woff2",
+          "headers": {
+            "Referer": "https://www.alibabafonts.com/"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://fonts.alibabadesign.com/AlibabaPuHuiTi-3/AlibabaPuHuiTi-3-65-Medium/AlibabaPuHuiTi-3-65-Medium.woff2",
+          "file": "alibaba-puhuiti-3-65-medium.woff2",
+          "weight": "500",
+          "format": "woff2",
+          "headers": {
+            "Referer": "https://www.alibabafonts.com/"
+          }
+        }
+      ]
+    },
+    {
       "id": "microsoft-yahei-ui",
       "label": "Microsoft YaHei UI",
       "kind": "system",

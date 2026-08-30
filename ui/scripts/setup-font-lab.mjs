@@ -25,9 +25,12 @@ async function isFile(filePath) {
   }
 }
 
-async function fetchBytes(url) {
+async function fetchBytes(url, requestHeaders = {}) {
   const response = await fetch(url, {
-    headers: { 'User-Agent': 'ProxyLens-FontLab-Setup' },
+    headers: {
+      'User-Agent': 'ProxyLens-FontLab-Setup',
+      ...requestHeaders,
+    },
     redirect: 'follow',
   });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
@@ -45,10 +48,10 @@ async function fetchBytes(url) {
   return bytes;
 }
 
-async function ensureDownload(url, destination) {
+async function ensureDownload(url, destination, requestHeaders = {}) {
   if (await isFile(destination)) return;
   const partial = `${destination}.part`;
-  const bytes = await fetchBytes(url);
+  const bytes = await fetchBytes(url, requestHeaders);
   await writeFile(partial, bytes);
   await rename(partial, destination);
 }
@@ -95,7 +98,7 @@ function assetFace(asset) {
 
 async function prepareFileAsset(asset) {
   const destination = path.join(fontLabDir, asset.file);
-  await ensureDownload(asset.url, destination);
+  await ensureDownload(asset.url, destination, asset.headers);
   return assetFace(asset);
 }
 

@@ -28,7 +28,7 @@
 - Overlay accessibility：Select 使用单一 listbox focus + `aria-activedescendant`；DatePicker 使用 `grid → row → gridcell` 与单一 roving day focus，支持方向键跨月移动和 focus-out close；
 - Compact inline alignment：固定高度控件统一 optical center；多列、因果链和事件时间线让 key/timestamp 与 primary content 共用 first-baseline；Status 的 marker 对齐 primary label，Causal Path / Accounting Events 的 marker 对齐 primary 首行，secondary 内容独立下沉，连接线位于 marker 下方；不使用 optical-shift token，共用 `--pl-leading-control` 与 compact label/text-box progressive enhancement；
 - 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译。
-- 确定性 typography：正式产品继续 bundled IBM Plex Sans SC、JetBrains Mono 的 400/500 WOFF2；Narrative 以 Latin/CJK script axis 组合，正式默认两轴均为 IBM，系统字体只作最后 fallback，不要求系统安装；DEV-only Font Lab 可独立预览 Manrope Latin + OPPO Sans 4.0 CJK，不进入正式产物。
+- 确定性 typography：正式产品继续 bundled IBM Plex Sans SC、JetBrains Mono 的 400/500 WOFF2；Narrative 以 Latin/CJK script axis 组合，正式默认两轴均为 IBM，系统字体只作最后 fallback，不要求系统安装；DEV-only Font Lab 保持 Manrope Latin + OPPO Sans 4.0 CJK 默认配对，并额外提供 4 个仅供候选评估的 CJK 字体，不进入正式产物。
 
 ### 独立审查 Closure 已完成
 
@@ -83,7 +83,7 @@
 - 本轮 1280×800 与 1600×1000 的 Overview / History / Coverage、EN / 中文、Light / Dark 共 24 个截图无页面级横向溢出；EN / 中文共用 body 1.45、heading 1.35、caption 1.45、helper 1.52、mono 1.40 与标题副标题 6px 节奏，未保留 locale-specific structural typography。
 - 本轮 primary-first-line alignment correction：不是 1px polish；DatePicker、network/page-size listbox、segmented controls、RouteBadge / EvidenceChip / Network token / StatusIndicator / Coverage legend、Causal Path 与 Accounting Events 均通过实际渲染截图与首行关系检查；marker 不再由 key/timestamp 或整块内容决定，未新增 locale-specific 或 font-specific offset。
 - 本轮 marker closure：Causal Path 的 Process / Destination secondary path/IP 不影响 marker，Rule / Top policy / Proxy chain / Egress 保持单一 primary；Accounting Events 的规则、代理、流量与 evidence chip 独立下沉；连接线按 primary 首行 marker center 分段，hollow marker 的 surface fill 遮蔽连接线。
-- Temporary Typography Lab：DEV URL `http://127.0.0.1:1420/?fontlab=1` 可独立选择 `Latin Narrative` / `CJK Narrative`、Reset 和加载本地 `.ttf/.otf/.woff/.woff2`；本轮已从官方来源实际准备 10 个 local candidates，浏览器 `document.fonts` 全部加载成功，Alt+↑ / Alt+↓ 只循环当前聚焦脚本轴并跳过 unavailable；production build 的 `?fontlab=1` 未显示面板，产物仅保留正式 IBM Plex Sans SC 与 JetBrains Mono 字体。
+- Temporary Typography Lab：DEV URL `http://127.0.0.1:1420/?fontlab=1` 可独立选择 `Latin Narrative` / `CJK Narrative`、Reset 和加载本地 `.ttf/.otf/.woff/.woff2`；本轮从官方来源准备 14 个 local candidates，新增 Glow Sans SC Normal / Condensed、Sarasa Gothic UI SC、Alibaba PuHuiTi 3.0 均可选，`document.fonts` 与代表性 Han glyph probe 均通过，Alt+↑ / Alt+↓ 只循环当前聚焦脚本轴并跳过 unavailable；production build 的 `?fontlab=1` 未显示面板，产物仅保留正式 IBM Plex Sans SC 与 JetBrains Mono 字体。
 
 仍待人工验收：
 
