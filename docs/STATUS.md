@@ -26,9 +26,9 @@
 - ErrorBoundary 与 Query/API 可恢复状态。
 - Design System family overlays：自定义 date/time picker、network/page-size listbox，共用 surface / border / radius / selected / hover / focus / shadow 语言；
 - Overlay accessibility：Select 使用单一 listbox focus + `aria-activedescendant`；DatePicker 使用 `grid → row → gridcell` 与单一 roving day focus，支持方向键跨月移动和 focus-out close；
-- Compact inline alignment：固定高度控件统一 optical center；多列、因果链和事件时间线统一 first-baseline；共享 optical marker anchor 对齐首行并使用单一 `--pl-marker-optical-shift`，连接线位于 marker 下方；共用 `--pl-leading-control` 与 compact label/text-box progressive enhancement；
+- Compact inline alignment：固定高度控件统一 optical center；多列、因果链和事件时间线统一 first-baseline；Status、Causal Path、Accounting Events 的 marker 都挂在相邻文本 anchor 上，连接线位于 marker 下方，不使用 optical-shift token；共用 `--pl-leading-control` 与 compact label/text-box progressive enhancement；
 - 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译。
-- 确定性 typography：仓库内 bundled IBM Plex Sans SC、JetBrains Mono 的 400/500 WOFF2；EN / 中文共用 IBM Plex Sans SC Narrative family 与同一套 typography metrics，系统字体只作最后 fallback，不要求系统安装。
+- 确定性 typography：正式产品继续 bundled IBM Plex Sans SC、JetBrains Mono 的 400/500 WOFF2；Narrative 以 Latin/CJK script axis 组合，正式默认两轴均为 IBM，系统字体只作最后 fallback，不要求系统安装；DEV-only Font Lab 可独立预览 Manrope Latin + OPPO Sans 4.0 CJK，不进入正式产物。
 
 ### 独立审查 Closure 已完成
 
@@ -78,11 +78,12 @@
 - Custom date/time：日期选择、24 小时输入、非法时间提示、Apply 前后状态、日期 grid 方向键/跨月移动与 Tab 离开关闭；
 - Network / page size：统一 listbox 打开、选中、`aria-activedescendant` 更新、Tab 离开关闭与值更新；
 - 824px 保底窗口无页面级横向溢出，1280px 桌面窗口完成布局几何检查。
-- 本轮确定性字体渲染：EN / 中文标题与控件均由 CDP 识别为 `IBM Plex Sans SC Medium`，技术时间证据为 `JetBrains Mono Regular`；字体加载状态为 `loaded`。
+- 本轮正式产物字体渲染：EN / 中文标题与控件均由 CDP 识别为 `IBM Plex Sans SC Medium`，技术时间证据为 `JetBrains Mono Regular`；字体加载状态为 `loaded`。
+- 本轮 DEV script-pair QA：`?fontlab=1` 同时应用 `Manrope` Latin 与 `OPPO Sans 4.0` CJK；CDP Rendered Fonts 在混合样本中分别识别两套 family，技术样本仍为 `JetBrains Mono`；OPPO 变量轴按官方包核验为 `100–700`，400/500 为命名实例；OPPO release packaging 仍 pending。
 - 本轮 1280×800 与 1600×1000 的 Overview / History / Coverage、EN / 中文、Light / Dark 共 24 个截图无页面级横向溢出；EN / 中文共用 body 1.45、heading 1.35、caption 1.45、helper 1.52、mono 1.40 与标题副标题 6px 节奏，未保留 locale-specific structural typography。
-- 本轮 compact alignment focused QA：DatePicker、network/page-size listbox、segmented controls、RouteBadge / EvidenceChip / Network token / StatusIndicator / Coverage legend、Causal Path 与 Accounting Events 均通过实际渲染的 optical center / first-baseline / marker 首行检查；未新增 locale-specific 或 font-specific offset。
+- 本轮 compact alignment focused QA：DatePicker、network/page-size listbox、segmented controls、RouteBadge / EvidenceChip / Network token / StatusIndicator / Coverage legend、Causal Path 与 Accounting Events 均通过实际渲染的 optical center / first-baseline / marker 首行检查；marker 结构使用相邻文本 anchor，未新增 locale-specific 或 font-specific offset。
 - 本轮 marker closure：在两行/一行混合的 Causal Path 中，连接线按相邻 step 的共享首行 optical center 分段，首尾自然终止；hollow marker 的 surface fill 遮蔽连接线，未再使用列表整体固定 top/bottom。
-- Temporary Typography Lab：DEV URL `http://127.0.0.1:1420/?fontlab=1` 可独立选择 EN / ZH Narrative 字体、Link、Reset 和加载本地 `.ttf/.otf/.woff/.woff2`；本轮已从官方来源实际准备 10 个 local candidates，浏览器 `document.fonts` 全部加载成功，Alt+↑ / Alt+↓ 会按当前 locale 循环并跳过 unavailable；production build 的 `?fontlab=1` 未显示面板，产物仅保留正式 IBM Plex Sans SC 与 JetBrains Mono 字体。
+- Temporary Typography Lab：DEV URL `http://127.0.0.1:1420/?fontlab=1` 可独立选择 `Latin Narrative` / `CJK Narrative`、Reset 和加载本地 `.ttf/.otf/.woff/.woff2`；本轮已从官方来源实际准备 10 个 local candidates，浏览器 `document.fonts` 全部加载成功，Alt+↑ / Alt+↓ 只循环当前聚焦脚本轴并跳过 unavailable；production build 的 `?fontlab=1` 未显示面板，产物仅保留正式 IBM Plex Sans SC 与 JetBrains Mono 字体。
 
 仍待人工验收：
 

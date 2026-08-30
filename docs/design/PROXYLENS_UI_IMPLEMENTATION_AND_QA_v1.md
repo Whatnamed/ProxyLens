@@ -291,8 +291,10 @@ Check:
 
 - Bundle only the canonical normal WOFF2 weights required by the UI: 400 and
   500;
-- use IBM Plex Sans SC for the shared English/Chinese narrative layer and
-  JetBrains Mono for technical/evidence values;
+- use the script-aware Narrative composition (`--pl-font-narrative-latin` for
+  Latin glyphs and `--pl-font-narrative-cjk` for Han/CJK glyphs); formal
+  production defaults resolve both axes to IBM Plex Sans SC, while JetBrains
+  Mono remains the technical/evidence family;
 - keep system fonts as last-resort fallbacks; do not require a system-wide
   install or a runtime font CDN;
 - verify actual rendered platform fonts after `document.fonts.ready` using
@@ -318,16 +320,18 @@ Verify the alignment model by category:
   are optically centered;
 - Causal Path, key/value lists and Accounting Events: time/key and content
   share the first baseline;
-- causal/timeline markers align to the optical center of the first visible line
-  of wrapped content, using the shared marker primitive; hollow markers mask
-  the connector and the connector never renders over the dot;
+- causal/timeline markers are children of the adjacent text anchor: Causal
+  Path `(marker + key) | value`, Accounting Events `(marker + timestamp) |
+  body`; they align to that compact first-line anchor, never the full wrapped
+  block; hollow markers mask the connector and the connector never renders
+  over the dot;
 - English and Simplified Chinese use the same leading and geometry.
 
-Do not accept a fix that relies on a locale-, font- or string-specific top
-padding, pixel offset or transform. A shared primitive-level marker correction
-is acceptable when it is applied identically across locales, fonts and strings.
-`text-box: trim-both text` may be tested as progressive enhancement, but the
-fallback must remain correct when unsupported.
+Do not accept a fix that relies on a locale-, font-, string- or page-specific
+top padding, pixel offset or transform. Marker placement must come from the
+adjacent anchor layout; there is no shared optical-shift token. `text-box:
+trim-both text` may be tested as progressive enhancement, but the fallback must
+remain correct when unsupported.
 
 ---
 
@@ -346,8 +350,9 @@ Verify:
 - opening a DatePicker keeps one day gridcell tab stop, Arrow keys move by day/week (including across months), Home/End move within the row, and Tab closes it;
 - switching EN / 中文 updates visible UI copy immediately and survives reload;
 - date/time display follows the active locale while raw technical values remain unchanged.
-- IBM Plex Sans SC is the actual rendered family for both English and Chinese
-  narrative UI, and JetBrains Mono is the actual rendered family for evidence;
+- the formal production build renders IBM Plex Sans SC for both narrative
+  script axes and JetBrains Mono for evidence; DEV Typography Lab may be used
+  to inspect an independent Manrope Latin + OPPO Sans 4.0 CJK candidate pair;
 - the 1280×800 and 1600×1000 matrix is checked for Overview, History +
   Inspector and Coverage in EN/ZH and Light/Dark.
 

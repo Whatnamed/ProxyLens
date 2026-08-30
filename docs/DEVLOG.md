@@ -5,6 +5,51 @@
 
 ---
 
+## 2026-08-31 — Script-aware narrative pairing and adjacent marker anchors
+
+**Scope:** 在既有 Directed UI 与正式 IBM Plex Sans SC / JetBrains Mono 基线之上，
+完成一轮 typography script pairing 与 Causal Path / Accounting Events / Status
+marker 结构打磨；不改变产品语义、布局方向、Query API、Collector 或 Storage。
+
+### Root causes
+
+- Font Lab 仍按 UI locale 切换整套 Narrative family，English / Chinese selector
+  与 locale 绑定，无法真实评估 Latin 与 CJK 的独立脚本配对；OPPO Sans 4.0
+  manifest 还把变量字体错误声明成单一 400 face；
+- Causal Path 与 Accounting Events 的 marker 仍是独立 line-slot，marker 的
+  位置和 connector 受 multiline value / row baseline 影响；Status 也没有显式
+  的相邻文本 anchor 结构。
+
+### Completed
+
+- Narrative token 改为 Latin / CJK 两个逻辑轴与一个 composed family；正式产品
+  默认两轴均为 IBM Plex Sans SC，DEV Font Lab 默认用 Manrope Latin + OPPO Sans
+  4.0 CJK，JetBrains Mono 保持 Technical / Evidence 固定；locale 不再驱动字体；
+- Font Lab 改为两个始终同时生效的脚本 selector，Alt+↑ / Alt+↓ 只循环当前
+  focused axis；状态通过实际字体加载与代表性 Latin/CJK glyph 渲染检查，卸载/失败
+  候选不进入 cycle；
+- 依据官方 OPPO 4.0 包 metadata 修正变量范围为 `100–700`，明确 Regular 400、
+  Medium 500 为同一变量轴命名实例；正式 release packaging 仍 pending；
+- Status、Causal Path、Accounting Events 改为相邻文本 anchor，保留原有密度、
+  connector 层级与语义颜色，并移除不再需要的 shared optical-shift token；
+- Design System、token reference、component pattern、implementation QA、
+  `STATUS.md` 与本日志同步为 script-aware typography 和 adjacent-anchor 规则。
+
+### Validation state
+
+- `npm.cmd test`：42 项通过；`npm.cmd run build`：通过；
+- `npm.cmd run fontlab:setup`：10 个 local candidates 准备完成；
+- Playwright CLI + CDP Rendered Fonts：混合样本分别识别 Manrope / OPPO Sans 4.0，
+  technical sample 识别 JetBrains Mono；Light / Dark、EN / 中文切换保持脚本配对，
+  `font-synthesis` 为 `none`；
+- 实际布局测量：Status marker 与 label、Accounting Event marker 与 timestamp
+  中心一致；Causal marker 与 key 处于同一 adjacent anchor；单行/多行值未按整块
+  高度定位 marker；
+- 完整 Tauri 多 fixture visual Freeze 仍 PENDING；OPPO 生产打包仍需单独 license
+  review。
+
+---
+
 ## 2026-08-29 — Phase 3B/C Directed UI Engineering Closure
 
 **Branch:** `experiment/qwen38max-directed-ui`  

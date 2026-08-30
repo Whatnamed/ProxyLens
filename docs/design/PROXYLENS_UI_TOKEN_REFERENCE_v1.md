@@ -257,9 +257,12 @@ not separate brown/blue/gray blocks.
 # 7. Typography tokens
 
 ```css
-/* Bundled canonical families; system fonts are last-resort fallbacks. */
+/* Script-aware composition; formal production defaults use IBM on both axes. */
+--pl-font-narrative-latin: "IBM Plex Sans SC";
+--pl-font-narrative-cjk: "IBM Plex Sans SC";
 --pl-font-narrative:
-  "IBM Plex Sans SC",
+  var(--pl-font-narrative-latin),
+  var(--pl-font-narrative-cjk),
   "Microsoft YaHei",
   system-ui,
   sans-serif;
@@ -274,9 +277,12 @@ not separate brown/blue/gray blocks.
   monospace;
 ```
 
-English and Simplified Chinese share one Narrative family and one typography
-metric set. Locale changes copy and locale-aware formatting; it does not add a
-font, size, weight, leading, letter-spacing, padding or spacing override.
+`--pl-font-narrative` composes a Latin and a CJK axis by glyph coverage rather
+than by UI locale. Formal production defaults resolve both axes to IBM Plex
+Sans SC. Locale changes copy and locale-aware formatting; it does not add a
+font, size, weight, leading, letter-spacing, padding or spacing override. The
+DEV-only Font Lab may preview Manrope + OPPO Sans 4.0 as a visual candidate;
+those fonts are not frozen or bundled production assets.
 
 Typography roles:
 
@@ -291,7 +297,6 @@ Typography roles:
 --pl-leading-helper        1.52
 --pl-leading-mono          1.40
 --pl-leading-control       1.20
---pl-marker-optical-shift -0.08em
 --pl-letter-spacing-body   normal
 --pl-letter-spacing-heading -0.01em
 --pl-letter-spacing-eyebrow 0.04em
@@ -306,12 +311,12 @@ optical centering inside fixed-height primitives; it does not change their
 heights or spacing.
 
 Multi-column key/value rows and evidence timelines align to the first baseline.
-Their shared optical marker anchor follows the first line of content, even when
-the value wraps. The dot is centered in that first-line slot and uses the one
-shared `--pl-marker-optical-shift` correction; it is not aligned to the full
-multiline block. Connector segments are drawn behind the marker, and the
-hollow marker surface masks the segment. Do not compensate for a locale or font
-with a local top padding, pixel offset or `translateY`. Where supported,
+Their marker is a child of the adjacent text anchor: `(marker + key) | value`
+for Causal Path and `(marker + timestamp) | body` for Accounting Events. The
+dot is centered against that compact anchor, not the full multiline block.
+Connector segments are drawn behind the marker, and the hollow marker surface
+masks the segment. There is no optical-shift token and no locale-, font- or
+string-specific `top`, padding or `translateY` correction. Where supported,
 `text-box: trim-both text` is progressive enhancement only; the explicit
 leading and layout alignment are the fallback.
 

@@ -213,16 +213,16 @@ All compact primitives share one vertical text-box model:
 - fixed-height controls, segmented items, select options, chips, badges, status
   indicators and legend items are optically centered;
 - key/value columns and evidence timelines align to the first baseline;
-- a timeline or causal marker uses the shared optical marker anchor: its dot is
-  centered in the first-line slot of a wrapped value, never against the
+- a Status marker is grouped with its label; Causal Path uses the adjacent
+  anchor `(marker + key) | value`; Accounting Events uses `(marker + timestamp)
+  | event body`; the dot follows the anchor's compact line, never the wrapped
   block's total height; connector segments remain behind the dot.
 
 Compact labels use the control/token leading role rather than body leading. A
 supported `text-box` trim is optional progressive enhancement with a normal
-leading/flex/grid fallback. The one shared marker correction belongs to the
-primitive/token, not to a locale, font, string or page. Do not introduce
-locale- or font-specific offsets, padding or transforms to correct text
-placement.
+leading/flex/grid fallback. Marker placement comes from the adjacent anchor
+layout; do not introduce locale-, font-, string- or page-specific offsets,
+padding or transforms to correct text placement.
 
 ---
 

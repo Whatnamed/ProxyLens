@@ -285,10 +285,11 @@ Never overload route/status semantic colors.
 
 ## 6.1 Typeface families
 
-Narrative / UI (English and Simplified Chinese):
+Narrative / UI (script-aware composition):
 
 ```text
-IBM Plex Sans SC
+Latin axis: --pl-font-narrative-latin
+CJK axis:   --pl-font-narrative-cjk
 ```
 
 Technical:
@@ -297,15 +298,21 @@ Technical:
 JetBrains Mono
 ```
 
-These families are bundled as deterministic WOFF2 assets. The UI uses only
-normal 400 Regular and 500 Medium weights at this stage. System fonts are a
-last-resort fallback only; they are not part of the intended visual baseline.
+The formal product baseline currently resolves both narrative axes to bundled
+IBM Plex Sans SC deterministic WOFF2 assets. The UI uses only normal 400
+Regular and 500 Medium weights at this stage. System fonts are a last-resort
+fallback only; they are not part of the intended visual baseline.
 
-English and Simplified Chinese share the same IBM Plex Sans SC narrative
-family. Locale changes interface copy and locale-aware formatting only; it does
-not change the narrative family, size, weight, leading, letter-spacing or
-component spacing. JetBrains Mono remains locale-independent for
-technical/evidence values.
+The composed `--pl-font-narrative` family is selected by glyph script: Latin
+glyphs prefer the Latin axis and Han/CJK glyphs prefer the CJK axis. Locale
+changes interface copy and locale-aware formatting only; it does not switch an
+entire font family or change size, weight, leading, letter-spacing or component
+spacing. JetBrains Mono remains locale-independent for technical/evidence
+values.
+
+The DEV-only Font Lab may evaluate a script pairing such as Manrope for Latin
+and OPPO Sans 4.0 for CJK. These are visual candidates, not bundled or frozen
+production assets; the formal production default remains IBM Plex Sans SC.
 
 The visual system preserves:
 
@@ -368,11 +375,13 @@ Use two alignment models rather than one blanket centering rule:
 - multi-column key/value rows and timelines use first-baseline alignment so the
   marker and labels follow the first visible line of a multi-line value.
 
-Non-text markers use the shared optical marker anchor: the dot is centered in
-the first-line slot, then receives the single shared `--pl-marker-optical-shift`
-relative correction. It is not baseline-aligned and it is not centered against
-the total height of a wrapped content block. Connector segments stay behind
-the marker; a hollow marker uses its surface fill to mask the segment.
+Non-text markers are structurally paired with the adjacent text anchor: Status
+uses `marker + label`, Causal Path uses `(marker + key) | value`, and
+Accounting Events uses `(marker + timestamp) | event body`. The dot is centered
+against that compact anchor, never against the total height of a wrapped value.
+Connector segments stay behind the marker; a hollow marker uses its surface
+fill to mask the segment. No locale-, font-, string- or page-specific optical
+correction is permitted.
 
 Compact UI must use an explicit control/token text role and
 `--pl-leading-control`; it must not inherit body leading by accident. A

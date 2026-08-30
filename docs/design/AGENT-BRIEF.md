@@ -82,17 +82,22 @@ A normal History row should usually have no more than one dominant semantic acce
 Use:
 
 ```text
-IBM Plex Sans SC
-→ English and Simplified Chinese product, navigation and explanation layer
+script-aware Narrative composition
+→ Latin axis + CJK axis; formal production defaults to IBM Plex Sans SC on both
+  axes
+
+DEV-only visual candidate
+→ Manrope Latin + OPPO Sans 4.0 CJK in Typography Lab; not bundled/frozen
 
 JetBrains Mono
 → machine/evidence layer
 ```
 
 Only normal 400 and 500 WOFF2 weights are bundled. System fonts are last-resort
-fallbacks. English and Chinese share the same Narrative family and typography
-metrics; locale must not introduce Chinese-only leading, tracking, padding or
-spacing hacks. Mono is semantic, not decorative.
+fallbacks. UI locale selects copy and formatting, not an entire font family;
+script pairing must remain independent of locale. Locale must not introduce
+Chinese-only leading, tracking, padding or spacing hacks. Mono is semantic, not
+decorative.
 
 ## Theme rule
 
