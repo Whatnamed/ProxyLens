@@ -3,7 +3,9 @@
   top: 12px;
   right: 12px;
   z-index: 100;
-  width: 286px;
+  width: 320px;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
   padding: 12px;
   border: 1px solid var(--pl-border-strong);
   border-radius: var(--pl-radius-md);
@@ -75,6 +77,27 @@
   font-family: var(--pl-font-mono);
   font-size: var(--pl-text-10);
   line-height: var(--pl-leading-mono);
+}
+
+.pl-font-lab__status {
+  color: var(--pl-text-secondary);
+}
+
+.pl-font-lab__probe[data-status='loaded'] .pl-font-lab__status {
+  color: var(--pl-status-fresh);
+}
+
+.pl-font-lab__probe[data-status='system'] .pl-font-lab__status {
+  color: var(--pl-accent);
+}
+
+.pl-font-lab__probe[data-status='unavailable'] .pl-font-lab__status {
+  color: var(--pl-status-stale);
+}
+
+.pl-font-lab__probe-note {
+  overflow-wrap: anywhere;
+  color: var(--pl-text-disabled);
 }
 
 .pl-font-lab__actions {

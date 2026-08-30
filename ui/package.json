@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "tsx --test \"src/**/*.test.ts\"",
+    "fontlab:setup": "node scripts/setup-font-lab.mjs",
     "sidecar:build": "node scripts/build-sidecar.mjs",
     "tauri": "tauri",
     "tauri:dev": "node scripts/build-sidecar.mjs && tauri dev",

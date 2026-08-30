@@ -119,6 +119,29 @@
 - 1280×800 与 1600×1000 下 Overview / History / Coverage 的 EN/ZH、Light/Dark 共 24 张截图无页面级横向溢出；日期日历、network/page-size listbox 交互回归通过；
 - 构建产物字体总量为 8,049,984 bytes（约 8.05MB / 7.68MiB），未引入字体 npm 运行时依赖；完整 Tauri 多 fixture 视觉 Freeze 仍 PENDING。
 
+---
+
+## 2026-08-30 — Marker optical alignment and usable Font Lab closure
+
+**Scope:** C 分支 Directed UI 的 inline marker optical alignment 与 DEV-only typography comparison；不涉及普通 typography、布局结构、产品语义、Query API、Collector 或 Storage。
+
+### Root causes
+
+- Status、Causal Path 与 Accounting Events 原先各自用不同的 dot primitive，marker 的布局位置受 baseline、整块 multiline 高度或默认 line box 影响；Causal connector 也按列表整体对称留白，首行/末行高度不同时末端会漂移；
+- Font Lab 的候选只声明系统 family name，且重构后选择状态没有写回 `--pl-narrative-override`，因此浏览器虽能改变选择值，主界面仍未实际切换字体。
+
+### Completed
+
+- 以共享 optical marker primitive 统一 Status、Causal Path、Accounting Events：marker 进入首行 slot，使用单一相对 optical correction；Causal connector 按相邻 step 的共享 center anchor 分段，位于 marker 下方，hollow surface 遮罩连接线；
+- 增加 DEV-only deterministic Font Lab manifest / setup：官方 local candidates 进入 `ui/.font-lab/`，加载失败明确标记 Unavailable，不可进入 cycle；
+- 补上 EN / ZH 独立与 Link 模式下的 Alt+↑ / Alt+↓ quick-cycle，并将当前 locale 的选择实际应用到 narrative CSS override；production build 不包含 Font Lab UI、setup 或临时字体。
+
+### Validation state
+
+- `npm.cmd test`：42 项通过；`npm.cmd run build`：通过；
+- `npm.cmd run fontlab:setup`：10 个 local candidates、全部 loaded；真实 Chromium `document.fonts` 与 computed family 验证 EN / ZH 切换和 Link cycle；
+- Light / Dark、EN / 中文真实浏览器截图验证 Status、Causal Path（单行/多行）与 Accounting Events；完整 Tauri 多 fixture 视觉 Freeze 仍 PENDING。
+
 ## 2026-08-30 — Shared Narrative typography unification
 
 **Scope:** C 分支已交付 typography asset 的最小修正；只统一 EN / 中文的
