@@ -253,7 +253,9 @@ export const OverviewPage: React.FC<{
                     <div className="pl-evidence-fact">
                       <span className="pl-evidence-fact__label">
                         {t('overview.gapPhysicalTraffic')}
-                        <span className="pl-evidence-chip pl-evidence-chip--estimated" style={{ marginLeft: 6 }}>{t('common.estimated')}</span>
+                        <span className="pl-evidence-chip pl-evidence-chip--estimated" style={{ marginLeft: 6 }}>
+                          <span className="pl-evidence-chip__label pl-compact-label">{t('common.estimated')}</span>
+                        </span>
                       </span>
                       <span className="pl-evidence-fact__value" title={t('overview.gapPhysicalTrafficTitle')}>
                         {formatBytes(summary.controllerGapPhysicalUpload + summary.controllerGapPhysicalDownload)}
@@ -330,7 +332,7 @@ export const OverviewPage: React.FC<{
                     <div style={{ display: 'flex', gap: 'var(--pl-space-6)', flexWrap: 'wrap' }}>
                       {(protocolsQ.data?.items ?? []).map((p, idx) => (
                         <div key={idx} style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--pl-space-2)' }}>
-                          <span className="pl-net-token">{p.key}</span>
+                          <span className="pl-net-token"><span className="pl-net-token__label pl-compact-label">{p.key}</span></span>
                           <span className="pl-rank__value">{formatBytes(p.totalBytes)}</span>
                           <span className="pl-rank__count">{t('overview.connectionCount', { count: p.connectionCount })}</span>
                         </div>

@@ -17,11 +17,19 @@ import { IconCalendar, IconCheck, IconChevronDown, IconChevronLeft, IconChevronR
 export const RouteBadge: React.FC<{ route: string; quiet?: boolean }> = ({ route, quiet }) => {
   const r = (route || '').toUpperCase();
   if (quiet || r === 'ALL') {
-    return <span className="pl-route-badge pl-route-badge--all">{r || 'UNKNOWN'}</span>;
+    return (
+      <span className="pl-route-badge pl-route-badge--all">
+        <span className="pl-route-badge__label pl-compact-label">{r || 'UNKNOWN'}</span>
+      </span>
+    );
   }
   const cls =
     r === 'PROXY' ? 'pl-route-badge--proxy' : r === 'DIRECT' ? 'pl-route-badge--direct' : r === 'REJECT' ? 'pl-route-badge--reject' : 'pl-route-badge--all';
-  return <span className={`pl-route-badge ${cls}`}>{r}</span>;
+  return (
+    <span className={`pl-route-badge ${cls}`}>
+      <span className="pl-route-badge__label pl-compact-label">{r}</span>
+    </span>
+  );
 };
 
 /* ---------- Status indicator ---------- */
@@ -35,7 +43,7 @@ export const StatusIndicator: React.FC<{ kind: StatusKind; label: string; title?
 }) => (
   <span className={`pl-status pl-status--${kind}`} title={title}>
     <span className="pl-status__dot" />
-    {label}
+    <span className="pl-status__label pl-compact-label">{label}</span>
   </span>
 );
 
@@ -49,7 +57,7 @@ export const EvidenceChip: React.FC<{ kind: EvidenceKind; label: string; title?:
   title,
 }) => (
   <span className={`pl-evidence-chip pl-evidence-chip--${kind}`} title={title}>
-    {label}
+    <span className="pl-evidence-chip__label pl-compact-label">{label}</span>
   </span>
 );
 
@@ -85,7 +93,7 @@ export function Segmented<T extends string>({
           onClick={() => onChange(o.value)}
         >
           {o.dotColor && <span className="pl-segmented__dot" style={{ background: o.dotColor }} />}
-          {o.label}
+          <span className="pl-segmented__label pl-compact-label">{o.label}</span>
         </button>
       ))}
     </div>
@@ -221,7 +229,7 @@ export function SelectMenu<T extends string | number>({
         onClick={() => setOpen((current) => !current)}
         onKeyDown={onTriggerKeyDown}
       >
-        <span className="pl-select-menu__value">{selected?.label ?? String(value)}</span>
+        <span className="pl-select-menu__value pl-compact-label">{selected?.label ?? String(value)}</span>
         <IconChevronDown size={12} />
       </button>
       {open && (
@@ -247,7 +255,7 @@ export function SelectMenu<T extends string | number>({
               onMouseEnter={() => setHighlightedIndex(index)}
               onClick={() => choose(option)}
             >
-              <span className="pl-select-menu__option-label">{option.label}</span>
+              <span className="pl-select-menu__option-label pl-compact-label">{option.label}</span>
               <span className="pl-select-menu__option-check" aria-hidden="true">
                 {option.value === value && <IconCheck size={13} />}
               </span>
@@ -454,7 +462,7 @@ export const DateTimePicker: React.FC<{
         onClick={() => setOpen((current) => !current)}
       >
         <IconCalendar size={13} />
-        <span className="pl-date-picker__value">{displayedValue}</span>
+        <span className="pl-date-picker__value pl-compact-label">{displayedValue}</span>
       </button>
       {open && (
         <div id={dialogId} className="pl-date-picker__popover" role="dialog" aria-label={t('datePicker.dialog', { label })}>
@@ -470,7 +478,7 @@ export const DateTimePicker: React.FC<{
             </div>
           </div>
           <div className="pl-date-picker__weekdays" aria-hidden="true">
-            {weekdays.map((weekday) => <span key={weekday}>{weekday}</span>)}
+            {weekdays.map((weekday) => <span key={weekday} className="pl-date-picker__weekday pl-compact-label">{weekday}</span>)}
           </div>
           <div className="pl-date-picker__grid" role="grid" aria-label={monthLabel} aria-rowcount={6} aria-colcount={7}>
             {Array.from({ length: 6 }, (_, rowIndex) => (
@@ -501,7 +509,7 @@ export const DateTimePicker: React.FC<{
                       onClick={() => chooseDate(day)}
                       onKeyDown={(event) => onDayKeyDown(event, index)}
                     >
-                      {day}
+                      <span className="pl-date-picker__day-label pl-compact-label">{day}</span>
                     </button>
                   );
                 })}
@@ -510,8 +518,8 @@ export const DateTimePicker: React.FC<{
           </div>
           <div className="pl-date-picker__time">
             <label htmlFor={timeInputId}>
-              <span>{t('datePicker.time')}</span>
-              <span className="pl-date-picker__time-hint">{t('datePicker.timeHint')}</span>
+              <span className="pl-compact-label">{t('datePicker.time')}</span>
+              <span className="pl-date-picker__time-hint pl-compact-label">{t('datePicker.timeHint')}</span>
             </label>
             <input
               id={timeInputId}

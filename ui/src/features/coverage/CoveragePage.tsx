@@ -233,19 +233,19 @@ export const CoveragePage: React.FC<{
                       <div className="pl-legend" style={{ marginTop: 8 }}>
                         <span className="pl-legend__item">
                           <span className="pl-legend__swatch" style={{ background: 'var(--pl-surface-inset)' }} />
-                          {t('coverage.legendCovered')}
+                          <span className="pl-legend__label pl-compact-label">{t('coverage.legendCovered')}</span>
                         </span>
                         <span className="pl-legend__item">
                           <span className="pl-legend__swatch" style={{ background: 'repeating-linear-gradient(-45deg, var(--pl-status-gap-soft), var(--pl-status-gap-soft) 3px, var(--pl-status-gap) 3px, var(--pl-status-gap) 4px)' }} />
-                          {t('coverage.legendController')}
+                          <span className="pl-legend__label pl-compact-label">{t('coverage.legendController')}</span>
                         </span>
                         <span className="pl-legend__item">
                           <span className="pl-legend__swatch" style={{ background: 'var(--pl-status-offline)', opacity: 0.65 }} />
-                          {t('coverage.legendCollector')}
+                          <span className="pl-legend__label pl-compact-label">{t('coverage.legendCollector')}</span>
                         </span>
                         <span className="pl-legend__item">
                           <span className="pl-legend__swatch" style={{ background: 'repeating-linear-gradient(90deg, transparent, transparent 2px, var(--pl-border-muted) 2px, var(--pl-border-muted) 3px)' }} />
-                          {t('coverage.legendOutside')}
+                          <span className="pl-legend__label pl-compact-label">{t('coverage.legendOutside')}</span>
                         </span>
                       </div>
                     </>

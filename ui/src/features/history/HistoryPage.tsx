@@ -260,7 +260,7 @@ export const HistoryPage: React.FC<{
                   {dest.secondary && <span className="pl-cell-sub pl-mono">{dest.secondary}</span>}
                 </td>
                 <td>
-                  <span className="pl-net-token">{c.metadata?.network ?? '?'}</span>
+                  <span className="pl-net-token"><span className="pl-net-token__label pl-compact-label">{c.metadata?.network ?? '?'}</span></span>
                 </td>
                 <td>
                   <RouteBadge route={c.route} />
