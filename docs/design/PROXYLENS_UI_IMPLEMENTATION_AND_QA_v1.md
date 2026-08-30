@@ -310,6 +310,21 @@ Check:
 - use the Narrative family for locale preferences such as the sidebar locale
   switch; reserve Mono for technical/evidence content.
 
+## 14.2 Inline alignment QA
+
+Verify the alignment model by category:
+
+- fixed-height controls and compact primitives: visible text, dot and swatch
+  are optically centered;
+- Causal Path, key/value lists and Accounting Events: time/key and content
+  share the first baseline;
+- causal/timeline markers align to the first visible line of wrapped content;
+- English and Simplified Chinese use the same leading and geometry.
+
+Do not accept a fix that relies on a locale-, font- or string-specific top
+padding, pixel offset or transform. `text-box: trim-both text` may be tested as
+progressive enhancement, but the fallback must remain correct when unsupported.
+
 ---
 
 # 15. Interaction audit

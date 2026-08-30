@@ -206,6 +206,23 @@ domains, addresses, protocols, route values and other raw technical evidence.
 
 ---
 
+## 2.10 Inline alignment
+
+All compact primitives share one vertical text-box model:
+
+- fixed-height controls, segmented items, select options, chips, badges, status
+  indicators and legend items are optically centered;
+- key/value columns and evidence timelines align to the first baseline;
+- a timeline or causal marker aligns with the first line of a wrapped value,
+  never with the block's total height.
+
+Compact labels use the control/token leading role rather than body leading. A
+supported `text-box` trim is optional progressive enhancement with a normal
+leading/flex/grid fallback. Do not introduce locale- or font-specific offsets,
+padding or transforms to correct text placement.
+
+---
+
 # 3. Semantic indicators
 
 ## 3.1 RouteBadge

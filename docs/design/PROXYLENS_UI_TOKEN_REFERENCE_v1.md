@@ -290,11 +290,25 @@ Typography roles:
 --pl-leading-caption       1.45
 --pl-leading-helper        1.52
 --pl-leading-mono          1.40
+--pl-leading-control       1.20
 --pl-letter-spacing-body   normal
 --pl-letter-spacing-heading -0.01em
 --pl-letter-spacing-eyebrow 0.04em
 --pl-title-subtitle-gap    6px
 ```
+
+## 7.1 Inline alignment roles
+
+`--pl-leading-control` is the shared compact text leading for the current
+10/11/12/13px control, token, status and legend text roles. It is used with
+optical centering inside fixed-height primitives; it does not change their
+heights or spacing.
+
+Multi-column key/value rows and evidence timelines align to the first baseline.
+Their marker follows the first line of content, even when the value wraps. Do
+not compensate for a locale or font with a local top padding, pixel offset or
+`translateY`. Where supported, `text-box: trim-both text` is progressive
+enhancement only; the explicit leading and layout alignment are the fallback.
 
 Do not apply positive letter-spacing globally to Chinese. Body, controls,
 tables, technical values, IP/domain/protocol tokens and buttons keep normal

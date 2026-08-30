@@ -359,6 +359,23 @@ For:
 
 use Mono or tabular numerals so columns align.
 
+## 6.6 Inline alignment / compact typography
+
+Use two alignment models rather than one blanket centering rule:
+
+- fixed-height controls, segmented items, selects, chips, badges, status
+  indicators and legend items use optical vertical centering;
+- multi-column key/value rows and timelines use first-baseline alignment so the
+  marker and labels follow the first visible line of a multi-line value.
+
+Timeline markers align to the first line, not to the total height of a wrapped
+content block. Compact UI must use an explicit control/token text role and
+`--pl-leading-control`; it must not inherit body leading by accident. A
+`text-box` trim rule may progressively improve the visible text box when the
+browser supports it, but the explicit leading and flex/grid alignment remain the
+fallback. Do not add locale-, font- or string-specific top, padding or
+`translateY` corrections.
+
 ---
 
 # 7. Density
