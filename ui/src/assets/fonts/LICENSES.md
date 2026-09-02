@@ -30,6 +30,10 @@ technical/evidence values. `font-synthesis: none` is enabled for the product.
   The Sarasa SemiBold source has a native 600 weight; `fonts.css` deliberately
   maps that source face to CSS weight 500 because Sarasa does not ship a native
   Medium face.
+- Generated output sizes at this revision: Manrope Regular `30,840` bytes,
+  Manrope Medium `30,608` bytes, Sarasa UI SC Regular `8,339,124` bytes,
+  Sarasa UI SC SemiBold `8,479,520` bytes, JetBrains Mono Regular `92,164`
+  bytes and JetBrains Mono Medium `93,824` bytes; total `17,066,080` bytes.
 - Example command from `ui/`:
 
   ```text

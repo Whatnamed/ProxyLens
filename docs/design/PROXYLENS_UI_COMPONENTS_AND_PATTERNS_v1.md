@@ -84,8 +84,10 @@ Compact.
 
 Application selects use a controlled listbox/menu composition rather than the
 browser-native select popup when the surface must match the product shell.
-Network and page-size menus share the same trigger height, raised surface,
-border, radius, selected/hover/focus states and temporary elevation.
+Network and page-size menus share the same 28px trigger height, raised surface,
+neutral border, 6px popover radius, selected/hover/focus states and temporary
+elevation. Their option labels use the compact control leading and never fall
+back to the browser-native popup styling.
 
 Menu uses raised surface, border and temporary elevation.
 
@@ -229,6 +231,10 @@ placement comes from the explicit primary-first-line layout; do not introduce
 locale-, font-, string- or page-specific offsets, padding or transforms to
 correct text placement.
 
+RouteBadge, EvidenceChip and NetworkToken share 18px height, 7px horizontal
+padding, 2px radius, 10px text and `--pl-leading-control`; only their semantic
+color and technical casing differ.
+
 ---
 
 # 3. Semantic indicators
@@ -321,7 +327,8 @@ Rules:
 
 - quieter than workspace;
 - monochrome icons;
-- active item uses neutral selected surface;
+- hover uses `--pl-sidebar-hover` and active uses `--pl-sidebar-selected`;
+- active hover remains selected;
 - no huge brand/color block;
 - no unnecessary nav groups in V1.
 
@@ -513,7 +520,7 @@ Hover:
 
 Selected:
 
-- stronger neutral surface;
+- `--pl-row-selected` stronger neutral surface;
 - optional thin selection accent;
 - must visually connect to Inspector.
 
@@ -553,7 +560,7 @@ It is not a floating marketing-style card.
 Use:
 
 - one clear boundary from table;
-- workspace-compatible surface;
+- `--pl-inspector`, a workspace-compatible neutral surface;
 - internal sections separated by spacing/dividers.
 
 Suggested width:
@@ -564,9 +571,22 @@ Suggested width:
 
 Tunable during visual QA.
 
+The causal hollow marker masks its connector with the current Inspector surface
+(`--pl-marker-mask-surface: var(--pl-inspector)`), not a hard-coded raised or
+white fill.
+
+## 7.2 DEV-only Surface Lab
+
+When requested with `?surfacelab=1` in Vite development mode, a small collapsed
+utility at the lower-right previews four neutral Inspector presets: Baseline,
+Soft, Layered and Defined. Each preset exposes its Light and Dark values and
+the current theme uses the matching value. It is a temporary visual QA aid,
+not a production setting or a color picker; production builds must not include
+the lab or its query entry.
+
 ---
 
-## 7.2 InspectorHeader
+## 7.3 InspectorHeader
 
 Show:
 
@@ -579,7 +599,7 @@ Avoid a large hero header.
 
 ---
 
-## 7.3 CausalPath
+## 7.4 CausalPath
 
 Core order:
 
@@ -608,7 +628,7 @@ Do not:
 
 ---
 
-## 7.4 AccountingSummary
+## 7.5 AccountingSummary
 
 Show:
 
@@ -624,7 +644,7 @@ Estimated/interval-derived state can be marked by a small evidence indicator.
 
 ---
 
-## 7.5 EvidenceQuality
+## 7.6 EvidenceQuality
 
 Explicitly present:
 
@@ -641,7 +661,7 @@ Only the semantic state label/icon carries color.
 
 ---
 
-## 7.6 Lifecycle
+## 7.7 Lifecycle
 
 Show:
 
@@ -655,7 +675,7 @@ Use compact key/value or aligned technical list.
 
 ---
 
-## 7.7 AccountingEventTimeline
+## 7.8 AccountingEventTimeline
 
 This is a structured evidence timeline, not a social activity feed.
 
@@ -674,7 +694,7 @@ Only meaningful state transitions require semantic color.
 
 ---
 
-## 7.8 RawTrafficFrames
+## 7.9 RawTrafficFrames
 
 Advanced disclosure.
 

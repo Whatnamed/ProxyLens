@@ -274,6 +274,27 @@ If not, improve:
 
 Do not solve hierarchy with more color.
 
+## 13.1 Final contextual surface audit
+
+Confirm that only the six approved aliases are used for contextual surface
+hierarchy:
+
+```text
+--pl-inspector                 Inspector surface
+--pl-row-selected              selected History row
+--pl-sidebar-hover             sidebar navigation hover
+--pl-sidebar-selected          sidebar navigation active
+--pl-control-selected          Time Range / Route / Locale active segment
+--pl-control-selected-border  active segment boundary
+```
+
+The generic overlay family remains independent: DatePicker and listbox menus
+use the shared raised surface, neutral border, 6px radius, restrained shadow
+and focus ring. RouteBadge, EvidenceChip and NetworkToken share 18px / 7px /
+2px / 10px compact geometry while retaining separate semantic treatments.
+The Overview ranking grid uses spacing, not a replacement divider, between
+sections.
+
 ---
 
 # 14. Typography audit
@@ -293,10 +314,12 @@ Check:
   500;
 - use the script-aware Narrative composition (`--pl-font-narrative-latin` for
   Latin glyphs and `--pl-font-narrative-cjk` for Han/CJK glyphs); formal
-  production defaults resolve both axes to IBM Plex Sans SC, while JetBrains
-  Mono remains the technical/evidence family;
+  production uses Manrope for Latin, Sarasa Gothic UI SC for Han/CJK, and
+  JetBrains Mono for technical/evidence values;
 - keep system fonts as last-resort fallbacks; do not require a system-wide
   install or a runtime font CDN;
+- map Sarasa's native SemiBold source to CSS weight 500 because the family has
+  no native Medium face; enable `font-synthesis: none`;
 - verify actual rendered platform fonts after `document.fonts.ready` using
   DevTools/CDP rendered-font inspection, not CSS declarations alone;
 - use the same leading in both locales: body 1.45, heading 1.35, caption 1.45,
@@ -311,6 +334,12 @@ Check:
   padding or spacing overrides; translated copy may still wrap naturally;
 - use the Narrative family for locale preferences such as the sidebar locale
   switch; reserve Mono for technical/evidence content.
+
+The formal font source versions, SHA-256 values, output sizes and conversion
+command are recorded in `ui/src/assets/fonts/LICENSES.md`. The previous
+candidate lab is removed from the production and development surface; the
+temporary visual Surface Lab is separate and only loads from the DEV
+`?surfacelab=1` query.
 
 ## 14.2 Inline alignment QA
 
@@ -355,9 +384,12 @@ Verify:
 - opening a DatePicker keeps one day gridcell tab stop, Arrow keys move by day/week (including across months), Home/End move within the row, and Tab closes it;
 - switching EN / 中文 updates visible UI copy immediately and survives reload;
 - date/time display follows the active locale while raw technical values remain unchanged.
-- the formal production build renders IBM Plex Sans SC for both narrative
-  script axes and JetBrains Mono for evidence; DEV Typography Lab may be used
-  to inspect an independent Manrope Latin + OPPO Sans 4.0 CJK candidate pair;
+- the formal production build renders Manrope for Latin, Sarasa Gothic UI SC
+  for Han/CJK and JetBrains Mono for evidence; the obsolete candidate-lab
+  entry, manifest and ignored asset directory are absent;
+- the DEV-only Surface Lab is available only with `?surfacelab=1`, starts
+  collapsed, previews all four Inspector neutral presets, and is absent from
+  the production bundle;
 - the 1280×800 and 1600×1000 matrix is checked for Overview, History +
   Inspector and Coverage in EN/ZH and Light/Dark.
 

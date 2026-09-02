@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-09-03 — Final visual-system and production typography closure
+
+**Scope:** 严格按 C 线最终视觉修整计划，在不改变产品结构、数据语义、Query API、
+Collector 或 Storage 的前提下，完成正式字体落地、contextual surface 修整、compact
+tag 几何统一与临时 Surface Lab；完整 Tauri 多状态视觉 Freeze 仍单独保留为后续验收门。
+
+### Root causes
+
+- 通用 `.pl-section + .pl-section` 选择器作用到 Overview 两列 rankings grid，导致第二列出现半截分隔线；
+- History 选中行复用通用 selected surface，和 Route / Evidence 语义色在深色主题下形成低区分度；
+- RouteBadge、EvidenceChip、NetworkToken 各自声明几何，导致 `unique` 等短标签出现视觉尺寸不一致；
+- Inspector 复用 workspace surface，因果 hollow marker 也使用 raised surface，无法为 Inspector 做可控的中性层级预览；
+- 正式 Narrative 仍使用旧字体，且旧 Typography Lab 与候选资产继续存在于开发入口。
+
+### Completed
+
+- 正式 Narrative 改为 script-aware、locale-independent 的 Manrope Latin + Sarasa Gothic UI SC Han/CJK，JetBrains Mono 保持 Technical / Evidence；仅保留 400/500 产品角色，Sarasa SemiBold 源映射为 CSS 500，并启用 `font-synthesis: none`；
+- 删除旧 IBM Plex Sans SC 正式资产与完整 Typography Lab，增加可重复的 `build-production-fonts.py`，在 `LICENSES.md` 记录官方来源、版本、源哈希、OFL、转换命令与产物尺寸；
+- 增加且仅增加六个 contextual alias：`--pl-inspector`、`--pl-row-selected`、`--pl-sidebar-hover`、`--pl-sidebar-selected`、`--pl-control-selected`、`--pl-control-selected-border`；
+- rankings grid 仅使用 spacing 分隔，History selected row / Sidebar / Time Range / Route / Locale 各自使用正确的中性层级；RouteBadge / EvidenceChip / NetworkToken 统一为 18px / 7px / 2px / 10px 几何，语义色保持独立；
+- 新增 DEV-only `?surfacelab=1`，默认收起，提供 Baseline / Soft / Layered / Defined 四档 Inspector Light/Dark 预设；marker mask 通过 `--pl-marker-mask-surface: var(--pl-inspector)` 跟随当前 Inspector surface。
+
+### Validation state
+
+- `npm.cmd test`：42 项通过；`npm.cmd run build`：通过；
+- production bundle 不包含旧候选实验入口，也不包含 Surface Lab 动态代码；正式字体资源为 6 个本地 WOFF2；
+- Light / Dark、EN / 中文与 1280×800 / 1600×1000 的 Overview、History + Inspector、Coverage 视觉回归继续以真实浏览器与 synthetic Query API fixture 验证；完整 Tauri 多状态 Freeze 仍 PENDING。
+
+---
+
 ## 2026-08-31 — Focused CJK Font Lab candidate supplement
 
 **Scope:** 在保持正式 Manrope + OPPO Sans 4.0 评估配对、脚本轴模型、默认值与既有 Design System 规则不变的前提下，补充 4 个 CJK 候选；不进入正式产品构建，不改变业务数据或技术证据呈现。

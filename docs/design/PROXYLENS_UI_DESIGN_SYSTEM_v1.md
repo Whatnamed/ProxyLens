@@ -201,6 +201,27 @@ Use one low-chroma graphite family with small lightness steps.
 
 Light should similarly use a coherent soft neutral family.
 
+## 4.4 Contextual surface aliases
+
+The six contextual aliases below keep local hierarchy explicit without creating
+a second palette. They are the only component-specific surface aliases in the
+current system:
+
+```text
+--pl-inspector
+--pl-row-selected
+--pl-sidebar-hover
+--pl-sidebar-selected
+--pl-control-selected
+--pl-control-selected-border
+```
+
+Inspector, selected rows, sidebar states and segmented-control states may use
+their own neutral step. Generic menus and calendars continue to use the shared
+overlay surface and do not inherit the segmented-control selected token.
+Within each interaction family, Rest < Hover < Selected; semantic route and
+evidence colors remain independent of these neutral surfaces.
+
 ---
 
 # 5. Color economy
@@ -298,10 +319,12 @@ Technical:
 JetBrains Mono
 ```
 
-The formal product baseline currently resolves both narrative axes to bundled
-IBM Plex Sans SC deterministic WOFF2 assets. The UI uses only normal 400
-Regular and 500 Medium weights at this stage. System fonts are a last-resort
-fallback only; they are not part of the intended visual baseline.
+The formal product baseline resolves Narrative by glyph script to bundled
+deterministic WOFF2 assets: Manrope for Latin and Sarasa Gothic UI SC for
+Han/CJK. The UI uses normal 400 and 500 roles only. Sarasa has no native
+Medium face, so its SemiBold source is deliberately mapped to CSS weight 500;
+the source's native 600 metadata is not exposed as a product weight. System
+fonts are a last-resort fallback only and `font-synthesis: none` is required.
 
 The composed `--pl-font-narrative` family is selected by glyph script: Latin
 glyphs prefer the Latin axis and Han/CJK glyphs prefer the CJK axis. Locale
@@ -310,9 +333,11 @@ entire font family or change size, weight, leading, letter-spacing or component
 spacing. JetBrains Mono remains locale-independent for technical/evidence
 values.
 
-The DEV-only Font Lab may evaluate a script pairing such as Manrope for Latin
-and OPPO Sans 4.0 for CJK. These are visual candidates, not bundled or frozen
-production assets; the formal production default remains IBM Plex Sans SC.
+Locale changes interface copy and locale-aware formatting only. It does not
+switch the Narrative family or change size, weight, leading, letter-spacing or
+component spacing. JetBrains Mono remains locale-independent for
+technical/evidence values. The source URLs, hashes and conversion command for
+the formal assets are recorded in `ui/src/assets/fonts/LICENSES.md`.
 
 The visual system preserves:
 
@@ -426,15 +451,31 @@ Avoid 44–52px tall generic SaaS controls unless a specific interaction needs t
 Working language:
 
 ```text
-2px  hairline/technical small detail
-4px  default controls, chips, rows where radius is needed
+2px  hairline/technical small detail, compact route/evidence/network tags
+4px  default controls and rows where radius is needed
 6px  menus/popovers
 8px  larger temporary overlays
 ```
 
 Avoid pervasive 12–20px card rounding.
 
-## 8.2 Borders
+## 8.2 Compact tag geometry
+
+RouteBadge, EvidenceChip and NetworkToken share the same optical geometry:
+
+```text
+height          18px
+padding-inline  7px
+radius          2px
+font-size       10px
+leading         --pl-leading-control
+```
+
+The geometry is shared; semantics are not. Route remains uppercase with light
+tracking and route color, Evidence keeps its contextual label and evidence
+color, and Network remains neutral monospace uppercase.
+
+## 8.3 Borders
 
 Use 1px neutral borders.
 
@@ -442,7 +483,7 @@ Prefer horizontal structure to full boxed regions.
 
 Avoid vertical grid lines in tables.
 
-## 8.3 Elevation
+## 8.4 Elevation
 
 Core workspace uses:
 
@@ -582,6 +623,11 @@ Connection Table | Inspector
 ```
 
 For Overview, use editorial sections and ranking rows.
+
+The two-column Overview ranking grid uses spacing for row separation. The
+generic adjacent-section border is disabled inside that grid so a partial line
+cannot appear across only one column; the one-column layout remains border-free
+between ranking sections.
 
 For Coverage, use a temporal evidence layout.
 

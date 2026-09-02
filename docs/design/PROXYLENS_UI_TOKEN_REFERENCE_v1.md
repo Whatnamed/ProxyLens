@@ -40,6 +40,14 @@ Most application code should consume semantic tokens.
 --pl-surface-selected;
 --pl-surface-hover;
 
+/* Contextual aliases; these are the only component-specific surface aliases. */
+--pl-inspector;
+--pl-row-selected;
+--pl-sidebar-hover;
+--pl-sidebar-selected;
+--pl-control-selected;
+--pl-control-selected-border;
+
 --pl-border;
 --pl-border-muted;
 --pl-border-strong;
@@ -55,6 +63,12 @@ Most application code should consume semantic tokens.
 `--pl-overlay-shadow` is reserved for temporary floating UI such as menus,
 popovers and calendars. Core workspace surfaces continue to use tonal contrast
 and borders rather than elevation.
+
+Contextual aliases keep selection hierarchy local: rows, sidebar navigation,
+segmented controls and the persistent Inspector may use a dedicated neutral
+step. Generic listboxes and date pickers continue to use the shared overlay
+surface; they do not inherit `--pl-control-selected`. Within each family,
+Rest < Hover < Selected.
 
 ---
 
@@ -124,12 +138,19 @@ Initial working values:
   --pl-surface-subtle: #f4f4f1;
   --pl-surface-raised: #ffffff;
   --pl-surface-inset: #eeeeeb;
-  --pl-surface-selected: #ecefec;
+  --pl-surface-selected: #e9ebe8;
   --pl-surface-hover: #f0f1ee;
+
+  --pl-inspector: #fafaf8;
+  --pl-row-selected: #e2e5e1;
+  --pl-sidebar-hover: #e8eae7;
+  --pl-sidebar-selected: #e2e5e1;
+  --pl-control-selected: #ffffff;
+  --pl-control-selected-border: #d3d6d1;
 
   --pl-border: #dedfdb;
   --pl-border-muted: #e7e8e4;
-  --pl-border-strong: #cfd1cc;
+  --pl-border-strong: #c9ccc6;
 
   --pl-text-primary: #1d201e;
   --pl-text-secondary: #555a56;
@@ -195,12 +216,19 @@ Use one coherent neutral graphite family.
   --pl-surface-subtle: #191b19;
   --pl-surface-raised: #1e201e;
   --pl-surface-inset: #121412;
-  --pl-surface-selected: #222622;
+  --pl-surface-selected: #242824;
   --pl-surface-hover: #1c201d;
+
+  --pl-inspector: #151715;
+  --pl-row-selected: #292d29;
+  --pl-sidebar-hover: #1c201d;
+  --pl-sidebar-selected: #242824;
+  --pl-control-selected: #272b27;
+  --pl-control-selected-border: #3a3f3a;
 
   --pl-border: #2a2e2a;
   --pl-border-muted: #222622;
-  --pl-border-strong: #363b36;
+  --pl-border-strong: #3a3f3a;
 
   --pl-text-primary: #e9ece8;
   --pl-text-secondary: #b4b9b4;
@@ -257,9 +285,9 @@ not separate brown/blue/gray blocks.
 # 7. Typography tokens
 
 ```css
-/* Script-aware composition; formal production defaults use IBM on both axes. */
---pl-font-narrative-latin: "IBM Plex Sans SC";
---pl-font-narrative-cjk: "IBM Plex Sans SC";
+/* Script-aware composition; selection is independent of UI locale. */
+--pl-font-narrative-latin: "Manrope";
+--pl-font-narrative-cjk: "Sarasa Gothic UI SC";
 --pl-font-narrative:
   var(--pl-font-narrative-latin),
   var(--pl-font-narrative-cjk),
@@ -278,11 +306,12 @@ not separate brown/blue/gray blocks.
 ```
 
 `--pl-font-narrative` composes a Latin and a CJK axis by glyph coverage rather
-than by UI locale. Formal production defaults resolve both axes to IBM Plex
-Sans SC. Locale changes copy and locale-aware formatting; it does not add a
-font, size, weight, leading, letter-spacing, padding or spacing override. The
-DEV-only Font Lab may preview Manrope + OPPO Sans 4.0 as a visual candidate;
-those fonts are not frozen or bundled production assets.
+than by UI locale. Formal production uses bundled Manrope for Latin and Sarasa
+Gothic UI SC for Han/CJK. Sarasa SemiBold is the source face mapped to CSS
+weight 500 because the family does not provide a native Medium face. Locale
+changes copy and locale-aware formatting; it does not add a font, size, weight,
+leading, letter-spacing, padding or spacing override. `font-synthesis: none` is
+required, and JetBrains Mono remains fixed for technical/evidence values.
 
 Typography roles:
 

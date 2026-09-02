@@ -83,21 +83,22 @@ Use:
 
 ```text
 script-aware Narrative composition
-→ Latin axis + CJK axis; formal production defaults to IBM Plex Sans SC on both
-  axes
+→ Latin axis: Manrope; CJK axis: Sarasa Gothic UI SC
+  (Regular 400; SemiBold source deliberately mapped to CSS 500)
 
-DEV-only visual candidate
-→ Manrope Latin + OPPO Sans 4.0 CJK in Typography Lab; not bundled/frozen
+Locale-independent typography
+→ locale changes copy and formatting only; it never changes the script pairing,
+  weight, leading, tracking or spacing
 
 JetBrains Mono
 → machine/evidence layer
 ```
 
-Only normal 400 and 500 WOFF2 weights are bundled. System fonts are last-resort
-fallbacks. UI locale selects copy and formatting, not an entire font family;
-script pairing must remain independent of locale. Locale must not introduce
-Chinese-only leading, tracking, padding or spacing hacks. Mono is semantic, not
-decorative.
+Only the formal local WOFF2 faces required by the product are bundled: Manrope
+400/500, Sarasa UI SC Regular and SemiBold-as-CSS-500, and JetBrains Mono
+400/500. System fonts are last-resort fallbacks and `font-synthesis: none` is
+required. Locale must not introduce Chinese-only leading, tracking, padding or
+spacing hacks. Mono is semantic, not decorative.
 
 ## Theme rule
 
