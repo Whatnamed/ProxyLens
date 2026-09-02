@@ -24,7 +24,9 @@ const queryClient = new QueryClient({
 export const App: React.FC = () => {
   const [apiClient, setApiClient] = useState<QueryApiClient | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [SurfaceLab, setSurfaceLab] = useState<React.ComponentType | null>(null);
   const isTauri = isTauriEnvironment();
+  const surfaceLabRequested = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('surfacelab') === '1';
 
   useEffect(() => {
     let active = true;
@@ -50,11 +52,23 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (!surfaceLabRequested) return;
+    let active = true;
+    import('./dev/surfaceLab/SurfaceLab').then(({ SurfaceLab: SurfaceLabComponent }) => {
+      if (active) setSurfaceLab(() => SurfaceLabComponent);
+    });
+    return () => {
+      active = false;
+    };
+  }, [surfaceLabRequested]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <AuditProvider>
         <ErrorBoundary>
           <AppShell client={apiClient} isTauri={isTauri} sessionError={sessionError} />
+          {SurfaceLab ? <SurfaceLab /> : null}
         </ErrorBoundary>
       </AuditProvider>
     </QueryClientProvider>

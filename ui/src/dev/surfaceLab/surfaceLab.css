@@ -1,0 +1,171 @@
+.pl-surface-lab {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 80;
+  font-family: var(--pl-font-narrative);
+}
+
+.pl-surface-lab__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--pl-control-h-compact);
+  height: var(--pl-control-h-compact);
+  padding: 0;
+  border: 1px solid var(--pl-border);
+  border-radius: var(--pl-radius-sm);
+  background: var(--pl-surface-raised);
+  color: var(--pl-text-muted);
+  font-size: var(--pl-text-14);
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--pl-overlay-shadow);
+  transition: background var(--pl-duration-fast) var(--pl-ease-out),
+    border-color var(--pl-duration-fast) var(--pl-ease-out),
+    color var(--pl-duration-fast) var(--pl-ease-out);
+}
+
+.pl-surface-lab__trigger:hover {
+  background: var(--pl-surface-hover);
+  border-color: var(--pl-border-strong);
+  color: var(--pl-text-primary);
+}
+
+.pl-surface-lab__trigger:focus-visible {
+  outline: 2px solid var(--pl-focus-ring);
+  outline-offset: 1px;
+}
+
+.pl-surface-lab__panel {
+  width: 276px;
+  margin-bottom: var(--pl-space-2);
+  padding: var(--pl-space-3);
+  border: 1px solid var(--pl-border);
+  border-radius: var(--pl-radius-md);
+  background: var(--pl-surface-raised);
+  box-shadow: var(--pl-overlay-shadow);
+  animation: pl-overlay-in var(--pl-duration-fast) var(--pl-ease-out);
+}
+
+.pl-surface-lab__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--pl-space-3);
+  padding-bottom: var(--pl-space-2);
+  border-bottom: 1px solid var(--pl-border-muted);
+}
+
+.pl-surface-lab__header strong {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--pl-text-13);
+  font-weight: var(--pl-font-weight-heading);
+  line-height: var(--pl-leading-heading);
+}
+
+.pl-surface-lab__header .pl-icon-btn {
+  width: 22px;
+  height: 22px;
+  font-size: var(--pl-text-16);
+}
+
+.pl-surface-lab__current {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2) 0;
+  color: var(--pl-text-muted);
+  font-size: var(--pl-text-11);
+}
+
+.pl-surface-lab__current .pl-mono {
+  color: var(--pl-text-secondary);
+  font-size: var(--pl-text-10);
+  white-space: nowrap;
+}
+
+.pl-surface-lab__presets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pl-surface-lab__preset {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--pl-space-2);
+  width: 100%;
+  padding: var(--pl-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--pl-radius-sm);
+  background: transparent;
+  color: var(--pl-text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--pl-duration-fast) var(--pl-ease-out),
+    border-color var(--pl-duration-fast) var(--pl-ease-out),
+    color var(--pl-duration-fast) var(--pl-ease-out);
+}
+
+.pl-surface-lab__preset:hover {
+  background: var(--pl-surface-hover);
+  color: var(--pl-text-primary);
+}
+
+.pl-surface-lab__preset--active {
+  border-color: var(--pl-control-selected-border);
+  background: var(--pl-control-selected);
+  color: var(--pl-text-primary);
+}
+
+.pl-surface-lab__preset:focus-visible {
+  outline: 2px solid var(--pl-focus-ring);
+  outline-offset: -2px;
+}
+
+.pl-surface-lab__swatches {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
+}
+
+.pl-surface-lab__swatches span {
+  display: block;
+  width: 18px;
+  height: 8px;
+  border: 1px solid var(--pl-border-muted);
+  border-radius: 1px;
+}
+
+.pl-surface-lab__preset-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pl-surface-lab__preset-name {
+  font-size: var(--pl-text-12);
+  font-weight: var(--pl-font-weight-control);
+  line-height: var(--pl-leading-control);
+}
+
+.pl-surface-lab__values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--pl-space-2);
+  color: var(--pl-text-muted);
+  font-size: var(--pl-text-10);
+  line-height: var(--pl-leading-control);
+}
+
+.pl-surface-lab__values code {
+  font-family: var(--pl-font-mono);
+  font-size: inherit;
+}
