@@ -24,9 +24,7 @@ const queryClient = new QueryClient({
 export const App: React.FC = () => {
   const [apiClient, setApiClient] = useState<QueryApiClient | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [FontLab, setFontLab] = useState<React.ComponentType | null>(null);
   const isTauri = isTauriEnvironment();
-  const fontLabRequested = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fontlab') === '1';
 
   useEffect(() => {
     let active = true;
@@ -52,23 +50,11 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  useEffect(() => {
-    if (!fontLabRequested) return;
-    let active = true;
-    import('./dev/fontLab/FontLab').then(({ FontLab: FontLabComponent }) => {
-      if (active) setFontLab(() => FontLabComponent);
-    });
-    return () => {
-      active = false;
-    };
-  }, [fontLabRequested]);
-
   return (
     <QueryClientProvider client={queryClient}>
       <AuditProvider>
         <ErrorBoundary>
           <AppShell client={apiClient} isTauri={isTauri} sessionError={sessionError} />
-          {FontLab ? <FontLab /> : null}
         </ErrorBoundary>
       </AuditProvider>
     </QueryClientProvider>

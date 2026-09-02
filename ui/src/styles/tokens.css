@@ -16,6 +16,14 @@
   --pl-surface-selected: #e9ebe8;
   --pl-surface-hover: #f0f1ee;
 
+  /* Contextual aliases: keep selection and workspace hierarchy separate. */
+  --pl-inspector: #fafaf8;
+  --pl-row-selected: #e2e5e1;
+  --pl-sidebar-hover: #e8eae7;
+  --pl-sidebar-selected: #e2e5e1;
+  --pl-control-selected: #ffffff;
+  --pl-control-selected-border: #d3d6d1;
+
   /* Borders */
   --pl-border: #dedfdb;
   --pl-border-muted: #e7e8e4;
@@ -65,8 +73,8 @@
   --pl-analytical-soft: #e8eae6;
 
   /* Typography roles: narrative is composed by script, not by UI locale. */
-  --pl-font-narrative-latin: "IBM Plex Sans SC";
-  --pl-font-narrative-cjk: "IBM Plex Sans SC";
+  --pl-font-narrative-latin: "Manrope";
+  --pl-font-narrative-cjk: "Sarasa Gothic UI SC";
   --pl-font-narrative: var(--pl-font-narrative-latin), var(--pl-font-narrative-cjk), "Microsoft YaHei", system-ui, sans-serif;
   --pl-font-sans: var(--pl-font-narrative);
   --pl-font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
@@ -136,6 +144,13 @@
   --pl-surface-inset: #121412;
   --pl-surface-selected: #242824;
   --pl-surface-hover: #1c201d;
+
+  --pl-inspector: #151715;
+  --pl-row-selected: #292d29;
+  --pl-sidebar-hover: #1c201d;
+  --pl-sidebar-selected: #242824;
+  --pl-control-selected: #272b27;
+  --pl-control-selected-border: #3a3f3a;
 
   --pl-border: #2a2e2a;
   --pl-border-muted: #222622;
