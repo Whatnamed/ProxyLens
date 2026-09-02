@@ -538,13 +538,14 @@
 }
 
 .pl-segmented__item:hover:not(.pl-segmented__item--active) {
+  background: var(--pl-surface-hover);
   color: var(--pl-text-primary);
 }
 
 .pl-segmented__item--active {
-  background: var(--pl-surface-raised);
+  background: var(--pl-control-selected);
   color: var(--pl-text-primary);
-  box-shadow: 0 0 0 1px var(--pl-border-muted);
+  box-shadow: 0 0 0 1px var(--pl-control-selected-border);
 }
 
 .pl-segmented__dot {
@@ -556,18 +557,24 @@
 
 /* ---------- Badges & indicators ---------- */
 
-.pl-route-badge {
+.pl-route-badge,
+.pl-evidence-chip,
+.pl-net-token {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
   height: 18px;
   padding: 0 7px;
   border-radius: var(--pl-radius-xs);
   font-size: var(--pl-text-10);
-  font-weight: var(--pl-font-weight-emphasis);
   line-height: var(--pl-leading-control);
-  letter-spacing: 0.05em;
   white-space: nowrap;
+}
+
+.pl-route-badge {
+  gap: 5px;
+  font-weight: var(--pl-font-weight-emphasis);
+  letter-spacing: 0.05em;
 }
 
 .pl-route-badge--proxy {
@@ -626,16 +633,8 @@
 .pl-status--offline { color: var(--pl-status-offline); }
 
 .pl-evidence-chip {
-  display: inline-flex;
-  align-items: center;
   gap: 4px;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: var(--pl-radius-xs);
-  font-size: var(--pl-text-10);
   font-weight: var(--pl-font-weight-control);
-  line-height: var(--pl-leading-control);
-  white-space: nowrap;
 }
 
 .pl-evidence-chip--estimated {
@@ -872,7 +871,7 @@
 }
 
 .pl-table tbody tr.pl-row--selected td {
-  background: var(--pl-surface-selected);
+  background: var(--pl-row-selected);
 }
 
 .pl-table tbody tr.pl-row--selected td:first-child {
@@ -897,16 +896,9 @@
 }
 
 .pl-net-token {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 5px;
-  border-radius: var(--pl-radius-xs);
   background: var(--pl-surface-inset);
   color: var(--pl-text-secondary);
   font-family: var(--pl-font-mono);
-  font-size: var(--pl-text-10);
-  line-height: var(--pl-leading-control);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1004,6 +996,7 @@
 /* ---------- Causal path ---------- */
 
 .pl-causal {
+  --pl-marker-mask-surface: var(--pl-inspector);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1061,7 +1054,7 @@
 }
 
 .pl-optical-marker--causal::before {
-  background: var(--pl-surface-raised);
+  background: var(--pl-marker-mask-surface);
   border: 1.5px solid var(--pl-text-disabled);
 }
 
