@@ -39,11 +39,13 @@
 
 .pl-surface-lab__panel {
   width: 276px;
+  max-height: min(720px, calc(100vh - 64px));
   margin-bottom: var(--pl-space-2);
   padding: var(--pl-space-3);
   border: 1px solid var(--pl-border);
   border-radius: var(--pl-radius-md);
   background: var(--pl-surface-raised);
+  overflow-y: auto;
   box-shadow: var(--pl-overlay-shadow);
   animation: pl-overlay-in var(--pl-duration-fast) var(--pl-ease-out);
 }

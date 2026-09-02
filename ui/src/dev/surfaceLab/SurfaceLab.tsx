@@ -4,9 +4,13 @@ import './surfaceLab.css';
 
 const SURFACE_PRESETS = [
   { id: 'baseline', label: 'Baseline', light: '#fafaf8', dark: '#151715' },
-  { id: 'soft', label: 'Soft', light: '#f7f8f6', dark: '#181a18' },
-  { id: 'layered', label: 'Layered', light: '#f5f6f3', dark: '#191c19' },
-  { id: 'defined', label: 'Defined', light: '#f3f5f2', dark: '#1a1d1b' },
+  { id: 'neutral-soft', label: 'Neutral Soft', light: '#f7f8f6', dark: '#181a18' },
+  { id: 'neutral-layered', label: 'Neutral Layered', light: '#f5f6f3', dark: '#191c19' },
+  { id: 'cool-mist', label: 'Cool Mist', light: '#f4f7f7', dark: '#171b1c' },
+  { id: 'slate-mist', label: 'Slate Mist', light: '#f3f5f6', dark: '#181b1e' },
+  { id: 'sage-gray', label: 'Sage Gray', light: '#f3f6f2', dark: '#181c18' },
+  { id: 'stone', label: 'Stone', light: '#f6f4f1', dark: '#1b1917' },
+  { id: 'defined-neutral', label: 'Defined Neutral', light: '#f2f4f1', dark: '#1b1e1b' },
 ] as const;
 
 type SurfacePreset = (typeof SURFACE_PRESETS)[number];
