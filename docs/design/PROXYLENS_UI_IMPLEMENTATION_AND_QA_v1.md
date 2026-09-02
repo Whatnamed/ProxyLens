@@ -388,7 +388,7 @@ Verify:
   for Han/CJK and JetBrains Mono for evidence; the obsolete candidate-lab
   entry, manifest and ignored asset directory are absent;
 - the DEV-only Surface Lab is available only with `?surfacelab=1`, starts
-  collapsed, previews all four Inspector neutral presets, and is absent from
+  collapsed, previews all eight Inspector neutral candidates, and is absent from
   the production bundle;
 - the 1280×800 and 1600×1000 matrix is checked for Overview, History +
   Inspector and Coverage in EN/ZH and Light/Dark.

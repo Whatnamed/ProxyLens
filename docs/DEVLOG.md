@@ -5,6 +5,45 @@
 
 ---
 
+## 2026-09-03 — Inspector surface candidate expansion and licensing closure
+
+**Scope:** 只扩展 DEV-only Inspector surface comparison，修正文档状态并补齐
+字体许可证发行资源；不改变正式 `--pl-inspector`、字体、交互、布局、产品语义或
+backend / Query API / Collector / Storage。
+
+### Root cause
+
+- 既有 Surface Lab 只有 Baseline / Soft / Layered / Defined 四个同一 neutral hue
+  方向的明度候选，无法比较 cool-gray、slate、sage-gray 与 warm-stone 等低饱和
+  hue direction；
+- 正式 `--pl-inspector` 仍有意保持 Baseline，Surface Lab 只是人工选择前的运行时
+  预览，不应被当前状态文档写成最终 Closure；
+- `LICENSES.md` 仅存在于源码字体目录，Vite 不会自动复制未被 import 的文本资源，
+  且 Tauri bundle 尚未声明资源映射。
+
+### Completed
+
+- Surface Lab 保留 Baseline 并扩展为八个 DEV-only 候选：Neutral Soft、Neutral
+  Layered、Cool Mist、Slate Mist、Sage Gray、Stone、Defined Neutral；所有候选均
+  保留在实验工具中，正式 token 不增加 preset 变体；
+- Surface Lab 继续使用一个 preset ID，Light / Dark 只切换该 preset 的对应值，
+  默认仍为 Baseline；面板在小窗口下具备内部滚动保护；
+- 加入完整标准 SIL Open Font License 1.1 正文 `OFL-1.1.txt`，并在 `LICENSES.md`
+  说明许可文本及发行位置；Tauri bundle 将两份文本映射到 `licenses/` resources；
+- 将 Inspector final surface visual selection 明确标记为 `PENDING HUMAN SELECTION`，
+  保留 Design System 对“workspace-compatible neutral contextual surface”的长期规则，
+  不把八个候选写入正式 Token Reference。
+
+### Validation state
+
+- 八个候选均通过 Light / Dark Surface Lab 运行时切换与 semantic-color collision 快速
+  检查后保留；在人工选择前 production default 仍为 Baseline；
+- `npm.cmd test`、`npm.cmd run build` 与 Tauri bundle resource inspection 通过；
+- production bundle 不包含 Surface Lab UI、preset array、dev CSS 或 `?surfacelab=1`
+  入口；完整 Tauri 多 fixture visual Freeze 以及最终 Inspector surface 选择仍 PENDING。
+
+---
+
 ## 2026-09-03 — Final visual-system and production typography closure
 
 **Scope:** 严格按 C 线最终视觉修整计划，在不改变产品结构、数据语义、Query API、

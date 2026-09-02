@@ -578,11 +578,13 @@ white fill.
 ## 7.2 DEV-only Surface Lab
 
 When requested with `?surfacelab=1` in Vite development mode, a small collapsed
-utility at the lower-right previews four neutral Inspector presets: Baseline,
-Soft, Layered and Defined. Each preset exposes its Light and Dark values and
-the current theme uses the matching value. It is a temporary visual QA aid,
-not a production setting or a color picker; production builds must not include
-the lab or its query entry.
+utility at the lower-right previews the current eight neutral Inspector
+candidates: Baseline, Neutral Soft, Neutral Layered, Cool Mist, Slate Mist,
+Sage Gray, Stone and Defined Neutral. Each preset exposes its Light and Dark
+values and the current theme uses the matching value. The raw candidate values
+are confined to the DEV tool and are not part of the formal Token Reference.
+It is a temporary visual QA aid, not a production setting or a color picker;
+production builds must not include the lab or its query entry.
 
 ---
 

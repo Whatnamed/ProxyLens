@@ -7,7 +7,7 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure；focused UI polish、EN / 中文 locale、overlay accessibility、最终确定性 typography asset、contextual surface 与 compact inline alignment Closure 已完成，仍等待完整真实多状态视觉验收。
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现与独立审查 Closure；focused UI polish、EN / 中文 locale、overlay accessibility、最终确定性 typography asset 与 compact inline alignment Closure 已完成，contextual surface implementation 已完成，但 Inspector final surface visual selection 仍待人工选择，随后再进行完整真实多状态视觉验收。
 - **活动分支**：`experiment/qwen38max-directed-ui`
 - **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
@@ -59,7 +59,9 @@
 - Typography asset build：6 个 WOFF2、17,066,080 bytes（约 17.07MB / 16.28MiB）；Manrope/Sarasa/JetBrains 均为本地正式资产，无 TTF/WOFF/italic 或额外字重；Sarasa SemiBold 源以 CSS 500 角色加载；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；
 - Compact inline alignment：Time Range / Route / badge / chip / network token / status / legend，以及 Causal Path / Accounting Events 的 primary-first-line marker 与 first-baseline 规则已在 Light / Dark、EN / 中文浏览器 fallback 中核验；
-- Temporary Surface Lab：仅 DEV + `?surfacelab=1` 动态加载；production build 不包含面板、预设代码或开发面板资源；
+- Focused interaction/contextual token implementation：PASS；Inspector surface implementation：PASS；Inspector final surface visual selection：PENDING HUMAN SELECTION；
+- Bundled font licensing：`LICENSES.md` 与完整 `OFL-1.1.txt` 已纳入源码；Tauri bundle 显式映射到应用 `licenses/` resources；
+- Temporary Surface Lab：仅 DEV + `?surfacelab=1` 动态加载，提供 8 个候选；production build 不包含面板、预设代码或开发面板资源；
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 
 ### Rendered visual QA
@@ -79,13 +81,14 @@
 - Network / page size：统一 listbox 打开、选中、`aria-activedescendant` 更新、Tab 离开关闭与值更新；
 - 824px 保底窗口无页面级横向溢出，1280px 桌面窗口完成布局几何检查。
 - 本轮正式产物字体渲染：EN / 中文标题与控件分别由 CDP Rendered Fonts 识别为 Manrope 与 Sarasa Gothic UI SC，技术时间证据为 JetBrains Mono；所有正式 face 加载状态为 `loaded`，Sarasa CSS 500 实际命中 SemiBold 资源。
-- 本轮 DEV Surface Lab QA：`?surfacelab=1` 默认收起，可展开并切换 Baseline / Soft / Layered / Defined 四个 Inspector 中性预设；Light / Dark 切换沿用当前预设的对应值，因果 hollow marker 遮罩跟随 `--pl-inspector`。
+- 本轮 DEV Surface Lab QA：`?surfacelab=1` 默认收起，可展开并切换 Baseline / Neutral Soft / Neutral Layered / Cool Mist / Slate Mist / Sage Gray / Stone / Defined Neutral 八个 Inspector 中性预设；Light / Dark 切换沿用当前 preset 的对应值，因果 hollow marker 遮罩跟随 `--pl-inspector`。
 - 本轮 1280×800 与 1600×1000 的 Overview / History / Coverage、EN / 中文、Light / Dark 共 24 个截图无页面级横向溢出；EN / 中文共用 body 1.45、heading 1.35、caption 1.45、helper 1.52、mono 1.40 与标题副标题 6px 节奏，未保留 locale-specific structural typography。
 - 本轮 primary-first-line alignment correction：不是 1px polish；DatePicker、network/page-size listbox、segmented controls、RouteBadge / EvidenceChip / Network token / StatusIndicator / Coverage legend、Causal Path 与 Accounting Events 均通过实际渲染截图与首行关系检查；marker 不再由 key/timestamp 或整块内容决定，未新增 locale-specific 或 font-specific offset。
 - 本轮 marker closure：Causal Path 的 Process / Destination secondary path/IP 不影响 marker，Rule / Top policy / Proxy chain / Egress 保持单一 primary；Accounting Events 的规则、代理、流量与 evidence chip 独立下沉；连接线按 primary 首行 marker center 分段，hollow marker 的 surface fill 遮蔽连接线。
 
 仍待人工验收：
 
+- Inspector final surface visual selection：PENDING HUMAN SELECTION；在用户选定 preset 前，production default 保持 Baseline，Surface Lab 保持 DEV-only；
 - `healthy / gaps / stale / empty / scaled` 全 fixture；
 - 完整 Tauri 运行时下的 1280×800 / 1600×1000；
 - Light / Dark 两套主题在 History + Inspector、Overview、Coverage 上的完整视觉一致性；

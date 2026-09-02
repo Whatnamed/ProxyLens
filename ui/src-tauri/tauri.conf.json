@@ -30,6 +30,10 @@
     "externalBin": [
       "binaries/proxylens-query-api"
     ],
+    "resources": {
+      "../src/assets/fonts/LICENSES.md": "licenses/LICENSES.md",
+      "../src/assets/fonts/OFL-1.1.txt": "licenses/OFL-1.1.txt"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

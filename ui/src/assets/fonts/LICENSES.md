@@ -4,6 +4,9 @@ ProxyLens bundles only the normal WOFF2 faces used by the UI. Narrative
 typography is script-aware and locale-independent: Manrope is preferred for
 Latin glyphs, Sarasa UI SC for Han/CJK glyphs, and JetBrains Mono is fixed for
 technical/evidence values. `font-synthesis: none` is enabled for the product.
+All bundled fonts are distributed under the SIL Open Font License 1.1. The
+full license text is included in `OFL-1.1.txt` and packaged under the
+application `licenses/` resources directory.
 
 | Family | Files | Source | License |
 | --- | --- | --- | --- |
