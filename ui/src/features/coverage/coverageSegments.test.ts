@@ -1,25 +1,26 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSegments } from './CoveragePage.js';
+import { buildSegments, gapIdentity } from './CoveragePage.js';
 import { CoverageSummary } from '../../api/types.js';
 import { translate } from '../../i18n.js';
 
 const t = (key: string, vars?: Record<string, string | number>) => translate('en', key, vars);
 
+const baseCoverage: CoverageSummary = {
+  coveredDurationMs: 3600000,
+  uncoveredDurationMs: 0,
+  outsideKnownScopeMs: 0,
+  futureDurationMs: 0,
+  coverageRatio: 1.0,
+  controllerGapDurationMs: 0,
+  collectorOfflineDurationMs: 0,
+  mergedGaps: [],
+  effectiveScopeStart: '2026-08-28T10:00:00.000Z',
+  effectiveScopeEnd: '2026-08-28T12:00:00.000Z',
+  knownScopeStart: '2026-08-28T10:00:00.000Z',
+};
+
 describe('Coverage timeline segment derivation', () => {
-  const baseCoverage: CoverageSummary = {
-    coveredDurationMs: 3600000,
-    uncoveredDurationMs: 0,
-    outsideKnownScopeMs: 0,
-    futureDurationMs: 0,
-    coverageRatio: 1.0,
-    controllerGapDurationMs: 0,
-    collectorOfflineDurationMs: 0,
-    mergedGaps: [],
-    effectiveScopeStart: '2026-08-28T10:00:00.000Z',
-    effectiveScopeEnd: '2026-08-28T12:00:00.000Z',
-    knownScopeStart: '2026-08-28T10:00:00.000Z',
-  };
 
   it('1. Window completely in the future produces a single future segment', () => {
     const windowStart = new Date('2026-08-28T14:00:00.000Z').getTime();
@@ -185,5 +186,73 @@ describe('Coverage timeline segment derivation', () => {
 
     const segments = buildSegments(coverage, windowStart, windowEnd, 'en', t);
     assert.ok(segments.every((s) => s.kind !== 'future'));
+  });
+});
+
+describe('Coverage: stable gapIdentity and timeline mapping', () => {
+  it('produces deterministic sorted source string regardless of sources order', () => {
+    const id1 = gapIdentity({
+      source: 'controller_stream',
+      sources: ['collector_offline', 'controller_stream'],
+      startedAt: '2026-08-28T10:00:00.000Z',
+      endedAt: '2026-08-28T10:05:00.000Z',
+    });
+    const id2 = gapIdentity({
+      source: 'controller_stream',
+      sources: ['controller_stream', 'collector_offline'],
+      startedAt: '2026-08-28T10:00:00.000Z',
+      endedAt: '2026-08-28T10:05:00.000Z',
+    });
+    assert.equal(id1, 'collector_offline+controller_stream|2026-08-28T10:00:00.000Z|2026-08-28T10:05:00.000Z');
+    assert.equal(id1, id2);
+  });
+
+  it('maintains identity invariant across array reordering and shifts', () => {
+    const gapB = {
+      source: 'controller_stream',
+      startedAt: '2026-08-28T11:00:00.000Z',
+      endedAt: '2026-08-28T11:10:00.000Z',
+    };
+    const idBefore = gapIdentity(gapB);
+
+    // Later query prepends a new gap at index 0, shifting gapB from index 0 to index 1
+    const gapA = {
+      source: 'collector_offline',
+      startedAt: '2026-08-28T10:00:00.000Z',
+      endedAt: '2026-08-28T10:05:00.000Z',
+    };
+    const list = [gapA, gapB];
+    const idAfter = gapIdentity(list[1]);
+
+    assert.equal(idBefore, idAfter);
+  });
+
+  it('attaches matching gapId to interactive gap segments in buildSegments', () => {
+    const gap = {
+      source: 'controller_stream',
+      startedAt: '2026-08-28T10:15:00.000Z',
+      endedAt: '2026-08-28T10:20:00.000Z',
+      durationMs: 300000,
+      reason: 'test',
+    };
+    const coverage: CoverageSummary = {
+      ...baseCoverage,
+      coveredDurationMs: 3300000,
+      uncoveredDurationMs: 300000,
+      outsideKnownScopeMs: 0,
+      futureDurationMs: 0,
+      coverageRatio: 0.916,
+      effectiveScopeStart: '2026-08-28T10:00:00.000Z',
+      effectiveScopeEnd: '2026-08-28T11:00:00.000Z',
+      mergedGaps: [gap],
+    };
+
+    const windowStart = new Date('2026-08-28T10:00:00.000Z').getTime();
+    const windowEnd = new Date('2026-08-28T11:00:00.000Z').getTime();
+    const segments = buildSegments(coverage, windowStart, windowEnd, 'en', t);
+
+    const gapSeg = segments.find((s) => s.gapId !== undefined);
+    assert.ok(gapSeg, 'Expected a segment with gapId');
+    assert.equal(gapSeg?.gapId, gapIdentity(gap));
   });
 });

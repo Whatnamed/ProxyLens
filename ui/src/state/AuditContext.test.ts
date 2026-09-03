@@ -6,6 +6,7 @@ import {
   createHistorySnapshot,
   refreshSnapshot,
   rangeSourceKey,
+  TimeRangeState,
 } from './AuditContext.js';
 import { getQuickWindow } from '../utils/time.js';
 
@@ -146,5 +147,41 @@ describe('AuditContext: History Snapshot & Investigation Context', () => {
       rangeSourceKey({ kind: 'custom', customFrom: '2026-08-28T08:00', customTo: '2026-08-28T09:00' }),
       'custom:2026-08-28T08:00..2026-08-28T09:00'
     );
+  });
+
+  it('models Live Analysis vs History snapshot freeze transition contract', () => {
+    // 1. In Overview, user changes time range: snapshot is cleared (null)
+    let view: 'overview' | 'history' | 'coverage' = 'overview';
+    let snapshot: ReturnType<typeof createHistorySnapshot> | null = null;
+    let timeRange: TimeRangeState = { kind: 'today' };
+
+    const applyTimeRange = (newRange: TimeRangeState, now: Date) => {
+      timeRange = newRange;
+      if (view !== 'history') {
+        snapshot = null; // Do NOT pre-freeze outside History
+      } else {
+        snapshot = createHistorySnapshot(newRange, now);
+      }
+    };
+
+    // User changes range in Overview:
+    applyTimeRange({ kind: '7d' as const }, new Date('2026-08-28T10:00:00.000Z'));
+    assert.equal(snapshot, null, 'Snapshot must remain null when time range changes in Overview');
+
+    // 2. 15 minutes later, user navigates to History: freeze happens at entry instant
+    const entryNow = new Date('2026-08-28T10:15:00.000Z');
+    view = 'history';
+    if (!snapshot || (snapshot as any).sourceKey !== rangeSourceKey(timeRange)) {
+      snapshot = createHistorySnapshot(timeRange, entryNow);
+    }
+    assert.ok(snapshot);
+    assert.equal(snapshot.frozenAt, entryNow.getTime(), 'Snapshot must be frozen at entry instant');
+
+    // 3. In History, user changes range: immediately updates snapshot
+    const historyChangeNow = new Date('2026-08-28T10:20:00.000Z');
+    applyTimeRange({ kind: 'today' as const }, historyChangeNow);
+    assert.ok(snapshot);
+    assert.equal((snapshot as any).sourceKey, 'today');
+    assert.equal(snapshot.frozenAt, historyChangeNow.getTime(), 'Snapshot must be updated immediately inside History');
   });
 });
