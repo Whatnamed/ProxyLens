@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { QueryApiClient } from '../../api/client';
 import { AccountedTrafficRecord, ConnectionRecord } from '../../api/types';
 import { useAuditContext, useLocale } from '../../state/AuditContext';
@@ -12,7 +12,7 @@ import {
   Section,
   SkeletonRows,
 } from '../../components/ui/primitives';
-import { IconClose } from '../../components/ui/icons';
+import { IconClose, IconChevronLeft, IconChevronRight } from '../../components/ui/icons';
 import { formatBytes } from '../../utils/format';
 import { formatLocalDateTime, formatLocalDateTimeCompact } from '../../utils/time';
 import { qualityFlagLabels } from '../../utils/qualityFlags';
@@ -156,10 +156,47 @@ const EventTimeline: React.FC<{ events: AccountedTrafficRecord[] }> = ({ events 
   );
 };
 
-export const ConnectionInspector: React.FC<{ client: QueryApiClient | null }> = ({ client }) => {
+export const ConnectionInspector: React.FC<{
+  client: QueryApiClient | null;
+  hasPrev?: boolean;
+  hasNext?: boolean;
+  onNavigatePrev?: () => void;
+  onNavigateNext?: () => void;
+}> = ({
+  client,
+  hasPrev = false,
+  hasNext = false,
+  onNavigatePrev,
+  onNavigateNext,
+}) => {
   const { locale, t } = useLocale();
   const { selected, setSelected } = useAuditContext();
   const [showRawFrames, setShowRawFrames] = useState(false);
+
+  useEffect(() => {
+    if (!selected) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      if (e.key === 'ArrowUp' || e.key === 'k' || e.key === '[') {
+        if (hasPrev && onNavigatePrev) {
+          e.preventDefault();
+          onNavigatePrev();
+        }
+      } else if (e.key === 'ArrowDown' || e.key === 'j' || e.key === ']') {
+        if (hasNext && onNavigateNext) {
+          e.preventDefault();
+          onNavigateNext();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setSelected(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selected, hasPrev, hasNext, onNavigatePrev, onNavigateNext, setSelected]);
 
   const detailQ = useConnectionDetailQuery(client, selected);
   const trafficQ = useConnectionTrafficQuery(client, selected, showRawFrames && !!selected);
@@ -197,9 +234,34 @@ export const ConnectionInspector: React.FC<{ client: QueryApiClient | null }> = 
               : ''}
           </span>
           {c && <RouteBadge route={c.route} />}
-          <button className="pl-icon-btn" aria-label={t('inspector.close')} title={t('inspector.closeTitle')} onClick={() => setSelected(null)}>
-            <IconClose />
-          </button>
+          <div className="pl-inspector__actions">
+            <button
+              className="pl-icon-btn"
+              disabled={!hasPrev}
+              aria-label={t('inspector.prevConnection')}
+              title={t('inspector.prevConnection')}
+              onClick={onNavigatePrev}
+            >
+              <IconChevronLeft />
+            </button>
+            <button
+              className="pl-icon-btn"
+              disabled={!hasNext}
+              aria-label={t('inspector.nextConnection')}
+              title={t('inspector.nextConnection')}
+              onClick={onNavigateNext}
+            >
+              <IconChevronRight />
+            </button>
+            <button
+              className="pl-icon-btn"
+              aria-label={t('inspector.close')}
+              title={t('inspector.closeTitle')}
+              onClick={() => setSelected(null)}
+            >
+              <IconClose />
+            </button>
+          </div>
         </div>
         <div className="pl-inspector__id-row">
           <span className="pl-inspector__id" title={identity}>{identity}</span>

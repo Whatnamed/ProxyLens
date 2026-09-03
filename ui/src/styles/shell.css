@@ -478,6 +478,12 @@
   gap: var(--pl-space-2);
 }
 
+.pl-inspector__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .pl-inspector__title {
   font-size: var(--pl-text-13);
   font-weight: var(--pl-font-weight-heading);

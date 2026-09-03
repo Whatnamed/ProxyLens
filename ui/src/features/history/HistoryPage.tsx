@@ -150,6 +150,39 @@ export const HistoryPage: React.FC<{
     }
   }, [items, selected, connectionsQ.isLoading, connectionsQ.isPlaceholderData, setSelected]);
 
+  const selectedIndex = selected
+    ? items.findIndex(
+        (i) =>
+          i.sessionId === selected.sessionId &&
+          i.epochId === selected.epochId &&
+          i.connectionId === selected.connectionId
+      )
+    : -1;
+  const hasPrev = selectedIndex > 0;
+  const hasNext = selectedIndex !== -1 && selectedIndex < items.length - 1;
+
+  const onNavigatePrev = () => {
+    if (hasPrev) {
+      const prev = items[selectedIndex - 1];
+      setSelected({ sessionId: prev.sessionId, epochId: prev.epochId, connectionId: prev.connectionId });
+    }
+  };
+
+  const onNavigateNext = () => {
+    if (hasNext) {
+      const next = items[selectedIndex + 1];
+      setSelected({ sessionId: next.sessionId, epochId: next.epochId, connectionId: next.connectionId });
+    }
+  };
+
+  useEffect(() => {
+    if (!selected) return;
+    const selectedEl = document.querySelector('.pl-row--selected');
+    if (selectedEl) {
+      selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [selected]);
+
   const rangeStart = page * pageSize;
   const rangeEnd = rangeStart + items.length;
 
@@ -384,7 +417,13 @@ export const HistoryPage: React.FC<{
             </div>
           </div>
 
-          <ConnectionInspector client={client} />
+          <ConnectionInspector
+            client={client}
+            hasPrev={hasPrev}
+            hasNext={hasNext}
+            onNavigatePrev={onNavigatePrev}
+            onNavigateNext={onNavigateNext}
+          />
         </div>
       </div>
     </PageGate>

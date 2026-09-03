@@ -2,11 +2,12 @@ import React from 'react';
 import { QueryApiClient } from '../../api/client';
 import { MetaResponse, CoverageSummary, MergedGap } from '../../api/types';
 import { useAuditContext, useLocale } from '../../state/AuditContext';
-import { useCoverageQuery } from '../../api/queries';
+import { useCoverageQuery, useSummaryQuery } from '../../api/queries';
 import { PageGate } from '../common/PageGate';
 import { EmptyState, ErrorState, Section, SkeletonRows, StatusIndicator } from '../../components/ui/primitives';
 import { TimeRangeControl } from '../../components/audit/AuditContextBar';
 import { formatLocalDateTime } from '../../utils/time';
+import { formatBytes } from '../../utils/format';
 import { classifyGapSources, GapProvenance } from '../../utils/coverage';
 import { IconArrowRight } from '../../components/ui/icons';
 
@@ -29,14 +30,15 @@ function provenanceLabel(kind: GapProvenance['kind'], t: (key: string) => string
   return t('coverage.legendCollector');
 }
 
-interface TimelineSegment {
-  kind: 'covered' | 'controller' | 'collector' | 'mixed' | 'outside';
+export interface TimelineSegment {
+  kind: 'covered' | 'controller' | 'collector' | 'mixed' | 'outside' | 'future';
   from: number;
   to: number;
   title: string;
+  gapIndex?: number;
 }
 
-function buildSegments(
+export function buildSegments(
   coverage: CoverageSummary,
   windowStart: number,
   windowEnd: number,
@@ -46,58 +48,123 @@ function buildSegments(
   const segments: TimelineSegment[] = [];
   if (windowEnd <= windowStart) return segments;
 
+  const futureMs = Math.max(0, coverage.futureDurationMs ?? 0);
+  const futureStart = futureMs > 0 ? Math.max(windowStart, windowEnd - futureMs) : windowEnd;
+  const effectiveWindowEnd = Math.min(windowEnd, futureStart);
+
+  // If the entire window is in the future
+  if (futureStart <= windowStart) {
+    segments.push({
+      kind: 'future',
+      from: windowStart,
+      to: windowEnd,
+      title: t('coverage.futureSegment'),
+    });
+    return segments;
+  }
+
   const effStart = coverage.effectiveScopeStart ? new Date(coverage.effectiveScopeStart).getTime() : null;
   const effEnd = coverage.effectiveScopeEnd ? new Date(coverage.effectiveScopeEnd).getTime() : null;
 
-  // Outside monitored history: requested window before known scope
-  if (effStart !== null && effStart > windowStart) {
+  // Case A: No known scope
+  if (effStart === null || effEnd === null) {
     segments.push({
       kind: 'outside',
       from: windowStart,
-      to: Math.min(effStart, windowEnd),
+      to: effectiveWindowEnd,
       title: t('coverage.outsideSegment'),
     });
+  } else {
+    // Outside monitored history: requested window before known scope
+    if (effStart > windowStart) {
+      segments.push({
+        kind: 'outside',
+        from: windowStart,
+        to: Math.min(effStart, effectiveWindowEnd),
+        title: t('coverage.outsideSegment'),
+      });
+    }
+
+    if (effEnd > windowStart && effStart < effectiveWindowEnd) {
+      const gaps = [...(coverage.mergedGaps ?? [])]
+        .map((g, originalIndex) => ({
+          g,
+          originalIndex,
+          start: new Date(g.startedAt).getTime(),
+          end: new Date(g.endedAt).getTime(),
+        }))
+        .filter((x) => x.end > windowStart && x.start < effectiveWindowEnd)
+        .sort((a, b) => a.start - b.start);
+
+      let cursor = Math.max(effStart, windowStart);
+      for (const { g, originalIndex, start, end } of gaps) {
+        const gs = Math.max(start, windowStart);
+        const ge = Math.min(end, effectiveWindowEnd);
+        if (gs > cursor) {
+          segments.push({ kind: 'covered', from: cursor, to: gs, title: t('coverage.continuous') });
+        }
+        const src = gapProvenance(g);
+        const reason = g.reason || g.reasons?.join('; ') || t('coverage.noReason');
+        const fromStr = formatLocalDateTime(g.startedAt, locale);
+        const toStr = formatLocalDateTime(g.endedAt, locale);
+        const titleKey =
+          src.kind === 'controller'
+            ? 'coverage.controllerTitle'
+            : src.kind === 'mixed'
+            ? 'coverage.mixedTitle'
+            : 'coverage.collectorTitle';
+        segments.push({
+          kind: src.kind,
+          from: gs,
+          to: Math.max(ge, gs + (windowEnd - windowStart) * 0.004),
+          title: t(titleKey, { reason, from: fromStr, to: toStr }),
+          gapIndex: originalIndex,
+        });
+        cursor = Math.max(cursor, ge);
+      }
+      if (cursor < Math.min(effEnd, effectiveWindowEnd)) {
+        segments.push({
+          kind: 'covered',
+          from: cursor,
+          to: Math.min(effEnd, effectiveWindowEnd),
+          title: t('coverage.continuous'),
+        });
+      }
+    }
   }
 
-  if (effStart !== null && effEnd !== null && effEnd > windowStart && effStart < windowEnd) {
-    const gaps = [...(coverage.mergedGaps ?? [])]
-      .map((g) => ({ g, start: new Date(g.startedAt).getTime(), end: new Date(g.endedAt).getTime() }))
-      .filter((x) => x.end > windowStart && x.start < windowEnd)
-      .sort((a, b) => a.start - b.start);
-
-    let cursor = Math.max(effStart, windowStart);
-    for (const { g, start, end } of gaps) {
-      const gs = Math.max(start, windowStart);
-      const ge = Math.min(end, windowEnd);
-      if (gs > cursor) {
-        segments.push({ kind: 'covered', from: cursor, to: gs, title: t('coverage.continuous') });
-      }
-      const src = gapProvenance(g);
-      const reason = g.reason || g.reasons?.join('; ') || t('coverage.noReason');
-      const from = formatLocalDateTime(g.startedAt, locale);
-      const to = formatLocalDateTime(g.endedAt, locale);
-      const titleKey = src.kind === 'controller' ? 'coverage.controllerTitle' : src.kind === 'mixed' ? 'coverage.mixedTitle' : 'coverage.collectorTitle';
-      segments.push({
-        kind: src.kind,
-        from: gs,
-        to: Math.max(ge, gs + (windowEnd - windowStart) * 0.004),
-        title: t(titleKey, { reason, from, to }),
-      });
-      cursor = Math.max(cursor, ge);
-    }
-    if (cursor < Math.min(effEnd, windowEnd)) {
-      segments.push({ kind: 'covered', from: cursor, to: Math.min(effEnd, windowEnd), title: t('coverage.continuous') });
-    }
+  // Future segment at the end if futureMs > 0
+  if (futureMs > 0 && futureStart < windowEnd) {
+    segments.push({
+      kind: 'future',
+      from: futureStart,
+      to: windowEnd,
+      title: t('coverage.futureSegment'),
+    });
   }
 
   return segments;
 }
 
-const GapRow: React.FC<{ gap: MergedGap; onInspect: () => void }> = ({ gap, onInspect }) => {
+const GapRow: React.FC<{
+  gap: MergedGap;
+  index: number;
+  isActive: boolean;
+  onHover: (active: boolean) => void;
+  onInspect: () => void;
+}> = ({ gap, index, isActive, onHover, onInspect }) => {
   const { locale, t } = useLocale();
   const src = gapProvenance(gap);
   return (
-    <tr>
+    <tr
+      id={`pl-gap-row-${index}`}
+      className={isActive ? 'pl-row--active' : ''}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
+      onFocus={() => onHover(true)}
+      onBlur={() => onHover(false)}
+      tabIndex={0}
+    >
       <td>
         <StatusIndicator
           kind={src.kind === 'controller' ? 'gap' : 'offline'}
@@ -132,7 +199,11 @@ export const CoveragePage: React.FC<{
   const { resolvedRange, inspectAroundGap } = useAuditContext();
   const { from, to } = resolvedRange;
   const coverageQ = useCoverageQuery(client, from, to);
+  const summaryQ = useSummaryQuery(client, from, to, 'ALL');
   const coverage = coverageQ.data;
+  const summary = summaryQ.data;
+
+  const gapTrafficBytes = (summary?.controllerGapPhysicalUpload ?? 0) + (summary?.controllerGapPhysicalDownload ?? 0);
 
   const windowStart = new Date(from).getTime();
   const windowEnd = new Date(to).getTime();
@@ -140,6 +211,17 @@ export const CoveragePage: React.FC<{
   const totalSpan = Math.max(1, windowEnd - windowStart);
   const outsideScope = (coverage?.outsideKnownScopeMs ?? 0) > 0;
   const gaps = coverage?.mergedGaps ?? [];
+  const [activeGapIndex, setActiveGapIndex] = React.useState<number | null>(null);
+
+  const handleSegmentClick = (seg: TimelineSegment) => {
+    if (seg.gapIndex !== undefined) {
+      setActiveGapIndex(seg.gapIndex);
+      const row = document.getElementById(`pl-gap-row-${seg.gapIndex}`);
+      if (row) {
+        row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+  };
 
   return (
     <PageGate client={client} sessionError={sessionError} meta={meta}>
@@ -207,6 +289,23 @@ export const CoveragePage: React.FC<{
                       <div className="pl-coverage-fact__value">{formatDuration(coverage.collectorOfflineDurationMs, t)}</div>
                       <div className="pl-coverage-fact__label">{t('coverage.collectorOfflineTime')}</div>
                     </div>
+                    {coverage.futureDurationMs > 0 && (
+                      <div>
+                        <div className="pl-coverage-fact__value">{formatDuration(coverage.futureDurationMs, t)}</div>
+                        <div className="pl-coverage-fact__label">{t('coverage.future')}</div>
+                      </div>
+                    )}
+                    {gapTrafficBytes > 0 && (
+                      <div>
+                        <div className="pl-coverage-fact__value">≈ {formatBytes(gapTrafficBytes)}</div>
+                        <div className="pl-coverage-fact__label" title={t('coverage.gapTrafficEstimateTitle')}>
+                          {t('coverage.gapTrafficEstimate')}
+                          <span className="pl-evidence-chip pl-evidence-chip--estimated" style={{ marginLeft: 6 }}>
+                            <span className="pl-evidence-chip__label pl-compact-label">{t('common.estimated')}</span>
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {outsideScope && coverage.knownScopeStart && (
                     <div className="pl-muted pl-small" style={{ marginTop: 8 }}>
@@ -221,14 +320,31 @@ export const CoveragePage: React.FC<{
                   ) : (
                     <>
                       <div className="pl-timeline" role="img" aria-label={t('coverage.timelineAria')}>
-                        {segments.map((seg, idx) => (
-                          <span
-                            key={idx}
-                            className={`pl-timeline__seg pl-timeline__seg--${seg.kind === 'mixed' ? 'collector' : seg.kind}`}
-                            style={{ width: `${Math.max(0.4, ((seg.to - seg.from) / totalSpan) * 100)}%` }}
-                            title={seg.title}
-                          />
-                        ))}
+                        {segments.map((seg, idx) => {
+                          const isGapSeg = seg.gapIndex !== undefined;
+                          const isActive = isGapSeg && seg.gapIndex === activeGapIndex;
+                          return (
+                            <span
+                              key={idx}
+                              className={`pl-timeline__seg pl-timeline__seg--${seg.kind === 'mixed' ? 'collector' : seg.kind}${isGapSeg ? ' pl-timeline__seg--interactive' : ''}${isActive ? ' pl-timeline__seg--active' : ''}`}
+                              style={{ width: `${Math.max(0.4, ((seg.to - seg.from) / totalSpan) * 100)}%` }}
+                              title={seg.title}
+                              role={isGapSeg ? 'button' : undefined}
+                              tabIndex={isGapSeg ? 0 : undefined}
+                              onClick={isGapSeg ? () => handleSegmentClick(seg) : undefined}
+                              onKeyDown={
+                                isGapSeg
+                                  ? (e) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        handleSegmentClick(seg);
+                                      }
+                                    }
+                                  : undefined
+                              }
+                            />
+                          );
+                        })}
                       </div>
                       <div className="pl-legend" style={{ marginTop: 8 }}>
                         <span className="pl-legend__item">
@@ -247,6 +363,19 @@ export const CoveragePage: React.FC<{
                           <span className="pl-legend__swatch" style={{ background: 'repeating-linear-gradient(90deg, transparent, transparent 2px, var(--pl-border-muted) 2px, var(--pl-border-muted) 3px)' }} />
                           <span className="pl-legend__label pl-compact-label">{t('coverage.legendOutside')}</span>
                         </span>
+                        {coverage.futureDurationMs > 0 && (
+                          <span className="pl-legend__item">
+                            <span
+                              className="pl-legend__swatch"
+                              style={{
+                                background:
+                                  'repeating-linear-gradient(45deg, transparent, transparent 2px, var(--pl-border-muted) 2px, var(--pl-border-muted) 3px)',
+                                opacity: 0.65,
+                              }}
+                            />
+                            <span className="pl-legend__label pl-compact-label">{t('coverage.legendFuture')}</span>
+                          </span>
+                        )}
                       </div>
                     </>
                   )}
@@ -278,7 +407,14 @@ export const CoveragePage: React.FC<{
                       </thead>
                       <tbody>
                         {gaps.map((g, idx) => (
-                          <GapRow key={idx} gap={g} onInspect={() => inspectAroundGap(g.startedAt, g.endedAt)} />
+                          <GapRow
+                            key={idx}
+                            index={idx}
+                            gap={g}
+                            isActive={activeGapIndex === idx}
+                            onHover={(hovering) => setActiveGapIndex(hovering ? idx : null)}
+                            onInspect={() => inspectAroundGap(g.startedAt, g.endedAt)}
+                          />
                         ))}
                       </tbody>
                     </table>
