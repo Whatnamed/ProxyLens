@@ -185,7 +185,7 @@ describe('AuditContext: History Snapshot & Investigation Context', () => {
     assert.equal(snapshot.frozenAt, historyChangeNow.getTime(), 'Snapshot must be updated immediately inside History');
   });
 
-  it('clears selected connection when page changes to avoid lingering Inspector', () => {
+  it('clears selected connection on page turn (next/prev) to avoid lingering Inspector', () => {
     let page = 0;
     let selected: { sessionId: string; epochId: string; connectionId: string } | null = {
       sessionId: 'sess-1',
@@ -198,8 +198,130 @@ describe('AuditContext: History Snapshot & Investigation Context', () => {
       selected = null;
     };
 
+    // Turning to next page
     setPage(1);
     assert.equal(page, 1);
-    assert.equal(selected, null, 'Selected connection must immediately reset to null on page change');
+    assert.equal(selected, null, 'Selected connection must immediately reset to null on next page');
+
+    // Select a row on page 2
+    selected = { sessionId: 'sess-1', epochId: 'ep-1', connectionId: 'conn-2' };
+
+    // Turning to prev page
+    setPage(0);
+    assert.equal(page, 0);
+    assert.equal(selected, null, 'Selected connection must immediately reset to null on prev page');
+  });
+
+  it('preserves selected connection and investigation context when navigating History -> Overview/Coverage -> History', () => {
+    // Models AuditContext navigation contract:
+    let view: 'overview' | 'history' | 'coverage' = 'history';
+    let timeRange: TimeRangeState = { kind: 'today' };
+    const now = new Date('2026-08-28T10:00:00.000Z');
+    let snapshot: ReturnType<typeof createHistorySnapshot> | null = createHistorySnapshot(timeRange, now);
+    let page = 2;
+    let filters: Record<string, string> = { host: 'api.github.com' };
+    let selected: { sessionId: string; epochId: string; connectionId: string } | null = {
+      sessionId: 'sess-1',
+      epochId: 'ep-1',
+      connectionId: 'conn-42',
+    };
+
+    const setView = (v: 'overview' | 'history' | 'coverage') => {
+      view = v;
+      if (v === 'history') {
+        const key = rangeSourceKey(timeRange);
+        if (!snapshot || snapshot.sourceKey !== key) {
+          snapshot = createHistorySnapshot(timeRange, new Date());
+          page = 0;
+          selected = null;
+        }
+        // If returning to History and timeRange matches, keep existing snapshot and investigation!
+      }
+    };
+
+    // 1. User navigates away to Overview
+    setView('overview');
+    assert.equal(view, 'overview');
+    // Context in AuditContext remains intact while away
+    assert.equal(selected?.connectionId, 'conn-42');
+    assert.equal(page, 2);
+
+    // 2. User returns to History with unchanged investigation
+    setView('history');
+    assert.equal(view, 'history');
+    assert.equal(selected?.connectionId, 'conn-42', 'Selected connection must be preserved upon return');
+    assert.equal(page, 2, 'Page must be preserved upon return');
+    assert.equal(filters.host, 'api.github.com', 'Filters must be preserved upon return');
+    assert.equal(snapshot?.sourceKey, 'today', 'Snapshot must be preserved upon return');
+  });
+
+  it('clears selected connection, resets page, and sets new filter on new drill to History', () => {
+    let view: 'overview' | 'history' | 'coverage' = 'overview';
+    let timeRange: TimeRangeState = { kind: 'today' };
+    let snapshot: ReturnType<typeof createHistorySnapshot> | null = null;
+    let page = 3;
+    let filters: Record<string, string> = { host: 'old-host.com' };
+    let selected: { sessionId: string; epochId: string; connectionId: string } | null = {
+      sessionId: 'sess-1',
+      epochId: 'ep-1',
+      connectionId: 'conn-old',
+    };
+
+    const drillToHistory = (newFilters: Record<string, string>) => {
+      filters = newFilters;
+      page = 0;
+      selected = null;
+      snapshot = createHistorySnapshot(timeRange, new Date('2026-08-28T10:30:00.000Z'));
+      view = 'history';
+    };
+
+    drillToHistory({ process: 'curl.exe' });
+
+    assert.equal(view, 'history');
+    assert.equal(page, 0, 'New drill must reset page to 0');
+    assert.equal(selected, null, 'New drill must clear old selected connection');
+    assert.deepEqual(filters, { process: 'curl.exe' }, 'New drill must set target filter');
+    assert.ok(snapshot);
+  });
+
+  it('clears selected connection and resets page when route focus, page size, or filters change', () => {
+    let page = 2;
+    let selected: { sessionId: string; epochId: string; connectionId: string } | null = {
+      sessionId: 'sess-1',
+      epochId: 'ep-1',
+      connectionId: 'conn-1',
+    };
+
+    const setRouteFocus = () => {
+      page = 0;
+      selected = null;
+    };
+    const setPageSize = () => {
+      page = 0;
+      selected = null;
+    };
+    const setFilter = () => {
+      page = 0;
+      selected = null;
+    };
+
+    // Route Focus change
+    setRouteFocus();
+    assert.equal(page, 0);
+    assert.equal(selected, null);
+
+    // Re-select
+    page = 1;
+    selected = { sessionId: 'sess-1', epochId: 'ep-1', connectionId: 'conn-2' };
+    setPageSize();
+    assert.equal(page, 0);
+    assert.equal(selected, null);
+
+    // Re-select
+    page = 1;
+    selected = { sessionId: 'sess-1', epochId: 'ep-1', connectionId: 'conn-3' };
+    setFilter();
+    assert.equal(page, 0);
+    assert.equal(selected, null);
   });
 });
