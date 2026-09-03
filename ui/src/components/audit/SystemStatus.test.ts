@@ -87,3 +87,63 @@ describe('deriveSystemStatus collector staleness', () => {
     assert.equal(status.db.kind, 'offline');
   });
 });
+
+describe('deriveSystemStatus accounting & database state', () => {
+  it('reports fresh accounting when freshness.isFresh is true', () => {
+    const meta: MetaResponse = {
+      ...makeMeta(),
+      latestAccountingRun: {
+        runId: 'run-1',
+        algorithmVersion: 'v1',
+        startedAt: '2026-08-29T00:00:00Z',
+        status: 'completed',
+        sourceJournalEventCount: 100,
+        sourceBoundaryJson: '{}',
+      },
+      freshness: {
+        runId: 'run-1',
+        sourceJournalSequenceMax: 100,
+        currentJournalSequenceMax: 100,
+        lagEvents: 0,
+        isFresh: true,
+      },
+    };
+    const status = deriveSystemStatus(meta, NOW);
+    assert.equal(status.accounting.kind, 'fresh');
+  });
+
+  it('reports stale accounting when lagEvents > 0, without marking it offline/failed', () => {
+    const meta: MetaResponse = {
+      ...makeMeta(),
+      latestAccountingRun: {
+        runId: 'run-1',
+        algorithmVersion: 'v1',
+        startedAt: '2026-08-29T00:00:00Z',
+        status: 'completed',
+        sourceJournalEventCount: 100,
+        sourceBoundaryJson: '{}',
+      },
+      freshness: {
+        runId: 'run-1',
+        sourceJournalSequenceMax: 100,
+        currentJournalSequenceMax: 105,
+        lagEvents: 5,
+        isFresh: false,
+      },
+    };
+    const status = deriveSystemStatus(meta, NOW);
+    assert.equal(status.accounting.kind, 'stale');
+  });
+
+  it('reports database incompatible when schema exceeds binary max', () => {
+    const meta: MetaResponse = {
+      ...makeMeta(),
+      dbState: 'INCOMPATIBLE',
+      schemaVersion: 5,
+      maxBinarySchemaVersion: 3,
+    };
+    const status = deriveSystemStatus(meta, NOW);
+    assert.equal(status.db.kind, 'offline');
+    assert.match(status.db.title, /Schema v5/);
+  });
+});
