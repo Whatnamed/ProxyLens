@@ -89,6 +89,17 @@
   white-space: nowrap;
 }
 
+.pl-surface-lab__families {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-3);
+}
+
+.pl-surface-lab__family-heading {
+  margin: 0 0 var(--pl-space-1);
+  color: var(--pl-text-muted);
+}
+
 .pl-surface-lab__presets {
   display: flex;
   flex-direction: column;
