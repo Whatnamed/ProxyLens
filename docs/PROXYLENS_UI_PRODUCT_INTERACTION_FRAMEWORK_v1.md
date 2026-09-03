@@ -253,7 +253,7 @@ Overview and Coverage provide live analytical briefings over the current observa
 
 - For rolling ranges (`today`, `7d`, `30d`), the upper boundary `to = now` advances on a low-frequency tick (~30s).
 - Closed ranges (`yesterday`, fixed `custom`) remain strictly fixed over their defined `[from, to)` interval.
-- Background re-queries preserve previous analytical data (`keepPreviousData`) to eliminate visual skeleton flashing during low-frequency boundary ticks.
+- Background re-queries preserve previous analytical data (`keepLiveTickOnly`) ONLY during monotonic live ticks (`to >= prevTo`) under the exact same semantic scope (identical `from`, identical `routeFocus`). Switching Route Focus, switching Time Windows, or editing custom intervals immediately enters an explicit loading transition to ensure stale evidence is never displayed under a newly active scope.
 - Changing the time range in Overview or Coverage updates the live analysis range and invalidates any previous History snapshot, so entering History later freezes freshly at that entry instant.
 
 ### 6.2 Stable History Snapshot (History)
@@ -449,7 +449,7 @@ For known gaps show, where available:
 
 Interaction model:
 
-- Timeline and Gap rows support true bidirectional persistent selection:
+- Timeline and Gap rows support true bidirectional persistent selection based on stable data identity (`source(s) + startedAt + endedAt`), guaranteeing that selections never drift or jump to unrelated gaps during live 30s re-queries or list shifts:
   - Clicking a timeline gap segment selects it, highlights the corresponding table row, and smoothly scrolls it into view.
   - Clicking a gap table row selects it and highlights the corresponding timeline segment.
   - Clicking an already-selected segment or row deselects it.
@@ -476,7 +476,7 @@ System status is secondary and contextual.
 
 Healthy state should be quiet.
 
-The detailed system status is rendered as a lightweight dialog/popover anchored to the sidebar footer, with full focus management (auto-focus, Tab focus trap, Esc closure, and focus return to trigger button).
+The detailed system status is rendered as a lightweight, quiet surface dialog with full focus management (auto-focus, Tab focus trap, Esc closure, and focus return to trigger button).
 
 System status presents Meta API authority facts only—no speculative advice or predictions:
 

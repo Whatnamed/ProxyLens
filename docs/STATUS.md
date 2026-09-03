@@ -7,7 +7,7 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现、交互收口与独立审查精准修复（Review Fixes）；UI 单元测试达 63 个（15 个 Suite 全部本地 PASS），Go 收集器测试与 Phase 0 回归 100% 本地通过。当前维持 Design System = Draft，Full Tauri multi-fixture 视觉验收待办。
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现、交互收口与两轮独立审查精准修复（Review Fix 1 & 2）；UI 单元测试达 73 个（17 个 Suite 全部本地 PASS），Go 收集器测试与 Phase 0 回归 100% 本地通过。当前维持 Design System = Draft，Full Tauri multi-fixture 视觉验收待办。
 - **活动分支**：`experiment/qwen38max-directed-ui`
 - **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
@@ -32,17 +32,19 @@
 - 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译；严格保持 1:1 键名对齐。
 - 确定性 typography：正式产品 bundled Manrope 400/500、Sarasa Gothic UI SC Regular 与 SemiBold→CSS 500、JetBrains Mono 400/500 WOFF2；Narrative 以 Latin/CJK script axis 组合，locale 不改变字体或几何，系统字体只作最后 fallback；正式 Inspector surface 为 Warm Paper（Light `#f8f7f4` / Dark `#191817`）。
 
-### 独立审查与交互收口修复（Review Fixes Applied）
+### 独立审查与交互收口修复（Review Fixes 1 & 2 Applied）
 
 1. **快照冻结时机精准修复**：在 Overview / Coverage 调整时间范围仅更新 Live Analysis Range，不预先生成快照（旧快照置空）；仅在真正切入 History 时刻才冻结为快照，或在 History 内修改时间范围时立即冻结；
-2. **消除 30s 周期性 Skeleton 闪烁**：分析查询（Summary、Top Queries、Protocols、Coverage）全面配置 `placeholderData: keepPreviousData`，低频时钟刷新时无感知平滑更新；
-3. **Inspector 快捷键避让与收敛**：移除非必要的 J/K/[,/] Vim 快捷键，保留 `↑`/`↓`/`Esc`，并严格对所有自定义弹层控件（SelectMenu、DatePicker、Dialog）做焦点与 DOM 存在性让位检查；
-4. **Coverage Gap 双向持久选择**：重构 GapRow 与 Timeline Segment 为真实持久选中与取消选中逻辑，修正 Timeline 容器的 ARIA 结构（`role="region"`），分离 Hover / Focus / Selected 视觉状态；
-5. **System Status 纯粹事实收敛与完整焦点闭环**：收敛全屏黑色 Backdrop/Blur 为轻量 Dialog，移除预测性排查建议与 Copy 按钮，修复空 Callout 状态组合，补齐打开自动聚焦、Tab Focus Trap 与关闭返还焦点至触发按钮的完整闭环；
-6. **App.tsx 生产探针 Gate**：严格通过 `get_e2e_mode` 控制，仅在 `PROXYLENS_E2E_MODE=1` 时执行探针，普通用户正常运行不发起额外探针请求；
-7. **Overview Traffic Summary 副标题语义对齐**：副标题统一为全量路由统计语义，避免与当前 `routeFocus` 混淆；
-8. **交互框架文档同步**：`docs/PROXYLENS_UI_PRODUCT_INTERACTION_FRAMEWORK_v1.md` 全面同步双时间模型、Future 分段与 Gap 选择规范；
-9. **视觉状态诚实声明**：维持 Design System 为 Draft，视觉验收待通过完整 Tauri 多 fixture 执行，不妄自宣称 100% 结束。
+2. **分析查询作用域隔离（`keepLiveTickOnly`）**：彻底修复 `keepPreviousData` 过宽导致旧证据冒充新作用域数据的问题。只有在同一语义作用域（相同 `from`、相同 `routeFocus`）且 `to >= prevTo` 的单调 live 刷新时保留数据；用户切换路由作用域（如 PROXY → DIRECT）或调整时间窗口时立即清空旧数据并进入明确 loading 过渡；
+3. **Coverage Gap 稳定证据身份（`gapIdentity`）**：Gap 选择由数组下标重构为基于真实证据字段（`source(s) + startedAt + endedAt`）的稳定 ID；若 live 刷新后 Gap 掉出窗口自动安全清理选择，彻底防止 live 重新查询导致的选择漂移；
+4. **Inspector 快捷键让位与 Typo 修复**：移除非标准 J/K/[,/] Vim 快捷键，保留 `↑`/`↓`/`Esc`；修正 `.pl-date-picker__popover` typo，并在 DatePicker 根节点与 Inspector 中补齐 `data-date-picker` / `.pl-date-picker` 让位保护；
+5. **Coverage Gap 双向持久选择**：重构 GapRow 与 Timeline Segment 为真实持久选中与取消选中逻辑，修正 Timeline 容器的 ARIA 结构（`role="region"`），分离 Hover / Focus / Selected 视觉状态；
+6. **System Status 纯粹事实收敛与完整焦点闭环**：收敛全屏黑色 Backdrop/Blur 为轻量 Dialog，移除预测性排查建议与 Copy 按钮，修复空 Callout 状态组合，补齐打开自动聚焦、Tab Focus Trap 与关闭返还焦点至触发按钮的完整闭环；
+7. **App.tsx 生产探针 Gate**：严格通过 `get_e2e_mode` 控制，仅在 `PROXYLENS_E2E_MODE=1` 时执行探针，普通用户正常运行不发起额外探针请求；
+8. **Overview Traffic Summary 副标题语义对齐**：副标题统一为全量路由统计语义，避免与当前 `routeFocus` 混淆；
+9. **交互框架文档同步**：`docs/PROXYLENS_UI_PRODUCT_INTERACTION_FRAMEWORK_v1.md` 全面同步双时间模型、`keepLiveTickOnly` 语义作用域防护、Future 分段、Gap 稳定身份选择规范，删除未实现的“anchored to sidebar footer”误导文案；
+10. **高风险交互精准回归测试**：新增 `queries.test.ts` 专门测试 `keepLiveTickOnly` 作用域隔离；扩充 `coverageSegments.test.ts` 测试 `gapIdentity` 稳定性与防漂移；扩充 `AuditContext.test.ts` 测试快照冻结契约。前端测试由 63 项提升至 73 项（17 个 Suite 全部 PASS）；
+11. **视觉状态诚实声明**：维持 Design System 为 Draft，视觉验收待通过完整 Tauri 多 fixture 执行，不妄自宣称 100% 结束。
 
 ---
 
@@ -58,7 +60,7 @@
 - System Status heartbeat consistency：PASS；
 - Inspector crash resilience：PASS；
 - TypeScript / frontend build：本轮本地 PASS；
-- UI regression coverage：63 tests（本地执行结果），包含 locale dictionary parity、静态 translation-key audit、calendar navigation utilities、time snapshot、drill reset、future segments 与 system diagnostics；
+- UI regression coverage：73 tests（本地执行结果），包含 `keepLiveTickOnly` 作用域守卫、`gapIdentity` 稳定身份映射、快照生命周期转换、locale dictionary parity、静态 translation-key audit、calendar navigation utilities、time snapshot、drill reset、future segments 与 system diagnostics；
 - Locale dictionary parity：EN / 中文各 396 个 key，静态 UI translation keys 严格 1:1 对齐无缺失；
 - Typography asset build：6 个 WOFF2、17,066,080 bytes（约 17.07MB / 16.28MiB）；Manrope/Sarasa/JetBrains 均为本地正式资产，无 TTF/WOFF/italic 或额外字重；Sarasa SemiBold 源以 CSS 500 角色加载；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；

@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-09-03 — Independent review precision fixes 2 (Semantic scope guard & stable gap identity)
+
+**Scope:** 对 C 组前端第二轮独立审查提出的新问题实施精准修复。将 `keepPreviousData` 严格收敛为 `keepLiveTickOnly` 语义作用域防护函数（防止旧作用域证据冒充新作用域数据）；重构 Coverage Gap 选取为基于真实证据的稳定身份（`source(s) + startedAt + endedAt`），彻底杜绝 live 重新查询引发的选择漂移；修正 Inspector 的 `.pl-date-picker__popover` typo 与 `data-date-picker` 守卫；新增 10 项精准回归测试（测试集扩充至 73 项全部通过）；同步交互框架文档删除 sidebar anchored popover 误导文案。
+
+### Completed
+
+- **分析查询作用域守卫（`keepLiveTickOnly`）**：定义并应用语义作用域守卫函数。只有在 `from` 相同、`routeFocus` 相同且 `to >= prevTo` 的单调 live 刷新时保留上一轮数据；当用户切换 Route Focus（如 PROXY → DIRECT）或调整时间窗口时立即清空旧数据并触发显式 loading 过渡，彻底避免旧路由证据冒充新路由数据；
+- **Coverage Gap 稳定证据身份（`gapIdentity`）**：定义 `gapIdentity(gap)` 为 `sorted(sources) + startedAt + endedAt`；Timeline 色块与 Gap 表格行改用 `gapId` 绑定与持久选中；增加 live 刷新掉出窗口时的安全清理逻辑，保证多次重查期间高亮绝对稳定；
+- **Inspector DatePicker 让位修复**：修正 `.pl-date-picker__popover` typo，并在 DatePicker 根节点标记 `data-date-picker`，Inspector 键盘监听在任何日期弹层展开或交互时严格让位；
+- **交互框架文档修正**：更新第 6 节明确 `keepLiveTickOnly` 作用域守卫语义；更新第 9 节 Gap 稳定身份选择规范；更新第 10 节将 System Status 真实描述为轻量安静的居中 Dialog，删除未实现的 sidebar-anchored 描述；
+- **测试扩充与验证**：新增 `queries.test.ts`、扩充 `coverageSegments.test.ts` 与 `AuditContext.test.ts`，前端单元测试增至 73 tests（17 suites 100% PASS），TypeScript / Vite 编译 0 错误。
+
+---
+
 ## 2026-09-03 — Independent review precision fixes and boundary restraint
 
 **Scope:** 对 C 组前端交互收口进行独立审查后实施精准修复。修正快照冻结时机、消除 30s Live Range 刷新引发的骨架屏闪烁、收敛 Inspector 快捷键并增加复合组件冲突避让、实现 Coverage Gap 真实双向持久选中与语义化容器重构、收敛 System Status 视觉和内容（去除伪诊断与 Copy，补齐打开聚焦、Tab 循环与焦点返还全闭环）、将 App.tsx 生产探针受控于 E2E 模式、修正 Overview 副标题语义歧义并全面同步交互框架文档。
