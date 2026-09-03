@@ -144,11 +144,11 @@ export const HistoryPage: React.FC<{
 
   useEffect(() => {
     if (selected && !items.some((i) => i.sessionId === selected.sessionId && i.epochId === selected.epochId && i.connectionId === selected.connectionId)) {
-      if (!connectionsQ.isLoading && !connectionsQ.isPlaceholderData) {
+      if (!connectionsQ.isLoading) {
         setSelected(null);
       }
     }
-  }, [items, selected, connectionsQ.isLoading, connectionsQ.isPlaceholderData, setSelected]);
+  }, [items, selected, connectionsQ.isLoading, setSelected]);
 
   const selectedIndex = selected
     ? items.findIndex(

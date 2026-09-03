@@ -129,18 +129,18 @@ export const OverviewPage: React.FC<{
   meta: MetaResponse | undefined;
 }> = ({ client, sessionError, meta }) => {
   const { t } = useLocale();
-  const { resolvedRange, routeFocus, drillToHistory } = useAuditContext();
+  const { resolvedRange, routeFocus, drillToHistory, rangeSourceKey } = useAuditContext();
   const { from, to } = resolvedRange;
 
   const isRouteScoped = routeFocus !== 'ALL';
-  const allSummaryQ = useSummaryQuery(client, from, to, 'ALL');
-  const scopedSummaryQ = useSummaryQuery(client, from, to, routeFocus, { enabled: isRouteScoped });
-  const coverageQ = useCoverageQuery(client, from, to);
-  const processesQ = useTopProcessesQuery(client, from, to, routeFocus);
-  const hostsQ = useTopHostsQuery(client, from, to, routeFocus);
-  const rulesQ = useTopRulesQuery(client, from, to, routeFocus);
-  const proxiesQ = useTopFinalProxiesQuery(client, from, to, routeFocus);
-  const protocolsQ = useProtocolsQuery(client, from, to, routeFocus);
+  const allSummaryQ = useSummaryQuery(client, from, to, 'ALL', rangeSourceKey);
+  const scopedSummaryQ = useSummaryQuery(client, from, to, routeFocus, rangeSourceKey, { enabled: isRouteScoped });
+  const coverageQ = useCoverageQuery(client, from, to, rangeSourceKey);
+  const processesQ = useTopProcessesQuery(client, from, to, routeFocus, 10, rangeSourceKey);
+  const hostsQ = useTopHostsQuery(client, from, to, routeFocus, 10, rangeSourceKey);
+  const rulesQ = useTopRulesQuery(client, from, to, routeFocus, 10, rangeSourceKey);
+  const proxiesQ = useTopFinalProxiesQuery(client, from, to, routeFocus, 10, rangeSourceKey);
+  const protocolsQ = useProtocolsQuery(client, from, to, routeFocus, 10, rangeSourceKey);
 
   const allSummary = allSummaryQ.data;
   const scopedSummary = isRouteScoped ? scopedSummaryQ.data : allSummary;

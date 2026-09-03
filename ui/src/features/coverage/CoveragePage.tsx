@@ -224,10 +224,10 @@ export const CoveragePage: React.FC<{
   meta: MetaResponse | undefined;
 }> = ({ client, sessionError, meta }) => {
   const { locale, t } = useLocale();
-  const { resolvedRange, inspectAroundGap } = useAuditContext();
+  const { resolvedRange, inspectAroundGap, rangeSourceKey } = useAuditContext();
   const { from, to } = resolvedRange;
-  const coverageQ = useCoverageQuery(client, from, to);
-  const summaryQ = useSummaryQuery(client, from, to, 'ALL');
+  const coverageQ = useCoverageQuery(client, from, to, rangeSourceKey);
+  const summaryQ = useSummaryQuery(client, from, to, 'ALL', rangeSourceKey);
   const coverage = coverageQ.data;
   const summary = summaryQ.data;
 

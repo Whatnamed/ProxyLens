@@ -110,6 +110,7 @@ interface AuditContextValue {
 
   timeRange: TimeRangeState;
   resolvedRange: ResolvedRange;
+  rangeSourceKey: string;
   setQuickWindow: (k: QuickWindowType) => void;
   setCustomRange: (fromLocal: string, toLocal: string) => void;
   /** Custom editor is open; the applied range only changes on Apply. */
@@ -361,6 +362,7 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setView,
     timeRange,
     resolvedRange,
+    rangeSourceKey: rangeSourceKey(timeRange),
     setQuickWindow,
     setCustomRange,
     customEditorOpen,
