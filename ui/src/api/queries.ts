@@ -24,6 +24,7 @@ export function useSummaryQuery(
     queryFn: () => client!.getSummary(from, to, route),
     enabled: !!client && (options?.enabled ?? true),
     refetchInterval: 10000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -32,6 +33,7 @@ export function useTopProcessesQuery(client: QueryApiClient | null, from: string
     queryKey: ['topProcesses', from, to, route, limit],
     queryFn: () => client!.getTopProcesses(from, to, route, limit),
     enabled: !!client,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -40,6 +42,7 @@ export function useTopHostsQuery(client: QueryApiClient | null, from: string, to
     queryKey: ['topHosts', from, to, route, limit],
     queryFn: () => client!.getTopHosts(from, to, route, limit),
     enabled: !!client,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -48,6 +51,7 @@ export function useTopRulesQuery(client: QueryApiClient | null, from: string, to
     queryKey: ['topRules', from, to, route, limit],
     queryFn: () => client!.getTopRules(from, to, route, limit),
     enabled: !!client,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -56,6 +60,7 @@ export function useTopFinalProxiesQuery(client: QueryApiClient | null, from: str
     queryKey: ['topFinalProxies', from, to, route, limit],
     queryFn: () => client!.getTopFinalProxies(from, to, route, limit),
     enabled: !!client,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -64,6 +69,7 @@ export function useProtocolsQuery(client: QueryApiClient | null, from: string, t
     queryKey: ['protocols', from, to, route, limit],
     queryFn: () => client!.getProtocols(from, to, route, limit),
     enabled: !!client,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -72,6 +78,7 @@ export function useCoverageQuery(client: QueryApiClient | null, from: string, to
     queryKey: ['coverage', from, to],
     queryFn: () => client!.getCoverage(from, to),
     enabled: !!client,
+    placeholderData: keepPreviousData,
   });
 }
 

@@ -137,4 +137,14 @@ describe('AuditContext: History Snapshot & Investigation Context', () => {
     assert.equal(snapCustom2.to, snapCustom1.to);
     assert.equal(snapCustom2.frozenAt, t2.getTime());
   });
+
+  it('generates unique and comparable rangeSourceKeys', () => {
+    assert.equal(rangeSourceKey({ kind: 'today' }), 'today');
+    assert.equal(rangeSourceKey({ kind: '7d' }), '7d');
+    assert.equal(rangeSourceKey({ kind: 'yesterday' }), 'yesterday');
+    assert.equal(
+      rangeSourceKey({ kind: 'custom', customFrom: '2026-08-28T08:00', customTo: '2026-08-28T09:00' }),
+      'custom:2026-08-28T08:00..2026-08-28T09:00'
+    );
+  });
 });

@@ -149,21 +149,34 @@ export function buildSegments(
 const GapRow: React.FC<{
   gap: MergedGap;
   index: number;
-  isActive: boolean;
+  isSelected: boolean;
+  isHovered: boolean;
+  onSelect: () => void;
   onHover: (active: boolean) => void;
-  onInspect: () => void;
-}> = ({ gap, index, isActive, onHover, onInspect }) => {
+  onInspect: (e: React.MouseEvent) => void;
+}> = ({ gap, index, isSelected, isHovered, onSelect, onHover, onInspect }) => {
   const { locale, t } = useLocale();
   const src = gapProvenance(gap);
   return (
     <tr
       id={`pl-gap-row-${index}`}
-      className={isActive ? 'pl-row--active' : ''}
+      className={`pl-gap-row${isSelected ? ' pl-row--selected' : ''}${isHovered && !isSelected ? ' pl-row--hovered' : ''}`}
+      onClick={onSelect}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
       onFocus={() => onHover(true)}
       onBlur={() => onHover(false)}
       tabIndex={0}
+      role="row"
+      aria-selected={isSelected}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          const target = e.target as HTMLElement | null;
+          if (target?.tagName === 'BUTTON') return;
+          e.preventDefault();
+          onSelect();
+        }
+      }}
     >
       <td>
         <StatusIndicator
@@ -181,7 +194,13 @@ const GapRow: React.FC<{
         </span>
       </td>
       <td>
-        <button className="pl-btn pl-btn--quiet pl-btn--compact" onClick={onInspect}>
+        <button
+          className="pl-btn pl-btn--quiet pl-btn--compact"
+          onClick={(e) => {
+            e.stopPropagation();
+            onInspect(e);
+          }}
+        >
           {t('coverage.inspectGap')}
           <IconArrowRight />
         </button>
@@ -210,17 +229,22 @@ export const CoveragePage: React.FC<{
   const segments = coverage ? buildSegments(coverage, windowStart, windowEnd, locale, t) : [];
   const totalSpan = Math.max(1, windowEnd - windowStart);
   const outsideScope = (coverage?.outsideKnownScopeMs ?? 0) > 0;
+  const hasFuture = (coverage?.futureDurationMs ?? 0) > 0;
   const gaps = coverage?.mergedGaps ?? [];
-  const [activeGapIndex, setActiveGapIndex] = React.useState<number | null>(null);
+  const [selectedGapIndex, setSelectedGapIndex] = React.useState<number | null>(null);
+  const [hoveredGapIndex, setHoveredGapIndex] = React.useState<number | null>(null);
 
-  const handleSegmentClick = (seg: TimelineSegment) => {
-    if (seg.gapIndex !== undefined) {
-      setActiveGapIndex(seg.gapIndex);
-      const row = document.getElementById(`pl-gap-row-${seg.gapIndex}`);
-      if (row) {
-        row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  const handleToggleSelectGap = (gapIndex: number) => {
+    setSelectedGapIndex((prev) => {
+      const next = prev === gapIndex ? null : gapIndex;
+      if (next !== null) {
+        const row = document.getElementById(`pl-gap-row-${gapIndex}`);
+        if (row) {
+          row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
       }
-    }
+      return next;
+    });
   };
 
   return (
@@ -319,25 +343,32 @@ export const CoveragePage: React.FC<{
                     <div className="pl-muted pl-small">{t('coverage.noTimeline')}</div>
                   ) : (
                     <>
-                      <div className="pl-timeline" role="img" aria-label={t('coverage.timelineAria')}>
+                      <div className="pl-timeline" role="region" aria-label={t('coverage.timelineAria')}>
                         {segments.map((seg, idx) => {
                           const isGapSeg = seg.gapIndex !== undefined;
-                          const isActive = isGapSeg && seg.gapIndex === activeGapIndex;
+                          const isSelected = isGapSeg && seg.gapIndex === selectedGapIndex;
+                          const isHovered = isGapSeg && seg.gapIndex === hoveredGapIndex;
                           return (
                             <span
                               key={idx}
-                              className={`pl-timeline__seg pl-timeline__seg--${seg.kind === 'mixed' ? 'collector' : seg.kind}${isGapSeg ? ' pl-timeline__seg--interactive' : ''}${isActive ? ' pl-timeline__seg--active' : ''}`}
+                              className={`pl-timeline__seg pl-timeline__seg--${seg.kind === 'mixed' ? 'collector' : seg.kind}${isGapSeg ? ' pl-timeline__seg--interactive' : ''}${isSelected ? ' pl-timeline__seg--selected' : ''}${isHovered && !isSelected ? ' pl-timeline__seg--hovered' : ''}`}
                               style={{ width: `${Math.max(0.4, ((seg.to - seg.from) / totalSpan) * 100)}%` }}
                               title={seg.title}
                               role={isGapSeg ? 'button' : undefined}
                               tabIndex={isGapSeg ? 0 : undefined}
-                              onClick={isGapSeg ? () => handleSegmentClick(seg) : undefined}
+                              aria-pressed={isGapSeg ? isSelected : undefined}
+                              aria-label={isGapSeg ? seg.title : undefined}
+                              onClick={isGapSeg ? () => handleToggleSelectGap(seg.gapIndex!) : undefined}
+                              onMouseEnter={isGapSeg ? () => setHoveredGapIndex(seg.gapIndex!) : undefined}
+                              onMouseLeave={isGapSeg ? () => setHoveredGapIndex(null) : undefined}
+                              onFocus={isGapSeg ? () => setHoveredGapIndex(seg.gapIndex!) : undefined}
+                              onBlur={isGapSeg ? () => setHoveredGapIndex(null) : undefined}
                               onKeyDown={
                                 isGapSeg
                                   ? (e) => {
                                       if (e.key === 'Enter' || e.key === ' ') {
                                         e.preventDefault();
-                                        handleSegmentClick(seg);
+                                        handleToggleSelectGap(seg.gapIndex!);
                                       }
                                     }
                                   : undefined
@@ -348,30 +379,32 @@ export const CoveragePage: React.FC<{
                       </div>
                       <div className="pl-legend" style={{ marginTop: 8 }}>
                         <span className="pl-legend__item">
-                          <span className="pl-legend__swatch" style={{ background: 'var(--pl-surface-inset)' }} />
+                          <span className="pl-legend__swatch pl-legend__swatch--covered" />
                           <span className="pl-legend__label pl-compact-label">{t('coverage.legendCovered')}</span>
                         </span>
                         <span className="pl-legend__item">
-                          <span className="pl-legend__swatch" style={{ background: 'repeating-linear-gradient(-45deg, var(--pl-status-gap-soft), var(--pl-status-gap-soft) 3px, var(--pl-status-gap) 3px, var(--pl-status-gap) 4px)' }} />
+                          <span className="pl-legend__swatch pl-legend__swatch--controller" />
                           <span className="pl-legend__label pl-compact-label">{t('coverage.legendController')}</span>
                         </span>
                         <span className="pl-legend__item">
-                          <span className="pl-legend__swatch" style={{ background: 'var(--pl-status-offline)', opacity: 0.65 }} />
+                          <span className="pl-legend__swatch pl-legend__swatch--collector" />
                           <span className="pl-legend__label pl-compact-label">{t('coverage.legendCollector')}</span>
                         </span>
                         <span className="pl-legend__item">
-                          <span className="pl-legend__swatch" style={{ background: 'repeating-linear-gradient(90deg, transparent, transparent 2px, var(--pl-border-muted) 2px, var(--pl-border-muted) 3px)' }} />
-                          <span className="pl-legend__label pl-compact-label">{t('coverage.legendOutside')}</span>
+                          <span className="pl-legend__swatch pl-legend__swatch--mixed" />
+                          <span className="pl-legend__label pl-compact-label">{t('coverage.legendMixed')}</span>
                         </span>
-                        {coverage.futureDurationMs > 0 && (
+                        {outsideScope && (
+                          <span className="pl-legend__item">
+                            <span className="pl-legend__swatch pl-legend__swatch--outside" />
+                            <span className="pl-legend__label pl-compact-label">{t('coverage.legendOutside')}</span>
+                          </span>
+                        )}
+                        {hasFuture && (
                           <span className="pl-legend__item">
                             <span
-                              className="pl-legend__swatch"
-                              style={{
-                                background:
-                                  'repeating-linear-gradient(45deg, transparent, transparent 2px, var(--pl-border-muted) 2px, var(--pl-border-muted) 3px)',
-                                opacity: 0.65,
-                              }}
+                              className="pl-legend__swatch pl-timeline__seg--future"
+                              style={{ border: '1px solid var(--pl-border-strong)' }}
                             />
                             <span className="pl-legend__label pl-compact-label">{t('coverage.legendFuture')}</span>
                           </span>
@@ -411,8 +444,10 @@ export const CoveragePage: React.FC<{
                             key={idx}
                             index={idx}
                             gap={g}
-                            isActive={activeGapIndex === idx}
-                            onHover={(hovering) => setActiveGapIndex(hovering ? idx : null)}
+                            isSelected={selectedGapIndex === idx}
+                            isHovered={hoveredGapIndex === idx}
+                            onSelect={() => handleToggleSelectGap(idx)}
+                            onHover={(hovering) => setHoveredGapIndex(hovering ? idx : null)}
                             onInspect={() => inspectAroundGap(g.startedAt, g.endedAt)}
                           />
                         ))}

@@ -42,7 +42,10 @@ export function isLiveRangeKind(kind: WindowKind): boolean {
 }
 
 export function rangeSourceKey(t: TimeRangeState): string {
-  return `${t.kind}|${t.customFrom ?? ''}|${t.customTo ?? ''}`;
+  if (t.kind === 'custom') {
+    return `custom:${t.customFrom ?? ''}..${t.customTo ?? ''}`;
+  }
+  return t.kind;
 }
 
 export function resolveTimeRange(t: TimeRangeState, now: Date = new Date()): ResolvedRange {
@@ -220,9 +223,17 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setTimeRange(t);
       setLiveNow(now);
       setCustomEditorOpen(false);
-      freezeSnapshot(t, now);
+      if (view === 'history') {
+        freezeSnapshot(t, now);
+      } else {
+        // In Overview/Coverage (live analysis), time range change does NOT pre-freeze History.
+        // Invalidate old snapshot so entering History later will freeze freshly at that entry instant.
+        setSnapshot(null);
+        setPage(0);
+        setSelected(null);
+      }
     },
-    [freezeSnapshot]
+    [view, freezeSnapshot]
   );
 
   const setView = useCallback(

@@ -176,15 +176,29 @@ export const ConnectionInspector: React.FC<{
   useEffect(() => {
     if (!selected) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.defaultPrevented) return;
 
-      if (e.key === 'ArrowUp' || e.key === 'k' || e.key === '[') {
+      // If any composite overlay (select dropdown, date picker, or dialog) is currently open, yield completely.
+      if (document.querySelector('.pl-select-menu__popover, .pl-datepicker__popover, .pl-dialog, .pl-dialog-backdrop')) {
+        return;
+      }
+
+      // Do not intercept if focus is inside any text field or interactive composite control.
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest(
+          'input, textarea, select, button, [role="button"], [role="listbox"], [role="option"], [role="grid"], [role="gridcell"], [role="combobox"], [data-select-menu], [data-datepicker]'
+        )
+      ) {
+        return;
+      }
+
+      if (e.key === 'ArrowUp') {
         if (hasPrev && onNavigatePrev) {
           e.preventDefault();
           onNavigatePrev();
         }
-      } else if (e.key === 'ArrowDown' || e.key === 'j' || e.key === ']') {
+      } else if (e.key === 'ArrowDown') {
         if (hasNext && onNavigateNext) {
           e.preventDefault();
           onNavigateNext();
