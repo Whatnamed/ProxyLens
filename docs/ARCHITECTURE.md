@@ -19,13 +19,16 @@ Mihomo ────────────────────────�
    │
    │ External Controller（只读观察）
    ▼
-ProxyLens Collector
+proxylens-runtime
+   ├─ Collector
+   └─ Scheduled Accounting
    │
    ▼
-本地持久化
+SQLite + WAL（Authority DB）
    │
+   │ read-only
    ▼
-ProxyLens UI
+proxylens-query-api → ProxyLens UI
 ```
 
 核心隔离原则：
@@ -40,7 +43,15 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 
 ## 2. 系统组件划分
 
-当前确定 Collector、Storage、UI 三类职责解耦运行：
+当前确定 Runtime、Collector、Storage、UI 四类职责解耦运行：
+
+### Desktop Runtime Core (Phase 3E-1)
+
+- `proxylens-runtime` 是新的 Go 前台 Runtime Core executable，组合可复用的 `CollectorRunner` 与周期性 `AccountingScheduler`；
+- Runtime 负责解析 DB path、初始化 writer DB、启动 Collector 与自动核算，并在 cancellation 时按 scheduler-first 顺序 graceful shutdown；
+- Accounting 默认每 30s 检查 Freshness，fresh 或无事件时 skip，落后时复用 `storage.RebuildAccounting`；单次核算失败不终止 Collector；
+- `collector run` 保留为薄 CLI wrapper，继续提供原有 flags、signal/stdin STOP、validation sink 与 summary；
+- 当前 Runtime 是前台可运行 core，不承担 Windows Service、开机/登录自启、托盘、single-instance、detached ownership 或安装器生命周期。
 
 ### Collector (已确立生产原型)
 
@@ -75,7 +86,9 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   ```text
   Mihomo
      ↓
-  Go Collector  ──────────────→ SQLite + WAL (Authority DB)
+  proxylens-runtime
+     ├─ Go Collector ───────────→ SQLite + WAL (Authority DB)
+     └─ Scheduled Accounting ───→ derived accounting
                                    ↑
                                    │ read-only (query_only=ON)
                             Go Local Query API (Sidecar)
@@ -87,10 +100,16 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
                            Tauri v2 (Desktop Shell)
   ```
 - **核心契约**:
-  - **Tauri / Rust**: 仅负责桌面原生窗口生命周期与 Go Query API Sidecar 启停，生成单次会话高熵 Bearer Token（>=256-bit），**严禁** 在 Rust 中实现 Analytics SQL、核算或存储业务逻辑；
+  - **Tauri / Rust**: 仅负责桌面原生窗口生命周期与 Go Query API Sidecar 启停，生成单次会话高熵 Bearer Token（>=256-bit），**严禁** 在 Rust 中实现 Analytics SQL、核算或存储业务逻辑；Phase 3E-1 不自动 spawn/stop `proxylens-runtime`；
   - **Go Local Query API (`proxylens-query-api`)**: 以只读模式（`query_only=ON`, `busy_timeout=10000`）打开数据库，严格绑定 `127.0.0.1` 随机端口，校验 Bearer Token 与 CORS，完全复用 `storage.AnalyticsService` 与 `storage.QueryService`；
   - **React / TypeScript**: 纯 Web 前端，通过 TanStack React Query 消费 HTTP JSON API，**严禁** 直接读取 SQLite 数据库；
   - **零耦合生命周期**: UI 随开随用，UI 关闭时仅终止 Query API Sidecar，后台常驻 Collector 保持独立运行，完全不受影响。
+
+### 2.1 Desktop data path contract (Phase 3E-1)
+
+正式 Windows V1 authority DB 默认位于 `%LOCALAPPDATA%\ProxyLens\data\proxylens.db`。路径 precedence 为 `PROXYLENS_DB_PATH` → `PROXYLENS_DATA_DIR\proxylens.db` → 默认路径；Runtime writer 可创建目录/DB，Tauri/Query API 只读 resolver 在 DB 缺失时返回 `DB_NOT_READY`，不创建或猜测数据库。
+
+Runtime、Query API 与 Tauri 仍共享同一 canonical path contract，但职责不同：Runtime 写入，Query API 只读，React 不接触 SQLite。CLI `--db` 可为一次 Runtime invocation 指定直接 explicit path。
 
 ---
 

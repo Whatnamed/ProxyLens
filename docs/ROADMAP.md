@@ -25,6 +25,8 @@ Phase 2  持久化、核算与运行时验证                  [COMPLETED]
    ↓
 Phase 3  审计 UI                                  [IN PROGRESS — core UI implemented]
    ↓
+Phase 3E Desktop Runtime Integration              [IN PROGRESS — Runtime Core implemented]
+   ↓
 Phase 4  Audit Intelligence                       [PLANNED]
    ↓
 Later    长期增强                                 [PLANNED]
@@ -157,8 +159,31 @@ Later    长期增强                                 [PLANNED]
 
 - [ ] Coverage / History 在 scaled fixture 下的真实交互性能验收；
 - [ ] 必要时针对大数据量做虚拟化或渲染优化；
-- [ ] 桌面应用打包、图标、安装版长期数据路径与启动性能最终打磨；
-- [ ] 最终视觉 polish 与 Design System freeze。
+  - [ ] 桌面应用图标、安装版生命周期与启动性能最终打磨；
+  - [ ] 最终视觉 polish 与 Design System freeze。
+
+### Phase 3E — Desktop Runtime Integration [IN PROGRESS — Runtime Core implemented / Windows lifecycle pending]
+
+已完成 Phase 3E-1：
+
+- [x] reusable live collector runner；
+- [x] standalone `proxylens-runtime`；
+- [x] scheduled accounting（30s default、skip-if-fresh、non-reentrant、failure non-fatal）；
+- [x] canonical `%LOCALAPPDATA%\ProxyLens\data\proxylens.db` 与 `PROXYLENS_DB_PATH` / `PROXYLENS_DATA_DIR` override contract；
+- [x] Query API / Tauri read-only path contract；
+- [x] mock controller + temporary DB runtime end-to-end test；
+- [x] desktop bundle includes Query API 与 Runtime binaries。
+
+Phase 3E-2 保留为后续独立 Windows lifecycle 任务：
+
+- [ ] independent background supervisor / detached runtime ownership；
+- [ ] single-instance 与 ownership；
+- [ ] Tauri ensure-start，且 UI close 后 Runtime 保持运行的真实验收；
+- [ ] crash restart policy；
+- [ ] login/autostart policy；
+- [ ] secure Mihomo Controller Secret provisioning；
+- [ ] installer lifecycle、upgrade ownership 与 real installed-data-path validation；
+- [ ] real FLClash/Mihomo validation 与最终 real-data visual acceptance。
 
 ---
 

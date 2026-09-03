@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-09-04 — Phase 3E-1 Desktop Runtime Core
+
+**Scope:** 完成 Desktop Runtime Core 的 Go 侧运行时整合与桌面交付契约：抽取可复用 live Collector runner，新增 standalone `proxylens-runtime` 与 30s scheduled Accounting，确定 Windows canonical local data path，并让 Tauri bundle 同时包含 Query API 与 Runtime binary。Runtime 与 Query API 共享 authority DB path，但 Tauri 本阶段仍不自动管理 Runtime lifecycle。
+
+### Completed
+
+- **Collector reuse**：`collector run` 保留原有 flags、signal/stdin STOP、validation sink 与 summary，业务 loop 改由无 `os.Exit`/全局 signal 的 `pkg/runtime` runner 承担；
+- **Scheduled Accounting**：实现 no-events / skip-if-fresh、non-reentrant、failure non-fatal、retry 与 cancellation 语义；
+- **Runtime composition**：mock controller + temporary DB E2E 验证采集、Accounting freshness、read-only query、DB reopen 与 clean session closure；
+- **Desktop contract**：正式路径为 `%LOCALAPPDATA%\ProxyLens\data\proxylens.db`，env override precedence 固定；Tauri resolver 保持只读 `DB_NOT_READY` 语义，bundle 同时构建两个 Go binary；
+- **验证边界**：本阶段正式验收不使用真实 FLClash/Mihomo lifecycle、真实 Controller validation、Windows background supervisor 或 Phase 4。
+
+---
+
 ## 2026-09-04 — Final targeted cleanup: History inspector retention and Overview route focus state isolation
 
 **Scope:** 针对性解决两个核心交互状态边界：删除 HistoryPage 冗余 mount effect，严格由 AuditContext 的 `setPage` 权威负责翻页重置，确保用户在 History 选中连接后切往 Overview/Coverage 再原样返回时，selected connection 与 Inspector 能够完整保留；收敛 Overview 页面级 Loading / Error 由 `allSummaryQ` 单一权威决定，Route Focus 切换不再导致整页骨架屏闪烁或错误覆盖，`scopedSummaryQ` 仅局部控制 Missing Attribution 与 Ambiguous Relay，数据未就绪时返回 `null` 并在 UI 呈现局部 loading/unavailable，杜绝假 0 回退。

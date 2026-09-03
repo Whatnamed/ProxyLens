@@ -48,9 +48,9 @@ HipsDaemon.exe
 
 ## 当前项目状态
 
-- **阶段**：`Documentation / Discovery`
-- **代码状态**：尚未开始正式业务开发，技术栈尚未最终确定。
-- **当前核心任务**：开展 Phase 0 Mihomo 数据源验证，详见 [docs/STATUS.md](docs/STATUS.md)。
+- 当前实现状态与验证证据：见 [docs/STATUS.md](docs/STATUS.md)。
+- 长期阶段计划：见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+- 系统边界与长期技术决策：见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/decisions/](docs/decisions/)。
 
 ---
 

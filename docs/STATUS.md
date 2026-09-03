@@ -7,14 +7,23 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现、交互收口与终审语义精准修复（Review Fixes & Final Targeted Cleanup），并已正式合入 `main`；UI 单元测试达 85 个（18 个 Suite 全部本地 PASS），Go 收集器测试与 Phase 0 回归 100% 本地通过。当前维持 Design System = Draft；Final Full Tauri multi-fixture / real-data visual acceptance 因目前仍是本地服务/fixture 预览、尚未进入完整桌面 runtime 而 Deferred。
-- **活动分支**：`main`
+- **当前阶段**：Phase 3E Desktop Runtime Integration — Runtime Core implemented / Windows lifecycle pending；Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
+- **活动分支**：`feat/desktop-runtime-core`
 - **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
 - **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 `main`；工程/语义 Gate 全部通过。
 - **当前状态与待办**：
-  1. Final Full Tauri multi-fixture / real-data visual acceptance（Deferred：因目前仍是本地服务/fixture 预览、尚未进入完整桌面 runtime）。
-  2. UI Design System 继续保持 Draft。
+  1. Phase 3E-2 Windows independent background runtime lifecycle（single-instance、ensure-start、crash restart、login/autostart、secure secret provisioning、installer ownership）。
+  2. Final Full Tauri multi-fixture / real-data visual acceptance（Deferred：当前不以真实 FLClash/Mihomo lifecycle validation 作为验收路径）。
+  3. UI Design System 继续保持 Draft。
+
+### Phase 3E-1 Runtime Core
+
+- 已实现可复用 Go live Collector runner；`collector run` 保持为薄 CLI wrapper；
+- 已实现 standalone `proxylens-runtime` 与 30s configurable scheduled Accounting，包含 skip-if-fresh、no-events skip、non-reentrant、failure non-fatal 与 graceful cancellation；
+- 已确定 `%LOCALAPPDATA%\ProxyLens\data\proxylens.db`，并实现 `PROXYLENS_DB_PATH` → `PROXYLENS_DATA_DIR` → default precedence；Runtime 可创建 DB，Tauri/Query API 只读且 DB 缺失返回 `DB_NOT_READY`；
+- 桌面 binary build/bundle contract 已同时包含 `proxylens-query-api` 与 `proxylens-runtime`；Tauri 本阶段不自动 spawn Runtime；
+- Runtime integration 使用 mock controller + temporary DB，未将真实 Mihomo 纳入验收路径。
 
 ### 已实现的正式 UI
 
@@ -71,6 +80,8 @@
 - Focused interaction/contextual token implementation：PASS；Inspector surface implementation 与 final surface visual selection（Warm Paper）：PASS；
 - Bundled font licensing：`LICENSES.md` 与完整 `OFL-1.1.txt` 已纳入源码；Tauri bundle 显式映射到应用 `licenses/` resources；
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
+- Phase 3E-1 Go runtime/scheduler mock E2E、Tauri path unit tests、双 binary build 与 Tauri release build 均已完成本地验证；这些结果不是 GitHub CI PASS。
+- 本任务正式 runtime 测试使用 `httptest` / mock WebSocket 与隔离临时 SQLite DB；真实 FLClash/Mihomo lifecycle 与 real-data validation 未纳入本阶段正式验收。
 
 ### Rendered visual QA
 
@@ -115,14 +126,16 @@
 6. 双事实权威：`event_journal`（网络观测）+ `collector_sessions`（采集生命周期）。
 7. 查询架构：`React → Go Local Query API → read-only SQLite`；React 不直接读 SQLite，Rust 不复制 Go analytics/accounting。
 8. Hop Order：`chains[0]` 为最终物理出站，`chains[last]` 为顶层策略组；历史不得被当前活动节点状态回写。
-9. Gap / bootstrap / Accounting 的完整长期规则以 `ARCHITECTURE.md` 与 ADR 为准。
+9. `proxylens-runtime` 负责独立前台 Collector + Scheduled Accounting；Tauri 本阶段只管理 Query API，不自动拉起或停止 Runtime。
+10. Windows canonical authority DB 为 `%LOCALAPPDATA%\ProxyLens\data\proxylens.db`，路径 override precedence 与读写边界以 ADR 0006 为准。
+11. Gap / bootstrap / Accounting 的完整长期规则以 `ARCHITECTURE.md` 与 ADR 为准。
 
 ---
 
 ## Open Questions
 
 - 最终视觉验收后，当前 Draft Design System v1 是否 Freeze；
-- 安装版长期数据路径规约（后续安装打包阶段确定）。
+- Windows background runtime lifecycle、single-instance/ownership、secure Controller Secret provisioning 与 installer lifecycle；canonical local data path 已在 Phase 3E-1 确定。
 
 ---
 
@@ -130,11 +143,12 @@
 
 - 交互模型收口已完成：Overview / Coverage 使用动态推进的 Live Analysis Range，History 使用确定性冻结快照，已解决快照提前生成与展示范围语义漂移问题。
 - UI Design System 仍为 Draft，不应在最终视觉验收前标记 Frozen。
+- `proxylens-runtime` 当前只提供前台 Runtime Core；它不会自行 daemonize、注册服务、自启动或由 Tauri 自动拉起。
 
 ---
 
 ## Next Step
 
-1. 待后续具备完整桌面 runtime 条件时，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
-2. 在完整桌面视觉验收前，UI Design System 继续保持 Draft。
-3. 后续功能开发按 `ROADMAP.md` 既定阶段推进，不重新实现已经完成的 Phase 3 UI 基础能力。
+1. 进入 Phase 3E-2，独立处理 Windows background runtime lifecycle、single-instance、Tauri ensure-start、crash restart、login/autostart、secure secret provisioning 与 installer ownership。
+2. 待完整桌面 runtime 条件具备且用户明确安排真实环境后，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
+3. 在完整桌面视觉验收前，UI Design System 继续保持 Draft；之后再按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence。
