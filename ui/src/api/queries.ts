@@ -12,6 +12,39 @@ export function useMetaQuery(client: QueryApiClient | null) {
   });
 }
 
+/**
+ * Preserves previous analytical query data ONLY during live time boundary advancements (to >= prevTo),
+ * within the exact same semantic scope (identical from, identical route).
+ *
+ * If the user switches Route Focus (e.g. PROXY -> DIRECT) or changes the Time Window (e.g. Today -> 30d),
+ * this returns `undefined` so the UI enters an explicit loading/transition state and avoids
+ * showing stale evidence under a newly active scope.
+ */
+export function keepLiveTickOnly<TData>(
+  currentFrom: string,
+  currentTo: string,
+  currentScope?: unknown
+): (previousData: TData | undefined, previousQuery?: { queryKey: readonly unknown[] }) => TData | undefined {
+  return (previousData, previousQuery) => {
+    if (!previousData || !previousQuery) return undefined;
+    const prevKey = previousQuery.queryKey;
+    if (!Array.isArray(prevKey) || prevKey.length < 3) return undefined;
+    const prevFrom = prevKey[1];
+    const prevTo = prevKey[2];
+    const prevScope = prevKey[3];
+
+    // Semantic scope guards:
+    // 1. Window start must be identical (no range kind or custom start change)
+    if (prevFrom !== currentFrom) return undefined;
+    // 2. Secondary scope (e.g. route focus) must be identical
+    if (prevScope !== currentScope) return undefined;
+    // 3. Window end must be monotonic (live tick moving forward or same)
+    if (typeof prevTo !== 'string' || currentTo < prevTo) return undefined;
+
+    return previousData;
+  };
+}
+
 export function useSummaryQuery(
   client: QueryApiClient | null,
   from: string,
@@ -24,7 +57,7 @@ export function useSummaryQuery(
     queryFn: () => client!.getSummary(from, to, route),
     enabled: !!client && (options?.enabled ?? true),
     refetchInterval: 10000,
-    placeholderData: keepPreviousData,
+    placeholderData: keepLiveTickOnly(from, to, route),
   });
 }
 
@@ -33,7 +66,7 @@ export function useTopProcessesQuery(client: QueryApiClient | null, from: string
     queryKey: ['topProcesses', from, to, route, limit],
     queryFn: () => client!.getTopProcesses(from, to, route, limit),
     enabled: !!client,
-    placeholderData: keepPreviousData,
+    placeholderData: keepLiveTickOnly(from, to, route),
   });
 }
 
@@ -42,7 +75,7 @@ export function useTopHostsQuery(client: QueryApiClient | null, from: string, to
     queryKey: ['topHosts', from, to, route, limit],
     queryFn: () => client!.getTopHosts(from, to, route, limit),
     enabled: !!client,
-    placeholderData: keepPreviousData,
+    placeholderData: keepLiveTickOnly(from, to, route),
   });
 }
 
@@ -51,7 +84,7 @@ export function useTopRulesQuery(client: QueryApiClient | null, from: string, to
     queryKey: ['topRules', from, to, route, limit],
     queryFn: () => client!.getTopRules(from, to, route, limit),
     enabled: !!client,
-    placeholderData: keepPreviousData,
+    placeholderData: keepLiveTickOnly(from, to, route),
   });
 }
 
@@ -60,7 +93,7 @@ export function useTopFinalProxiesQuery(client: QueryApiClient | null, from: str
     queryKey: ['topFinalProxies', from, to, route, limit],
     queryFn: () => client!.getTopFinalProxies(from, to, route, limit),
     enabled: !!client,
-    placeholderData: keepPreviousData,
+    placeholderData: keepLiveTickOnly(from, to, route),
   });
 }
 
@@ -69,7 +102,7 @@ export function useProtocolsQuery(client: QueryApiClient | null, from: string, t
     queryKey: ['protocols', from, to, route, limit],
     queryFn: () => client!.getProtocols(from, to, route, limit),
     enabled: !!client,
-    placeholderData: keepPreviousData,
+    placeholderData: keepLiveTickOnly(from, to, route),
   });
 }
 
@@ -78,7 +111,7 @@ export function useCoverageQuery(client: QueryApiClient | null, from: string, to
     queryKey: ['coverage', from, to],
     queryFn: () => client!.getCoverage(from, to),
     enabled: !!client,
-    placeholderData: keepPreviousData,
+    placeholderData: keepLiveTickOnly(from, to),
   });
 }
 

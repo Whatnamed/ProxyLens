@@ -179,7 +179,11 @@ export const ConnectionInspector: React.FC<{
       if (e.defaultPrevented) return;
 
       // If any composite overlay (select dropdown, date picker, or dialog) is currently open, yield completely.
-      if (document.querySelector('.pl-select-menu__popover, .pl-datepicker__popover, .pl-dialog, .pl-dialog-backdrop')) {
+      if (
+        document.querySelector(
+          '.pl-select-menu__popover, .pl-date-picker__popover, .pl-datepicker__popover, .pl-dialog, .pl-dialog-backdrop'
+        )
+      ) {
         return;
       }
 
@@ -187,7 +191,7 @@ export const ConnectionInspector: React.FC<{
       const target = e.target as HTMLElement | null;
       if (
         target?.closest(
-          'input, textarea, select, button, [role="button"], [role="listbox"], [role="option"], [role="grid"], [role="gridcell"], [role="combobox"], [data-select-menu], [data-datepicker]'
+          'input, textarea, select, button, [role="button"], [role="listbox"], [role="option"], [role="grid"], [role="gridcell"], [role="combobox"], .pl-select-menu, .pl-date-picker, [data-select-menu], [data-date-picker]'
         )
       ) {
         return;

@@ -30,11 +30,17 @@ function provenanceLabel(kind: GapProvenance['kind'], t: (key: string) => string
   return t('coverage.legendCollector');
 }
 
+export function gapIdentity(gap: Pick<MergedGap, 'source' | 'sources' | 'startedAt' | 'endedAt'>): string {
+  const sources = (gap.sources ?? [gap.source]).filter(Boolean).slice().sort().join('+');
+  return `${sources}|${gap.startedAt}|${gap.endedAt}`;
+}
+
 export interface TimelineSegment {
   kind: 'covered' | 'controller' | 'collector' | 'mixed' | 'outside' | 'future';
   from: number;
   to: number;
   title: string;
+  gapId?: string;
   gapIndex?: number;
 }
 
@@ -118,6 +124,7 @@ export function buildSegments(
           from: gs,
           to: Math.max(ge, gs + (windowEnd - windowStart) * 0.004),
           title: t(titleKey, { reason, from: fromStr, to: toStr }),
+          gapId: gapIdentity(g),
           gapIndex: originalIndex,
         });
         cursor = Math.max(cursor, ge);
@@ -148,18 +155,20 @@ export function buildSegments(
 
 const GapRow: React.FC<{
   gap: MergedGap;
+  gapId: string;
   index: number;
   isSelected: boolean;
   isHovered: boolean;
   onSelect: () => void;
   onHover: (active: boolean) => void;
   onInspect: (e: React.MouseEvent) => void;
-}> = ({ gap, index, isSelected, isHovered, onSelect, onHover, onInspect }) => {
+}> = ({ gap, gapId, index, isSelected, isHovered, onSelect, onHover, onInspect }) => {
   const { locale, t } = useLocale();
   const src = gapProvenance(gap);
   return (
     <tr
       id={`pl-gap-row-${index}`}
+      data-gap-id={gapId}
       className={`pl-gap-row${isSelected ? ' pl-row--selected' : ''}${isHovered && !isSelected ? ' pl-row--hovered' : ''}`}
       onClick={onSelect}
       onMouseEnter={() => onHover(true)}
@@ -231,14 +240,21 @@ export const CoveragePage: React.FC<{
   const outsideScope = (coverage?.outsideKnownScopeMs ?? 0) > 0;
   const hasFuture = (coverage?.futureDurationMs ?? 0) > 0;
   const gaps = coverage?.mergedGaps ?? [];
-  const [selectedGapIndex, setSelectedGapIndex] = React.useState<number | null>(null);
-  const [hoveredGapIndex, setHoveredGapIndex] = React.useState<number | null>(null);
+  const [selectedGapId, setSelectedGapId] = React.useState<string | null>(null);
+  const [hoveredGapId, setHoveredGapId] = React.useState<string | null>(null);
 
-  const handleToggleSelectGap = (gapIndex: number) => {
-    setSelectedGapIndex((prev) => {
-      const next = prev === gapIndex ? null : gapIndex;
+  // Clear selection if the selected gap is no longer present in the queried mergedGaps
+  React.useEffect(() => {
+    if (selectedGapId && !gaps.some((g) => gapIdentity(g) === selectedGapId)) {
+      setSelectedGapId(null);
+    }
+  }, [gaps, selectedGapId]);
+
+  const handleToggleSelectGap = (gapId: string) => {
+    setSelectedGapId((prev) => {
+      const next = prev === gapId ? null : gapId;
       if (next !== null) {
-        const row = document.getElementById(`pl-gap-row-${gapIndex}`);
+        const row = document.querySelector(`[data-gap-id="${CSS.escape(gapId)}"]`);
         if (row) {
           row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }
@@ -345,9 +361,9 @@ export const CoveragePage: React.FC<{
                     <>
                       <div className="pl-timeline" role="region" aria-label={t('coverage.timelineAria')}>
                         {segments.map((seg, idx) => {
-                          const isGapSeg = seg.gapIndex !== undefined;
-                          const isSelected = isGapSeg && seg.gapIndex === selectedGapIndex;
-                          const isHovered = isGapSeg && seg.gapIndex === hoveredGapIndex;
+                          const isGapSeg = !!seg.gapId;
+                          const isSelected = isGapSeg && seg.gapId === selectedGapId;
+                          const isHovered = isGapSeg && seg.gapId === hoveredGapId;
                           return (
                             <span
                               key={idx}
@@ -358,17 +374,17 @@ export const CoveragePage: React.FC<{
                               tabIndex={isGapSeg ? 0 : undefined}
                               aria-pressed={isGapSeg ? isSelected : undefined}
                               aria-label={isGapSeg ? seg.title : undefined}
-                              onClick={isGapSeg ? () => handleToggleSelectGap(seg.gapIndex!) : undefined}
-                              onMouseEnter={isGapSeg ? () => setHoveredGapIndex(seg.gapIndex!) : undefined}
-                              onMouseLeave={isGapSeg ? () => setHoveredGapIndex(null) : undefined}
-                              onFocus={isGapSeg ? () => setHoveredGapIndex(seg.gapIndex!) : undefined}
-                              onBlur={isGapSeg ? () => setHoveredGapIndex(null) : undefined}
+                              onClick={isGapSeg ? () => handleToggleSelectGap(seg.gapId!) : undefined}
+                              onMouseEnter={isGapSeg ? () => setHoveredGapId(seg.gapId!) : undefined}
+                              onMouseLeave={isGapSeg ? () => setHoveredGapId(null) : undefined}
+                              onFocus={isGapSeg ? () => setHoveredGapId(seg.gapId!) : undefined}
+                              onBlur={isGapSeg ? () => setHoveredGapId(null) : undefined}
                               onKeyDown={
                                 isGapSeg
                                   ? (e) => {
                                       if (e.key === 'Enter' || e.key === ' ') {
                                         e.preventDefault();
-                                        handleToggleSelectGap(seg.gapIndex!);
+                                        handleToggleSelectGap(seg.gapId!);
                                       }
                                     }
                                   : undefined
@@ -439,18 +455,22 @@ export const CoveragePage: React.FC<{
                         </tr>
                       </thead>
                       <tbody>
-                        {gaps.map((g, idx) => (
-                          <GapRow
-                            key={idx}
-                            index={idx}
-                            gap={g}
-                            isSelected={selectedGapIndex === idx}
-                            isHovered={hoveredGapIndex === idx}
-                            onSelect={() => handleToggleSelectGap(idx)}
-                            onHover={(hovering) => setHoveredGapIndex(hovering ? idx : null)}
-                            onInspect={() => inspectAroundGap(g.startedAt, g.endedAt)}
-                          />
-                        ))}
+                        {gaps.map((g, idx) => {
+                          const id = gapIdentity(g);
+                          return (
+                            <GapRow
+                              key={id}
+                              gapId={id}
+                              index={idx}
+                              gap={g}
+                              isSelected={selectedGapId === id}
+                              isHovered={hoveredGapId === id}
+                              onSelect={() => handleToggleSelectGap(id)}
+                              onHover={(hovering) => setHoveredGapId(hovering ? id : null)}
+                              onInspect={() => inspectAroundGap(g.startedAt, g.endedAt)}
+                            />
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}

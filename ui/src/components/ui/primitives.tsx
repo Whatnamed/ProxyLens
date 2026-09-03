@@ -451,7 +451,7 @@ export const DateTimePicker: React.FC<{
   };
 
   return (
-    <div ref={rootRef} className={`pl-date-picker${className ? ` ${className}` : ''}`} onBlur={handleRootBlur}>
+    <div ref={rootRef} className={`pl-date-picker${className ? ` ${className}` : ''}`} data-date-picker onBlur={handleRootBlur}>
       <button
         ref={triggerRef}
         type="button"
