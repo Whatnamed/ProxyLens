@@ -5,6 +5,43 @@
 
 ---
 
+## 2026-09-03 — Second-round Inspector surface exploration
+
+**Scope:** 只扩展 DEV-only Inspector surface comparison，并同步当前视觉
+Freeze 状态；不改变正式 `--pl-inspector`、既有 UI、字体、交互、布局、产品语义或
+backend / Query API / Collector / Storage。
+
+### Root cause
+
+- 既有 Surface Lab 将候选平铺为单一列表，且主要是同一 neutral hue 的明度变化，
+  无法有效比较用户更关注的 warm stone、greige、mushroom、cool porcelain、
+  blue-gray fog 与 green-gray ash 等低 chroma 方向；
+- STATUS 将 Inspector final surface selection 留为 PENDING，却仍把完整 Tauri
+  视觉验收写成“唯一阻塞项”，未准确表达 Freeze 前的两个剩余事项。
+
+### Completed
+
+- Surface Lab 改为 Neutral、Warm、Earth / Gray、Cool 四个 family，每组 3 个，
+  共 12 个 DEV-only 低 chroma 候选；保留 Baseline、Neutral Layered 与 Stone 方向的
+  比较价值，并以更浅的 Light Stone（`#f8f6f3`）替代旧 Stone 候选；
+- 所有候选仍只覆盖运行时 `--pl-inspector`，默认保持 Baseline，Light / Dark 使用
+  同一 preset 的对应值，hollow marker mask 继续跟随 Inspector surface；
+- 复核候选与 PROXY / DIRECT / REJECT、Fresh / Offline / Estimated / Missing 的
+  语义区分；未发现需要因 collision 删除的候选；
+- 将 Components / Patterns 与 Implementation / QA 的 Surface Lab 描述改为耐久的
+  grouped low-chroma candidate 规则，不把实验 hex 列表写入正式 Token Reference；
+- STATUS 改为列出 Inspector final surface human selection 与 Full Tauri
+  multi-fixture visual acceptance 两项剩余事项。
+
+### Validation state
+
+- DEV Surface Lab 默认收起，按四个 family 展开比较 12 个候选；每个候选仍显示
+  name、Light / Dark swatch 与对应 hex；
+- 未修改正式 `--pl-inspector` Baseline、其它 palette、页面布局或上一轮 OFL /
+  Tauri bundle resource 方案；`npm.cmd test`（42 项）与 `npm.cmd run build` 均通过。
+
+---
+
 ## 2026-09-03 — Inspector surface candidate expansion and licensing closure
 
 **Scope:** 只扩展 DEV-only Inspector surface comparison，修正文档状态并补齐
