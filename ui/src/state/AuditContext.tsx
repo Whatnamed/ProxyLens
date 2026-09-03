@@ -31,13 +31,17 @@ export interface ResolvedRange {
   to: string;
 }
 
-interface TimeRangeState {
+export interface TimeRangeState {
   kind: WindowKind;
   customFrom?: string;
   customTo?: string;
 }
 
-function rangeSourceKey(t: TimeRangeState): string {
+export function isLiveRangeKind(kind: WindowKind): boolean {
+  return kind === 'today' || kind === '7d' || kind === '30d';
+}
+
+export function rangeSourceKey(t: TimeRangeState): string {
   return `${t.kind}|${t.customFrom ?? ''}|${t.customTo ?? ''}`;
 }
 
@@ -60,6 +64,39 @@ export interface HistorySnapshot {
   to: string;
   frozenAt: number;
   sourceKey: string;
+  kind: WindowKind;
+}
+
+export function createHistorySnapshot(t: TimeRangeState, now: Date = new Date()): HistorySnapshot {
+  const r = resolveTimeRange(t, now);
+  return {
+    from: r.from,
+    to: r.to,
+    frozenAt: now.getTime(),
+    sourceKey: rangeSourceKey(t),
+    kind: t.kind,
+  };
+}
+
+export function refreshSnapshot(
+  prev: HistorySnapshot,
+  t: TimeRangeState,
+  now: Date = new Date()
+): HistorySnapshot {
+  if (isLiveRangeKind(prev.kind)) {
+    const r = resolveTimeRange(t, now);
+    return {
+      from: r.from,
+      to: r.to,
+      frozenAt: now.getTime(),
+      sourceKey: rangeSourceKey(t),
+      kind: prev.kind,
+    };
+  }
+  return {
+    ...prev,
+    frozenAt: now.getTime(),
+  };
 }
 
 export type ThemeName = 'light' | 'dark';
@@ -112,6 +149,7 @@ const GAP_CONTEXT_MS = 15 * 60 * 1000;
 export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [view, setViewRaw] = useState<ViewName>('overview');
   const [timeRange, setTimeRange] = useState<TimeRangeState>({ kind: 'today' });
+  const [liveNow, setLiveNow] = useState<Date>(() => new Date());
   const [customEditorOpen, setCustomEditorOpen] = useState(false);
   const [routeFocus, setRouteFocusRaw] = useState<RouteFocus>('PROXY');
   const [filters, setFilters] = useState<HistoryFilters>({});
@@ -151,25 +189,38 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch {}
   }, [locale]);
 
-  const resolvedRange = useMemo(() => resolveTimeRange(timeRange), [timeRange]);
+  useEffect(() => {
+    // Low-frequency tick (30s) to advance live analysis upper bounds (Overview, Coverage)
+    const timer = setInterval(() => {
+      if (isLiveRangeKind(timeRange.kind)) {
+        setLiveNow(new Date());
+      }
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [timeRange.kind]);
 
-  const freezeSnapshot = useCallback((t: TimeRangeState) => {
-    const r = resolveTimeRange(t);
-    setSnapshot({ from: r.from, to: r.to, frozenAt: Date.now(), sourceKey: rangeSourceKey(t) });
+  // Live Analysis range: advances with liveNow for today / 7d / 30d; fixed for yesterday / custom
+  const resolvedRange = useMemo(
+    () => resolveTimeRange(timeRange, isLiveRangeKind(timeRange.kind) ? liveNow : undefined),
+    [timeRange, liveNow]
+  );
+
+  const freezeSnapshot = useCallback((t: TimeRangeState, now = new Date()) => {
+    setSnapshot(createHistorySnapshot(t, now));
     setPage(0);
     setSelected(null);
   }, []);
 
   /**
-   * Single path for applied time-range changes. The History snapshot is
-   * re-frozen on every applied change so the displayed audit window and the
-   * queried [from, to) window can never diverge.
+   * Single path for applied time-range changes.
    */
   const applyTimeRange = useCallback(
     (t: TimeRangeState) => {
+      const now = new Date();
       setTimeRange(t);
+      setLiveNow(now);
       setCustomEditorOpen(false);
-      freezeSnapshot(t);
+      freezeSnapshot(t, now);
     },
     [freezeSnapshot]
   );
@@ -180,8 +231,10 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (v === 'history') {
         const key = rangeSourceKey(timeRange);
         if (!snapshot || snapshot.sourceKey !== key) {
-          freezeSnapshot(timeRange);
+          // Entering History for the first time or with a different time range: freeze snapshot now
+          freezeSnapshot(timeRange, new Date());
         }
+        // If returning to History and timeRange matches, keep existing snapshot and investigation!
       }
     },
     [timeRange, snapshot, freezeSnapshot]
@@ -203,14 +256,17 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
 
   const openCustomEditor = useCallback(() => {
-    // Opening the editor is a draft action only: the applied range (and the
-    // frozen History snapshot) stay unchanged until Apply is pressed.
     setCustomEditorOpen(true);
   }, []);
 
   const refreshHistory = useCallback(() => {
-    freezeSnapshot(timeRange);
-  }, [timeRange, freezeSnapshot]);
+    if (!snapshot) return;
+    const now = new Date();
+    setSnapshot((prev) => (prev ? refreshSnapshot(prev, timeRange, now) : null));
+    setPage(0);
+    setSelected(null);
+    // filters are preserved on refresh!
+  }, [snapshot, timeRange]);
 
   const setRouteFocus = useCallback((r: RouteFocus) => {
     setRouteFocusRaw(r);
@@ -246,12 +302,15 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const drillToHistory = useCallback(
     (f: Partial<HistoryFilters>) => {
-      setFilters((prev) => ({ ...prev, ...f }));
+      // New investigation: clear old unrelated filters!
+      setFilters(f);
       setPage(0);
       setSelected(null);
-      setView('history');
+      const now = new Date();
+      setSnapshot(createHistorySnapshot(timeRange, now));
+      setViewRaw('history');
     },
-    [setView]
+    [timeRange]
   );
 
   const inspectAroundGap = useCallback(
@@ -263,10 +322,19 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
       };
       setFilters({});
+      setPage(0);
+      setSelected(null);
+      const customState: TimeRangeState = {
+        kind: 'custom',
+        customFrom: toLocalInput(start),
+        customTo: toLocalInput(end),
+      };
+      setTimeRange(customState);
+      setCustomEditorOpen(false);
+      setSnapshot(createHistorySnapshot(customState, new Date()));
       setViewRaw('history');
-      applyTimeRange({ kind: 'custom', customFrom: toLocalInput(start), customTo: toLocalInput(end) });
     },
-    [applyTimeRange]
+    []
   );
 
   const toggleTheme = useCallback(() => {

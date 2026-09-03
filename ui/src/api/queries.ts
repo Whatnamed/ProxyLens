@@ -12,11 +12,17 @@ export function useMetaQuery(client: QueryApiClient | null) {
   });
 }
 
-export function useSummaryQuery(client: QueryApiClient | null, from: string, to: string, route?: string) {
+export function useSummaryQuery(
+  client: QueryApiClient | null,
+  from: string,
+  to: string,
+  route?: string,
+  options?: { enabled?: boolean }
+) {
   return useQuery({
     queryKey: ['summary', from, to, route],
     queryFn: () => client!.getSummary(from, to, route),
-    enabled: !!client,
+    enabled: !!client && (options?.enabled ?? true),
     refetchInterval: 10000,
   });
 }

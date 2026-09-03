@@ -1,6 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveTimeRange } from './AuditContext.js';
+import {
+  resolveTimeRange,
+  isLiveRangeKind,
+  createHistorySnapshot,
+  refreshSnapshot,
+  rangeSourceKey,
+} from './AuditContext.js';
 import { getQuickWindow } from '../utils/time.js';
 
 const fixedNow = new Date('2026-08-28T14:30:45.123Z');
@@ -35,5 +41,100 @@ describe('AuditContext: resolveTimeRange', () => {
       resolveTimeRange({ kind: 'custom', customFrom: 'not-a-date', customTo: 'also-not-a-date' }, fixedNow),
       getQuickWindow('7d', fixedNow)
     );
+  });
+
+  it('advances live ranges (today, 7d, 30d) as time moves forward', () => {
+    const t1 = new Date('2026-08-28T14:30:00.000Z');
+    const t2 = new Date('2026-08-28T14:35:00.000Z');
+
+    const today1 = resolveTimeRange({ kind: 'today' }, t1);
+    const today2 = resolveTimeRange({ kind: 'today' }, t2);
+    assert.equal(today1.from, today2.from);
+    assert.ok(today2.to > today1.to);
+    assert.equal(today2.to, t2.toISOString());
+
+    const sevenDays1 = resolveTimeRange({ kind: '7d' }, t1);
+    const sevenDays2 = resolveTimeRange({ kind: '7d' }, t2);
+    assert.equal(sevenDays1.from, sevenDays2.from);
+    assert.ok(sevenDays2.to > sevenDays1.to);
+    assert.equal(sevenDays2.to, t2.toISOString());
+
+    const thirtyDays1 = resolveTimeRange({ kind: '30d' }, t1);
+    const thirtyDays2 = resolveTimeRange({ kind: '30d' }, t2);
+    assert.equal(thirtyDays1.from, thirtyDays2.from);
+    assert.ok(thirtyDays2.to > thirtyDays1.to);
+    assert.equal(thirtyDays2.to, t2.toISOString());
+  });
+
+  it('keeps closed ranges (yesterday, custom) fixed as time moves forward within the same day', () => {
+    const t1 = new Date('2026-08-28T14:30:00.000Z');
+    const t2 = new Date('2026-08-28T15:45:00.000Z');
+
+    const y1 = resolveTimeRange({ kind: 'yesterday' }, t1);
+    const y2 = resolveTimeRange({ kind: 'yesterday' }, t2);
+    assert.deepEqual(y1, y2);
+
+    const c1 = resolveTimeRange(
+      { kind: 'custom', customFrom: '2026-08-28T10:00', customTo: '2026-08-28T12:00' },
+      t1
+    );
+    const c2 = resolveTimeRange(
+      { kind: 'custom', customFrom: '2026-08-28T10:00', customTo: '2026-08-28T12:00' },
+      t2
+    );
+    assert.deepEqual(c1, c2);
+  });
+});
+
+describe('AuditContext: History Snapshot & Investigation Context', () => {
+  it('classifies live vs closed range kinds correctly', () => {
+    assert.equal(isLiveRangeKind('today'), true);
+    assert.equal(isLiveRangeKind('7d'), true);
+    assert.equal(isLiveRangeKind('30d'), true);
+    assert.equal(isLiveRangeKind('yesterday'), false);
+    assert.equal(isLiveRangeKind('custom'), false);
+  });
+
+  it('creates stable snapshot frozen at the creation instant', () => {
+    const t1 = new Date('2026-08-28T10:00:00.000Z');
+    const snap = createHistorySnapshot({ kind: 'today' }, t1);
+    assert.equal(snap.kind, 'today');
+    assert.equal(snap.to, t1.toISOString());
+    assert.equal(snap.frozenAt, t1.getTime());
+    assert.equal(snap.sourceKey, rangeSourceKey({ kind: 'today' }));
+  });
+
+  it('refreshSnapshot advances upper bound for live range', () => {
+    const t1 = new Date('2026-08-28T10:00:00.000Z');
+    const t2 = new Date('2026-08-28T10:15:00.000Z');
+    const snap1 = createHistorySnapshot({ kind: 'today' }, t1);
+
+    const snap2 = refreshSnapshot(snap1, { kind: 'today' }, t2);
+    assert.equal(snap2.from, snap1.from);
+    assert.equal(snap2.to, t2.toISOString());
+    assert.ok(snap2.to > snap1.to);
+    assert.equal(snap2.frozenAt, t2.getTime());
+  });
+
+  it('refreshSnapshot preserves window boundaries for closed ranges', () => {
+    const t1 = new Date('2026-08-28T10:00:00.000Z');
+    const t2 = new Date('2026-08-28T10:30:00.000Z');
+
+    const snapYesterday1 = createHistorySnapshot({ kind: 'yesterday' }, t1);
+    const snapYesterday2 = refreshSnapshot(snapYesterday1, { kind: 'yesterday' }, t2);
+    assert.equal(snapYesterday2.from, snapYesterday1.from);
+    assert.equal(snapYesterday2.to, snapYesterday1.to);
+    assert.equal(snapYesterday2.frozenAt, t2.getTime());
+
+    const customState = {
+      kind: 'custom' as const,
+      customFrom: '2026-08-28T08:00',
+      customTo: '2026-08-28T09:00',
+    };
+    const snapCustom1 = createHistorySnapshot(customState, t1);
+    const snapCustom2 = refreshSnapshot(snapCustom1, customState, t2);
+    assert.equal(snapCustom2.from, snapCustom1.from);
+    assert.equal(snapCustom2.to, snapCustom1.to);
+    assert.equal(snapCustom2.frozenAt, t2.getTime());
   });
 });

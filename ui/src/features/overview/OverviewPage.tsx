@@ -24,6 +24,7 @@ import { RouteControl, TimeRangeControl } from '../../components/audit/AuditCont
 import { formatBytes } from '../../utils/format';
 import { IconArrowRight } from '../../components/ui/icons';
 import { TopRuleItem } from '../../api/types';
+import { deriveOverviewTotals, deriveOverviewEvidence } from './overviewSemantics';
 
 function formatDuration(ms: number, t: (key: string, vars?: Record<string, string | number>) => string): string {
   if (!ms || ms <= 0) return t('common.durationMinutes', { value: 0 });
@@ -131,7 +132,9 @@ export const OverviewPage: React.FC<{
   const { resolvedRange, routeFocus, drillToHistory } = useAuditContext();
   const { from, to } = resolvedRange;
 
-  const summaryQ = useSummaryQuery(client, from, to, routeFocus);
+  const isRouteScoped = routeFocus !== 'ALL';
+  const allSummaryQ = useSummaryQuery(client, from, to, 'ALL');
+  const scopedSummaryQ = useSummaryQuery(client, from, to, routeFocus, { enabled: isRouteScoped });
   const coverageQ = useCoverageQuery(client, from, to);
   const processesQ = useTopProcessesQuery(client, from, to, routeFocus);
   const hostsQ = useTopHostsQuery(client, from, to, routeFocus);
@@ -139,10 +142,16 @@ export const OverviewPage: React.FC<{
   const proxiesQ = useTopFinalProxiesQuery(client, from, to, routeFocus);
   const protocolsQ = useProtocolsQuery(client, from, to, routeFocus);
 
-  const summary = summaryQ.data;
-  const freshness = summary?.freshness ?? meta?.freshness;
-  const coverage = coverageQ.data ?? summary?.coverage;
-  const noRun = isNoAccountingRunError(summaryQ.error);
+  const allSummary = allSummaryQ.data;
+  const scopedSummary = isRouteScoped ? scopedSummaryQ.data : allSummary;
+  const totals = deriveOverviewTotals(allSummary, routeFocus);
+  const evidence = deriveOverviewEvidence(allSummary, scopedSummary, routeFocus);
+  const freshness = allSummary?.freshness ?? meta?.freshness;
+  const coverage = coverageQ.data ?? allSummary?.coverage;
+  const noRun = isNoAccountingRunError(allSummaryQ.error);
+  const isSummaryLoading = allSummaryQ.isLoading || (isRouteScoped && scopedSummaryQ.isLoading);
+  const isSummaryError = (allSummaryQ.isError || (isRouteScoped && scopedSummaryQ.isError)) && !noRun;
+  const summaryError = (allSummaryQ.error || (isRouteScoped ? scopedSummaryQ.error : null)) as Error | null;
 
   return (
     <PageGate client={client} sessionError={sessionError} meta={meta}>
@@ -179,35 +188,29 @@ export const OverviewPage: React.FC<{
                   <>{t('overview.noCompletedRunBody')}</>
                 }
               />
-            ) : summaryQ.isLoading ? (
+            ) : isSummaryLoading ? (
               <SkeletonRows rows={8} />
-            ) : summaryQ.isError && !noRun ? (
+            ) : isSummaryError ? (
               <ErrorState
                 title={t('overview.summaryQueryFailed')}
-                body={String((summaryQ.error as Error)?.message ?? summaryQ.error)}
+                body={String(summaryError?.message ?? summaryError)}
               />
-            ) : summary ? (
+            ) : allSummary ? (
               <>
                 <Section
                   title={t('overview.trafficSummary')}
                   sub={t('overview.trafficSummarySub', { focus: routeFocus === 'ALL' ? t('overview.allRoutes') : t('overview.routeFocus', { route: routeFocus }) })}
                 >
                   <div className="pl-overview__totals">
-                    <TotalBlock label={t('route.proxy')} route="PROXY" up={summary.proxyUpload} down={summary.proxyDownload} />
-                    <TotalBlock label={t('route.direct')} route="DIRECT" up={summary.directUpload} down={summary.directDownload} />
-                    <TotalBlock label={t('route.reject')} route="REJECT" up={summary.rejectUpload} down={summary.rejectDownload} />
+                    <TotalBlock label={t('route.proxy')} route="PROXY" up={totals.proxyUp} down={totals.proxyDown} />
+                    <TotalBlock label={t('route.direct')} route="DIRECT" up={totals.directUp} down={totals.directDown} />
+                    <TotalBlock label={t('route.reject')} route="REJECT" up={totals.rejectUp} down={totals.rejectDown} />
                   </div>
-                  {routeFocus !== 'ALL' && (
+                  {totals.inScopeTotal !== null && (
                     <div className="pl-evidence-fact" style={{ marginTop: 'var(--pl-space-4)', maxWidth: 420 }}>
                       <span className="pl-evidence-fact__label">{t('overview.inScopeTotal', { route: routeFocus })}</span>
                       <span className="pl-evidence-fact__value">
-                        {formatBytes(
-                          (routeFocus === 'PROXY'
-                            ? summary.proxyUpload + summary.proxyDownload
-                            : routeFocus === 'DIRECT'
-                              ? summary.directUpload + summary.directDownload
-                              : summary.rejectUpload + summary.rejectDownload)
-                        )}
+                        {formatBytes(totals.inScopeTotal)}
                       </span>
                     </div>
                   )}
@@ -233,21 +236,41 @@ export const OverviewPage: React.FC<{
                       </span>
                     </div>
                     <div className="pl-evidence-fact">
-                      <span className="pl-evidence-fact__label">{t('overview.missingAttribution')}</span>
-                      <span className="pl-evidence-fact__value" title={t('overview.trafficObservedWithoutProcess')}>
-                        {formatBytes(summary.missingAttributionUpload + summary.missingAttributionDownload)}
+                      <span className="pl-evidence-fact__label">
+                        {t('overview.missingAttribution')}
+                        {evidence.missingAttributionScoped && <RouteBadge route={routeFocus} quiet />}
+                      </span>
+                      <span
+                        className="pl-evidence-fact__value"
+                        title={
+                          evidence.missingAttributionScoped
+                            ? t('overview.trafficObservedWithoutProcessScoped', { route: routeFocus })
+                            : t('overview.trafficObservedWithoutProcess')
+                        }
+                      >
+                        {formatBytes(evidence.missingAttributionBytes)}
                       </span>
                     </div>
                     <div className="pl-evidence-fact">
-                      <span className="pl-evidence-fact__label">{t('overview.ambiguousRelay')}</span>
-                      <span className="pl-evidence-fact__value" title={t('overview.relayCandidates')}>
-                        {formatBytes(summary.ambiguousRelayUpload + summary.ambiguousRelayDownload)}
+                      <span className="pl-evidence-fact__label">
+                        {t('overview.ambiguousRelay')}
+                        {evidence.ambiguousRelayScoped && <RouteBadge route={routeFocus} quiet />}
+                      </span>
+                      <span
+                        className="pl-evidence-fact__value"
+                        title={
+                          evidence.ambiguousRelayScoped
+                            ? t('overview.relayCandidatesScoped', { route: routeFocus })
+                            : t('overview.relayCandidates')
+                        }
+                      >
+                        {formatBytes(evidence.ambiguousRelayBytes)}
                       </span>
                     </div>
                     <div className="pl-evidence-fact">
                       <span className="pl-evidence-fact__label">{t('overview.samplingResidual')}</span>
                       <span className="pl-evidence-fact__value" title={t('overview.samplingPhase')}>
-                        {formatBytes(summary.samplingResidualUpload + summary.samplingResidualDownload)}
+                        {formatBytes(evidence.samplingResidualBytes)}
                       </span>
                     </div>
                     <div className="pl-evidence-fact">
@@ -258,9 +281,22 @@ export const OverviewPage: React.FC<{
                         </span>
                       </span>
                       <span className="pl-evidence-fact__value" title={t('overview.gapPhysicalTrafficTitle')}>
-                        {formatBytes(summary.controllerGapPhysicalUpload + summary.controllerGapPhysicalDownload)}
+                        {formatBytes(evidence.gapPhysicalTrafficBytes)}
                       </span>
                     </div>
+                    {evidence.showUnknownRoute && (
+                      <div className="pl-evidence-fact">
+                        <span className="pl-evidence-fact__label">
+                          {t('overview.unknownRoute')}
+                          <span className="pl-evidence-chip pl-evidence-chip--ambiguous" style={{ marginLeft: 6 }}>
+                            <span className="pl-evidence-chip__label pl-compact-label">{t('common.exception')}</span>
+                          </span>
+                        </span>
+                        <span className="pl-evidence-fact__value" title={t('overview.unknownRouteTitle')}>
+                          {formatBytes(evidence.unknownRouteBytes)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </Section>
 
