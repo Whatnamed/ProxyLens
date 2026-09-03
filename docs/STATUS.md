@@ -7,7 +7,7 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现、交互收口与终审语义精准修复（Review Fixes & Final Closure Cleanup）；UI 单元测试达 80 个（18 个 Suite 全部本地 PASS），Go 收集器测试与 Phase 0 回归 100% 本地通过。当前维持 Design System = Draft，Full Tauri multi-fixture 视觉验收待办。
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现、交互收口与终审语义精准修复（Review Fixes & Final Targeted Cleanup）；UI 单元测试达 85 个（18 个 Suite 全部本地 PASS），Go 收集器测试与 Phase 0 回归 100% 本地通过。当前维持 Design System = Draft，Full Tauri multi-fixture 视觉验收待办。
 - **活动分支**：`experiment/qwen38max-directed-ui`
 - **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
@@ -32,7 +32,7 @@
 - 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译；严格保持 1:1 键名对齐。
 - 确定性 typography：正式产品 bundled Manrope 400/500、Sarasa Gothic UI SC Regular 与 SemiBold→CSS 500、JetBrains Mono 400/500 WOFF2；Narrative 以 Latin/CJK script axis 组合，locale 不改变字体或几何，系统字体只作最后 fallback；正式 Inspector surface 为 Warm Paper（Light `#f8f7f4` / Dark `#191817`）。
 
-### 独立审查与交互收口修复（Review Fixes & Final Closure Cleanup）
+### 独立审查与交互收口修复（Review Fixes & Final Targeted Cleanup）
 
 1. **快照冻结时机精准修复**：在 Overview / Coverage 调整时间范围仅更新 Live Analysis Range，不预先生成快照（旧快照置空）；仅在真正切入 History 时刻才冻结为快照，或在 History 内修改时间范围时立即冻结；
 2. **分析查询作用域隔离（`keepLiveTickOnly` + `rangeKey` 强约束）与 History 证据隔离**：`keepLiveTickOnly` 引入真正的语义范围身份 `rangeKey` 与 `isLiveRangeKey` 校验，确保只有滚动 live 窗口（`today`/`7d`/`30d`）的自动单调 tick 才会保留数据，用户手动修改 Custom 范围或切换时间类型立即进入显式 loading 过渡；同时去除 `useConnectionsQuery` 的无条件 `keepPreviousData`，用户在 History 更改过滤条件、路由或分页时，立即进入轻量骨架屏加载状态，绝不让旧连接记录披着新条件/新页码标签暂存呈现；
@@ -43,9 +43,10 @@
 7. **App.tsx 生产探针 Gate**：严格通过 `get_e2e_mode` 控制，仅在 `PROXYLENS_E2E_MODE=1` 时执行探针，普通用户正常运行不发起额外探针请求；
 8. **Overview Traffic Summary 副标题语义对齐**：副标题统一为全量路由统计语义，避免与当前 `routeFocus` 混淆；
 9. **交互框架文档同步**：`docs/PROXYLENS_UI_PRODUCT_INTERACTION_FRAMEWORK_v1.md` 全面同步双时间模型、`keepLiveTickOnly` 语义作用域防护、Future 分段、Gap 稳定身份选择规范，删除未实现的“anchored to sidebar footer”误导文案；
-10. **高风险交互精准回归测试**：新增 `queries.test.ts` 专门测试 `keepLiveTickOnly` 与 History 作用域隔离；扩充 `coverageSegments.test.ts` 测试 `gapIdentity` 稳定性与防漂移；扩充 `AuditContext.test.ts` 测试快照冻结契约。前端测试达 80 项（18 个 Suite 全部 PASS）；
+10. **高风险交互精准回归测试**：新增 `queries.test.ts` 专门测试 `keepLiveTickOnly` 与 History 作用域隔离；扩充 `coverageSegments.test.ts` 测试 `gapIdentity` 稳定性与防漂移；扩充 `AuditContext.test.ts` 测试快照冻结契约。前端测试达 85 项（18 个 Suite 全部 PASS）；
 11. **视觉状态诚实声明**：维持 Design System 为 Draft，视觉验收待通过完整 Tauri 多 fixture 执行，不妄自宣称 100% 结束；
-12. **最终收尾清理（Final Closure Cleanup）**：补齐 Coverage 图例各 swatch modifier 与 mixed gap 双色纹理样式（利用 `--pl-status-offline` 与 `--pl-status-gap` 双色条纹在彩色与灰阶下均可明确区分），解耦 Gap Selection 与数据源 Provenance 视觉表现（使用现有统一 neutral/accent selection）；修正 History 翻页时选中项立即置空、彻底消除 Inspector 跨页残留；准确表达 System Status 中源事件数为“核算纳入事件数”并更新 Coverage Gap helper 文案；清理无用 i18n keys（390 keys 严格 1:1 对齐）与遗留 gapIndex/originalIndex 代码。
+12. **最终收尾清理（Final Closure Cleanup）**：补齐 Coverage 图例各 swatch modifier 与 mixed gap 双色纹理样式（利用 `--pl-status-offline` 与 `--pl-status-gap` 双色条纹在彩色与灰阶下均可明确区分），解耦 Gap Selection 与数据源 Provenance 视觉表现（使用现有统一 neutral/accent selection）；修正 History 翻页时选中项立即置空、彻底消除 Inspector 跨页残留；准确表达 System Status 中源事件数为“核算纳入事件数”并更新 Coverage Gap helper 文案；清理无用 i18n keys（390 keys 严格 1:1 对齐）与遗留 gapIndex/originalIndex 代码；
+13. **History 选区保留与 Overview 局部状态收敛**：删除 HistoryPage 冗余 mount effect，严格由 AuditContext 的 `setPage` 单一权威入口负责翻页选中重置，完整保障 History → Overview/Coverage → History 原样返回时保留选中行与 Inspector；Overview 页面级骨架屏与错误状态严格收敛由 `allSummaryQ` 单一权威决定，Route Focus 切换不再触发整页闪烁，`scopedSummary` 仅局部控制 Missing Attribution 与 Ambiguous Relay，加载时克制呈现局部状态并杜绝假 0 回退。
 
 ---
 
@@ -61,7 +62,7 @@
 - System Status heartbeat consistency：PASS；
 - Inspector crash resilience：PASS；
 - TypeScript / frontend build：本轮本地 PASS；
-- UI regression coverage：80 tests（18 suites 本地执行结果），包含 `keepLiveTickOnly` 作用域守卫、History 查询证据隔离、History 翻页选区重置、Coverage 混合缺口类型、`gapIdentity` 稳定身份映射、快照生命周期转换、locale dictionary parity、静态 translation-key audit、calendar navigation utilities、time snapshot、drill reset、future segments 与 system diagnostics；
+- UI regression coverage：85 tests（18 suites 本地执行结果），包含 `keepLiveTickOnly` 作用域守卫、History 查询证据隔离、History 翻页选区重置与返回保留、Coverage 混合缺口类型、Overview Route 局部加载与 null 防假 0、`gapIdentity` 稳定身份映射、快照生命周期转换、locale dictionary parity、静态 translation-key audit、calendar navigation utilities、time snapshot、drill reset、future segments 与 system diagnostics；
 - Locale dictionary parity：EN / 中文各 390 个 key，静态 UI translation keys 严格 1:1 对齐无缺失；
 - Typography asset build：6 个 WOFF2、17,066,080 bytes（约 17.07MB / 16.28MiB）；Manrope/Sarasa/JetBrains 均为本地正式资产，无 TTF/WOFF/italic 或额外字重；Sarasa SemiBold 源以 CSS 500 角色加载；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；

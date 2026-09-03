@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-09-04 — Final targeted cleanup: History inspector retention and Overview route focus state isolation
+
+**Scope:** 针对性解决两个核心交互状态边界：删除 HistoryPage 冗余 mount effect，严格由 AuditContext 的 `setPage` 权威负责翻页重置，确保用户在 History 选中连接后切往 Overview/Coverage 再原样返回时，selected connection 与 Inspector 能够完整保留；收敛 Overview 页面级 Loading / Error 由 `allSummaryQ` 单一权威决定，Route Focus 切换不再导致整页骨架屏闪烁或错误覆盖，`scopedSummaryQ` 仅局部控制 Missing Attribution 与 Ambiguous Relay，数据未就绪时返回 `null` 并在 UI 呈现局部 loading/unavailable，杜绝假 0 回退。
+
+### Completed
+
+- **History 选区保留契约恢复**：移除 `HistoryPage.tsx` 中每次重新 mount 都会执行的 `useEffect(() => setSelected(null), [page])`，由 `AuditContext` 的 `setPage(p)` 统一权威负责分页时的选区清空；用户切出切回 History 时，只要调查上下文未变，选中连接与 Inspector 完美保留；
+- **Overview 页面级状态与 Scoped 状态解耦**：页面级 Empty / Loading / Error 仅由 `allSummaryQ` 控制；Route Focus 切换时全局事实（Traffic Summary、Coverage、Sampling Residual、Gap Physical Traffic、Unknown Route）稳定维持，不发生整页骨架屏闪烁；
+- **证据字段防假 0 与局部过渡**：`deriveOverviewEvidence` 在 `scopedSummary` 为 `undefined` 时返回 `null`（而不是回退为 0 B）；`OverviewPage` 中对 Missing Attribution 和 Ambiguous Relay 提供局部 `…` 加载与 `common.notAvailable` 错误状态，保留 RouteBadge 标识；
+- **回归测试覆盖**：新增/更新 5 项针对性回归测试（覆盖翻页清选区、原样返回保留选区、新 Drill 清选区、Route Focus 局部状态与 null 安全、页面级与局部错误隔离），前端测试集达 85 项（18 个 Suite 全部本地 PASS），生产构建 0 错误。
+
+---
+
 ## 2026-09-04 — Final closure cleanup: Coverage visual modifiers, selection decoupling, and history page reset
 
 **Scope:** 完成 Interaction Closure 后的收尾清理。补齐 Coverage Legend 图例各 swatch modifier 与 mixed gap 双色条纹样式（严格沿用现有 `--pl-status-offline` 与 `--pl-status-gap` 语义色彩，彩色/灰阶/暗黑均清晰可辨），解耦 Gap Selection 与数据源 Provenance 视觉表现；修正 History 翻页时连接选择项同步清空、彻底消除跨页 Inspector 上下文残留；精确修正 System Status 核算纳入事件数与 Coverage Gap helper 文案；清理未使用的 6 组 i18n 键值（字典 390 键严格 1:1 对齐）与遗留 gapIndex/originalIndex 代码。
