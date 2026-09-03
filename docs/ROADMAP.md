@@ -110,7 +110,7 @@ Later    长期增强                                 [PLANNED]
 - [x] Overview：Traffic Summary、Evidence Trust、Top Processes / Rules / Hosts / Final Proxies；
 - [x] Time Range、Route Focus、Freshness / System Status；
 - [x] Temporary Diagnostics 退出默认产品入口；
-- [x] UI semantic Closure、English / 中文 runtime locale + persistence 与 42 个前端回归测试；
+- [x] UI semantic Closure、English / 中文 runtime locale + persistence 与 80 个前端回归测试；
 - [x] 确定性 typography assets：Manrope Latin 400/500、Sarasa Gothic UI SC Regular 与 SemiBold→CSS 500、JetBrains Mono 400/500 WOFF2；Narrative 以 script-aware 轴组合，locale 不改变字体或几何；
 - [ ] healthy / gaps / stale / empty / scaled 全 fixture 真实视觉验收；
 - [ ] 1280×800 / 1600×1000 + Light / Dark 完整视觉验收；
@@ -131,7 +131,7 @@ Later    长期增强                                 [PLANNED]
 - [x] Raw Traffic Frames advanced disclosure；
 - [x] 行级键盘选择与可恢复 render error boundary；
 - [x] Select / DatePicker composite keyboard navigation、focus-out close 与 ARIA semantics；
-- [x] Connection Inspector 边界受控前/后连接切换（Prev/Next 按钮、J/K/[,/] 快捷键与输入框避让保护）；
+- [x] Connection Inspector 边界受控前/后连接切换（Prev/Next 按钮、↑/↓/Esc 快捷键与输入框避让保护）；
 - [x] 调查上下文管理（Overview 钻取清空无关筛选、侧边栏保留当前调查、Coverage 缺口检查清空旧条件并带入 ±15min）；
 
 仍待后续、且不得在无后端契约时伪造：
@@ -151,7 +151,7 @@ Later    长期增强                                 [PLANNED]
 - [x] Gap list 与 Timeline 双向 hover / 点击平滑滚动联动；
 - [x] Inspect Around Gap → History（带入 ±15min 自定义区间并冻结快照）；
 - [x] Collector heartbeat stale semantics 与 Coverage 后端一致；
-- [x] System 状态渐进式披露对话框（完整 Meta、会话心跳、核算新鲜度落后、异常排查建议与诊断复制）；
+- [x] System 状态渐进式披露对话框（完整 Meta、会话心跳、核算新鲜度落后、纯事实状态对话框与焦点闭环）；
 
 仍待后续：
 

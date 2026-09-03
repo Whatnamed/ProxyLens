@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-09-04 — Final closure cleanup: Coverage visual modifiers, selection decoupling, and history page reset
+
+**Scope:** 完成 Interaction Closure 后的收尾清理。补齐 Coverage Legend 图例各 swatch modifier 与 mixed gap 双色条纹样式（严格沿用现有 `--pl-status-offline` 与 `--pl-status-gap` 语义色彩，彩色/灰阶/暗黑均清晰可辨），解耦 Gap Selection 与数据源 Provenance 视觉表现；修正 History 翻页时连接选择项同步清空、彻底消除跨页 Inspector 上下文残留；精确修正 System Status 核算纳入事件数与 Coverage Gap helper 文案；清理未使用的 6 组 i18n 键值（字典 390 键严格 1:1 对齐）与遗留 gapIndex/originalIndex 代码。
+
+### Completed
+
+- **Coverage 图例与时间线视觉补全**：在 `shell.css` 中补齐 `.pl-legend__swatch--covered`、`--controller`、`--collector`、`--mixed`、`--outside`、`--future`；在 `components.css` 中实现 `.pl-timeline__seg--mixed`，通过 `--pl-status-offline` 与 `--pl-status-gap` 双色条纹与纯 Controller / 纯 Collector 明确区分，避免复用 Collector 视觉表现；
+- **Gap Selection 与 Provenance 解耦**：移除 `.pl-gap-row.pl-row--selected` 强制覆盖的 `--pl-status-gap` 左边框，统一使用 Design System 的 neutral/accent selection 边框与背景色；使 Hover、Focus、Selected 与 Provenance 徽标保持层级清晰；
+- **History 翻页 Inspector 即时关闭**：在 `AuditContext` 的 `setPage` 与 `HistoryPage` 中增加选区重置保护，翻页时同步清空 selected connection，避免出现“新页内容 + 旧页详情面板”短暂错位；
+- **系统状态与文案对齐**：将 `status.journalEvents` 修正为“核算纳入事件数 / Events in Run”；将 `coverage.gapsSub` 修正为“见上方汇总 / see summary above”；清理无用 advice 键值（中英各 390 项对齐）；
+- **代码清理与测试扩充**：清理 `CoveragePage` 中遗留的 `gapIndex` / `originalIndex` 字段与无效 DOM identity，Timeline React key 使用稳定 segment/gap identity；新增 2 项精准回归测试，前端测试集达 80 项（18 个 Suite 100% 本地 PASS），生产构建 0 错误。
+
+---
+
 ## 2026-09-03 — Final semantic closure: rangeKey guard and History query isolation
 
 **Scope:** 彻底解决查询缓存语义边界：在 `keepLiveTickOnly` 中引入 `rangeKey` 与 `isLiveRangeKey` 语义约束，将 live tick 保留限定为滚动 live 窗口（today/7d/30d），彻底消除手动修改 Custom 范围被误判为 live tick 的漏洞；移除 `useConnectionsQuery` 的 `keepPreviousData`，确保用户更改过滤条件、路由或分页时，History 立即进入明确骨架屏加载状态，绝不呈现陈旧连接记录；补全针对性回归测试（测试集扩充至 78 项全部 PASS）。
