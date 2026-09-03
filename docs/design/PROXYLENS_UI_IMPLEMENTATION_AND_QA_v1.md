@@ -225,6 +225,11 @@ table/render/query usability with large realistic data.
 Check:
 
 - neutral surfaces;
+- the formal Warm Paper Inspector surface (`#f8f7f4`) remains a subtle but
+  clear contextual layer against the workspace;
+- the selected History row (`--pl-row-selected`) separates its neutral layer
+  from internal route, evidence and network tags without changing semantic
+  colors;
 - text contrast;
 - semantic accent footprint;
 - borders not too faint/strong;
@@ -239,6 +244,8 @@ Check:
 - no neon;
 - semantic color footprint no larger than Light;
 - selected row vs hover clear;
+- the formal Warm Paper Inspector surface uses `#191817` and retains its
+  contextual boundary without becoming a bright slab;
 - Inspector boundary clear without card/shadow;
 - muted text still readable.
 
@@ -292,6 +299,9 @@ The generic overlay family remains independent: DatePicker and listbox menus
 use the shared raised surface, neutral border, 6px radius, restrained shadow
 and focus ring. RouteBadge, EvidenceChip and NetworkToken share 18px / 7px /
 2px / 10px compact geometry while retaining separate semantic treatments.
+Low-contrast, transparent or patterned Coverage legend swatches use
+`--pl-border-strong` for their neutral outline without changing their fill,
+pattern, size or spacing.
 The Overview ranking grid uses spacing, not a replacement divider, between
 sections.
 
@@ -337,9 +347,8 @@ Check:
 
 The formal font source versions, SHA-256 values, output sizes and conversion
 command are recorded in `ui/src/assets/fonts/LICENSES.md`. The previous
-candidate lab is removed from the production and development surface; the
-temporary visual Surface Lab is separate and only loads from the DEV
-`?surfacelab=1` query.
+candidate lab and temporary Surface Lab are removed from both the production
+and development surfaces; no `?surfacelab=1` query entry remains.
 
 ## 14.2 Inline alignment QA
 
@@ -387,9 +396,8 @@ Verify:
 - the formal production build renders Manrope for Latin, Sarasa Gothic UI SC
   for Han/CJK and JetBrains Mono for evidence; the obsolete candidate-lab
   entry, manifest and ignored asset directory are absent;
-- the DEV-only Surface Lab is available only with `?surfacelab=1`, starts
-  collapsed, provides grouped low-chroma neutral Inspector candidates during
-  visual Freeze, and is absent from the production bundle;
+- the removed Surface Lab has no component, stylesheet, dynamic entry,
+  `?surfacelab=1` behavior or production-bundle signature;
 - the 1280×800 and 1600×1000 matrix is checked for Overview, History +
   Inspector and Coverage in EN/ZH and Light/Dark.
 
@@ -422,6 +430,9 @@ Run the repository-defined:
 - Tauri dev/runtime smoke as appropriate.
 
 The actual rendered Tauri UI is required.
+
+The production build must also be checked for complete exclusion of removed
+DEV-only experiments and their query entries.
 
 A build passing without visually inspecting the application is not enough for this work package.
 

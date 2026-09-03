@@ -222,6 +222,21 @@ overlay surface and do not inherit the segmented-control selected token.
 Within each interaction family, Rest < Hover < Selected; semantic route and
 evidence colors remain independent of these neutral surfaces.
 
+## 4.5 Formal Inspector surface
+
+The formal Inspector contextual surface is **Warm Paper**:
+
+```text
+Light  #f8f7f4
+Dark   #191817
+```
+
+It is a persistent contextual layer within History. It stays in the same
+neutral family as the workspace while allowing a small, intentional hue and
+lightness distinction so the boundary is clear without becoming a card or a
+semantic color field. The DEV-only Surface Lab has been removed after the
+human selection; no runtime candidate override or `?surfacelab=1` entry remains.
+
 ---
 
 # 5. Color economy
@@ -294,7 +309,18 @@ Do not color:
 
 all at once.
 
-## 5.4 Analytical charts
+The selected row's neutral layer must retain enough tonal separation from its
+internal route, evidence and network tags. Adjust `--pl-row-selected` to solve
+that hierarchy; do not change the route or evidence semantic palette.
+
+## 5.4 Legend swatches
+
+Small, low-contrast, transparent or patterned legend swatches need a clear
+neutral outline so their boundary remains legible in both themes. Coverage
+legend swatches use `--pl-border-strong`; their dimensions, spacing and
+semantic fill/pattern remain independent.
+
+## 5.5 Analytical charts
 
 If a chart needs series distinction unrelated to route/evidence semantics, use a separate neutral analytical scale.
 
@@ -742,7 +768,7 @@ Do not use:
 
 The following may be tuned after the first real implementation:
 
-- exact neutral hex values;
+- exact neutral hex values for roles not yet selected;
 - exact semantic hue values;
 - sidebar width;
 - Inspector width;

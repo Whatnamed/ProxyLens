@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-09-03 — Inspector surface selection and visual closure
+
+**Scope:** 完成 Inspector 正式 surface 定色，并处理一项 History 与一项
+Coverage 的低对比视觉收口；删除 DEV-only Surface Lab。不改变字体、marker
+alignment、Sidebar、segmented controls、compact tag geometry、Overview、Inspector
+layout 或 backend / Query API / Collector / Storage。
+
+### Root cause
+
+- Surface Lab 的人工比较已经完成，但正式 `--pl-inspector` 仍停留在 Baseline，
+  实验组件、动态入口与 preset 数据也不应继续留在产品线；
+- Light selected History row 的 neutral layer 与内部 route、evidence、network
+  tags 的 tonal separation 不够明确；
+- Coverage legend 的小尺寸、低对比和 transparent/pattern swatches 使用
+  `--pl-border-muted`，边界在两套主题下不够稳定。
+
+### Completed
+
+- 正式 Inspector surface 选择 Warm Paper：Light `#f8f7f4`、Dark `#191817`，
+  写入正式 `--pl-inspector`；Neutral Veil（`#f8f8f6` / `#171917`）与 Soft
+  Greige（`#f6f6f2` / `#191a17`）作为人工筛选通过的设计备选保留在本历史记录，
+  不增加永久 token；
+- 删除 SurfaceLab component、CSS、`?surfacelab=1` 动态加载逻辑和全部临时
+  preset 数据；DEV 与 production 均不再保留 Surface Lab；
+- Light `--pl-row-selected` 调整为 `#dce0dc`，Dark `#292d29` 与 route、evidence、
+  NetworkToken、左侧 2px selection accent 保持不变；
+- Coverage `.pl-legend__swatch` 改用 `--pl-border-strong`，保持 swatch 尺寸、
+  radius、stripe/fill/texture、label 与 spacing 不变；
+- Design System、Token Reference、Components/Patterns、Implementation/QA、
+  STATUS 已同步正式 surface、selected-row tonal separation、legend outline 规则；
+  STATUS 不再将 Surface Lab 或 Inspector surface selection 作为待办，完整
+  Tauri multi-fixture visual Freeze 仍保持 PENDING。
+
+### Validation state
+
+- `npm.cmd test`（42 项）与 `npm.cmd run build` 通过；production 产物不包含
+  Surface Lab component、CSS、preset 文案/hex 或 `?surfacelab=1` 入口；
+- Light / Dark History selected row、route/network/evidence tags、Coverage 四个
+  legend swatch 边界与 History + Inspector 的 Warm Paper / marker mask 完成渲染
+  回归检查；完整 Tauri multi-fixture visual Freeze 仍待后续验收。
+
+---
+
 ## 2026-09-03 — Second-round Inspector surface exploration
 
 **Scope:** 只扩展 DEV-only Inspector surface comparison，并同步当前视觉

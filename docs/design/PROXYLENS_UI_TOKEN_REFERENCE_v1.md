@@ -70,6 +70,14 @@ step. Generic listboxes and date pickers continue to use the shared overlay
 surface; they do not inherit `--pl-control-selected`. Within each family,
 Rest < Hover < Selected.
 
+The formal Inspector selection is Warm Paper: Light `#f8f7f4` and Dark
+`#191817`. It is a persistent workspace-compatible contextual layer, not a
+runtime preset or an additional token family. A selected History row must keep
+enough tonal separation from its internal route, evidence and network tags;
+use `--pl-row-selected` for that neutral hierarchy rather than changing the
+semantic palettes. Small low-contrast, transparent or patterned legend
+swatches use the clear neutral outline `--pl-border-strong`.
+
 ---
 
 # 3. Interaction tokens
@@ -141,8 +149,8 @@ Initial working values:
   --pl-surface-selected: #e9ebe8;
   --pl-surface-hover: #f0f1ee;
 
-  --pl-inspector: #fafaf8;
-  --pl-row-selected: #e2e5e1;
+  --pl-inspector: #f8f7f4;
+  --pl-row-selected: #dce0dc;
   --pl-sidebar-hover: #e8eae7;
   --pl-sidebar-selected: #e2e5e1;
   --pl-control-selected: #ffffff;
@@ -219,7 +227,7 @@ Use one coherent neutral graphite family.
   --pl-surface-selected: #242824;
   --pl-surface-hover: #1c201d;
 
-  --pl-inspector: #151715;
+  --pl-inspector: #191817;
   --pl-row-selected: #292d29;
   --pl-sidebar-hover: #1c201d;
   --pl-sidebar-selected: #242824;

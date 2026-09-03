@@ -522,7 +522,9 @@ Selected:
 
 - `--pl-row-selected` stronger neutral surface;
 - optional thin selection accent;
-- must visually connect to Inspector.
+- must visually connect to Inspector;
+- must keep enough tonal separation from internal route, evidence and network
+  tags; do not alter semantic palettes to compensate.
 
 Abnormal evidence:
 
@@ -560,7 +562,8 @@ It is not a floating marketing-style card.
 Use:
 
 - one clear boundary from table;
-- `--pl-inspector`, a workspace-compatible neutral surface;
+- formal Warm Paper via `--pl-inspector`, a workspace-compatible neutral
+  surface (`#f8f7f4` Light / `#191817` Dark);
 - internal sections separated by spacing/dividers.
 
 Suggested width:
@@ -575,19 +578,7 @@ The causal hollow marker masks its connector with the current Inspector surface
 (`--pl-marker-mask-surface: var(--pl-inspector)`), not a hard-coded raised or
 white fill.
 
-## 7.2 DEV-only Surface Lab
-
-When requested with `?surfacelab=1` in Vite development mode, a small collapsed
-utility at the lower-right provides grouped low-chroma neutral Inspector
-candidates during visual Freeze. Each preset exposes its Light and Dark values
-and the current theme uses the matching value. The raw candidate values are
-confined to the DEV tool and are not part of the formal Token Reference.
-It is a temporary visual QA aid, not a production setting or a color picker;
-production builds must not include the lab or its query entry.
-
----
-
-## 7.3 InspectorHeader
+## 7.2 InspectorHeader
 
 Show:
 
@@ -600,7 +591,7 @@ Avoid a large hero header.
 
 ---
 
-## 7.4 CausalPath
+## 7.3 CausalPath
 
 Core order:
 
@@ -629,7 +620,7 @@ Do not:
 
 ---
 
-## 7.5 AccountingSummary
+## 7.4 AccountingSummary
 
 Show:
 
@@ -645,7 +636,7 @@ Estimated/interval-derived state can be marked by a small evidence indicator.
 
 ---
 
-## 7.6 EvidenceQuality
+## 7.5 EvidenceQuality
 
 Explicitly present:
 
@@ -662,7 +653,7 @@ Only the semantic state label/icon carries color.
 
 ---
 
-## 7.7 Lifecycle
+## 7.6 Lifecycle
 
 Show:
 
@@ -676,7 +667,7 @@ Use compact key/value or aligned technical list.
 
 ---
 
-## 7.8 AccountingEventTimeline
+## 7.7 AccountingEventTimeline
 
 This is a structured evidence timeline, not a social activity feed.
 
@@ -695,7 +686,7 @@ Only meaningful state transitions require semantic color.
 
 ---
 
-## 7.9 RawTrafficFrames
+## 7.8 RawTrafficFrames
 
 Advanced disclosure.
 
@@ -741,6 +732,10 @@ Recommended semantics:
 - Outside History: neutral/hatch/structural distinction.
 
 The timeline should still be understandable by label/pattern without color.
+
+Small low-contrast, transparent or patterned legend swatches use a clear
+neutral outline: `--pl-border-strong`. Preserve the existing swatch geometry,
+spacing and semantic fill/pattern.
 
 ---
 
