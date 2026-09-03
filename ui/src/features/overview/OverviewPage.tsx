@@ -199,7 +199,7 @@ export const OverviewPage: React.FC<{
               <>
                 <Section
                   title={t('overview.trafficSummary')}
-                  sub={t('overview.trafficSummarySub', { focus: routeFocus === 'ALL' ? t('overview.allRoutes') : t('overview.routeFocus', { route: routeFocus }) })}
+                  sub={t('overview.trafficSummarySub')}
                 >
                   <div className="pl-overview__totals">
                     <TotalBlock label={t('route.proxy')} route="PROXY" up={totals.proxyUp} down={totals.proxyDown} />

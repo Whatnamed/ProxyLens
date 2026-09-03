@@ -57,6 +57,9 @@ export const App: React.FC = () => {
     const runE2EProbe = async () => {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
+        const isE2E = await invoke<boolean>('get_e2e_mode');
+        if (!isE2E) return;
+
         const meta = await apiClient.getMeta();
         const summary = await apiClient.getSummary();
         const conns = await apiClient.getConnections({ limit: 1 });

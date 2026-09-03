@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MetaResponse } from '../../api/types';
 import { KeyValue, StatusIndicator, StatusKind } from '../ui/primitives';
-import { IconCheck, IconClose, IconCopy } from '../ui/icons';
+import { IconClose } from '../ui/icons';
 import { Locale, translate } from '../../i18n';
 import { useLocale } from '../../state/AuditContext';
 import { formatLocalDateTime } from '../../utils/time';
@@ -99,42 +99,47 @@ export const SystemDetailDialog: React.FC<{
   onClose: () => void;
 }> = ({ meta, onClose }) => {
   const { locale, t } = useLocale();
-  const [copied, setCopied] = useState(false);
   const status = deriveSystemStatus(meta, Date.now(), locale);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    closeBtnRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
         onClose();
+        return;
+      }
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  const handleCopy = async () => {
-    const diagData = {
-      timestamp: new Date().toISOString(),
-      meta,
-      status: {
-        collector: status.collector.label,
-        accounting: status.accounting.label,
-        db: status.db.label,
-      },
-    };
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(diagData, null, 2));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // ignore
-    }
-  };
-
   const collector = meta?.latestCollectorSession;
   const accounting = meta?.latestAccountingRun;
-  const hasIssues = status.collector.kind !== 'fresh' || status.accounting.kind !== 'fresh' || status.db.kind !== 'fresh';
 
   return (
     <div
@@ -145,6 +150,7 @@ export const SystemDetailDialog: React.FC<{
       role="presentation"
     >
       <div
+        ref={dialogRef}
         className="pl-dialog"
         role="dialog"
         aria-modal="true"
@@ -154,38 +160,18 @@ export const SystemDetailDialog: React.FC<{
           <h2 id="pl-dialog-system-title" className="pl-dialog__title">
             {t('status.systemTitle')}
           </h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <button
-              className="pl-btn pl-btn--quiet pl-btn--compact"
-              onClick={handleCopy}
-              title={t('status.copyDiagnostics')}
-            >
-              {copied ? <IconCheck /> : <IconCopy />}
-              <span>{copied ? t('status.diagnosticsCopied') : t('status.copyDiagnostics')}</span>
-            </button>
-            <button
-              className="pl-icon-btn"
-              onClick={onClose}
-              aria-label={t('inspector.close')}
-              title={t('inspector.closeTitle')}
-            >
-              <IconClose />
-            </button>
-          </div>
+          <button
+            ref={closeBtnRef}
+            className="pl-icon-btn"
+            onClick={onClose}
+            aria-label={t('inspector.close')}
+            title={t('inspector.closeTitle')}
+          >
+            <IconClose />
+          </button>
         </div>
 
         <div className="pl-dialog__body">
-          {hasIssues && (
-            <div className="pl-dialog__callout pl-dialog__callout--warning">
-              {status.collector.kind === 'stale' && <div>{t('status.collectorStaleAdvice')}</div>}
-              {status.collector.kind === 'offline' && <div>{t('status.collectorOfflineAdvice')}</div>}
-              {status.accounting.kind === 'stale' && <div>{t('status.accountingStaleAdvice')}</div>}
-              {status.db.kind === 'offline' && meta?.dbState === 'INCOMPATIBLE' && (
-                <div>{t('status.databaseIncompatibleAdvice')}</div>
-              )}
-            </div>
-          )}
-
           <div className="pl-dialog__section">
             <div className="pl-dialog__section-title">{t('status.collectorRuntime')}</div>
             <KeyValue
@@ -257,12 +243,6 @@ export const SystemDetailDialog: React.FC<{
             />
           </div>
         </div>
-
-        <div className="pl-dialog__footer">
-          <button className="pl-btn pl-btn--primary pl-btn--compact" onClick={onClose}>
-            {t('inspector.close')}
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -271,11 +251,21 @@ export const SystemDetailDialog: React.FC<{
 export const SystemStatusFooter: React.FC<{ meta: MetaResponse | undefined }> = ({ meta }) => {
   const { locale, t } = useLocale();
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const status = deriveSystemStatus(meta, Date.now(), locale);
+
+  const handleClose = () => {
+    setOpen(false);
+    requestAnimationFrame(() => {
+      triggerRef.current?.focus();
+    });
+  };
+
   return (
     <>
       <div className="pl-sidebar__status">
         <button
+          ref={triggerRef}
           type="button"
           className="pl-sidebar__status-btn"
           onClick={() => setOpen(true)}
@@ -288,7 +278,7 @@ export const SystemStatusFooter: React.FC<{ meta: MetaResponse | undefined }> = 
           <StatusIndicator kind={status.db.kind} label={status.db.label} title={status.db.title} />
         </button>
       </div>
-      {open && <SystemDetailDialog meta={meta} onClose={() => setOpen(false)} />}
+      {open && <SystemDetailDialog meta={meta} onClose={handleClose} />}
     </>
   );
 };
