@@ -3,6 +3,8 @@ package test
 import (
 	"context"
 	"database/sql"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/storage"
+	"github.com/gorilla/websocket"
 )
 
 func TestSubprocessCrashKillAndReopenSmoke(t *testing.T) {
@@ -21,6 +24,39 @@ func TestSubprocessCrashKillAndReopenSmoke(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "crash-test.db")
 
+	// This subprocess lifecycle regression uses an isolated mock controller.
+	// It must never use the user's real Mihomo controller, including the
+	// conventional 127.0.0.1:9090 endpoint.
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	mockController := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("mock controller received unexpected method %s", r.Method)
+		}
+		switch r.URL.Path {
+		case "/version":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"meta":true,"version":"mock-crash-smoke"}`))
+		case "/connections":
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			frame := `{"uploadTotal":100,"downloadTotal":200,"connections":[{"id":"mock-crash-connection","metadata":{"network":"tcp","destinationIP":"192.0.2.44","destinationPort":"443","host":"mock.example.test","process":"mock-app.exe","processPath":"C:\\Mock\\mock-app.exe"},"upload":10,"download":20,"start":"2026-09-04T00:00:00Z","chains":["Mock-Node","Proxy-Group"],"rule":"MATCH","rulePayload":"MATCH"}]}`
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(frame)); err != nil {
+				return
+			}
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockController.Close()
+
 	collectorBin, err := filepath.Abs("../collector.exe")
 	if err != nil {
 		t.Fatalf("Failed to get abs path of collector binary: %v", err)
@@ -31,7 +67,7 @@ func TestSubprocessCrashKillAndReopenSmoke(t *testing.T) {
 	}
 
 	// 1. 启动子进程 1
-	cmd1 := exec.Command(collectorBin, "run", "--controller", "http://127.0.0.1:9090", "--connections-interval", "250", "--db", dbPath)
+	cmd1 := exec.Command(collectorBin, "run", "--controller", mockController.URL, "--connections-interval", "250", "--db", dbPath)
 	cmd1.Stdout = os.Stdout
 	cmd1.Stderr = os.Stderr
 
@@ -70,7 +106,7 @@ func TestSubprocessCrashKillAndReopenSmoke(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// 4. 启动子进程 2 恢复
-	cmd2 := exec.Command(collectorBin, "run", "--controller", "http://127.0.0.1:9090", "--connections-interval", "250", "--db", dbPath)
+	cmd2 := exec.Command(collectorBin, "run", "--controller", mockController.URL, "--connections-interval", "250", "--db", dbPath)
 	stdinPipe, err := cmd2.StdinPipe()
 	if err != nil {
 		t.Fatalf("Failed to get stdin pipe: %v", err)
