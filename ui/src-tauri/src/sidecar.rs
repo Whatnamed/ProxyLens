@@ -30,19 +30,63 @@ pub fn generate_high_entropy_token() -> String {
 }
 
 pub fn resolve_db_path() -> Result<PathBuf, String> {
-    // 严格按 G12 规范: 仅读取显式环境变量 PROXYLENS_DB_PATH，杜绝自动开发目录猜测导致连错 DB
-    if let Ok(env_path) = env::var("PROXYLENS_DB_PATH") {
-        let p = PathBuf::from(&env_path);
-        if p.exists() {
-            return Ok(p);
+    resolve_db_path_from_values(
+        env_value("PROXYLENS_DB_PATH"),
+        env_value("PROXYLENS_DATA_DIR"),
+        env_value("LOCALAPPDATA"),
+        |path| path.is_file(),
+    )
+}
+
+fn env_value(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn resolve_db_path_from_values(
+    explicit_db_path: Option<String>,
+    data_dir: Option<String>,
+    local_app_data: Option<String>,
+    path_exists: impl Fn(&Path) -> bool,
+) -> Result<PathBuf, String> {
+    if let Some(env_path) = explicit_db_path {
+        let path = PathBuf::from(&env_path);
+        if path_exists(&path) {
+            return Ok(path);
         }
         return Err(format!(
-            "PROXYLENS_DB_PATH is set to '{}' but the file does not exist",
+            "DB_NOT_READY: PROXYLENS_DB_PATH is set to '{}' but the file does not exist",
             env_path
         ));
     }
 
-    Err("DB_NOT_CONFIGURED: Set PROXYLENS_DB_PATH environment variable to an existing SQLite DB path".to_string())
+    if let Some(data_dir) = data_dir {
+        let path = PathBuf::from(&data_dir).join("proxylens.db");
+        if path_exists(&path) {
+            return Ok(path);
+        }
+        return Err(format!(
+            "DB_NOT_READY: PROXYLENS_DATA_DIR resolves to '{}' but the database file does not exist",
+            path.display()
+        ));
+    }
+
+    let Some(local_app_data) = local_app_data else {
+        return Err(
+            "DB_NOT_READY: LOCALAPPDATA is not set; cannot resolve the canonical ProxyLens database path"
+                .to_string(),
+        );
+    };
+    let path = PathBuf::from(local_app_data)
+        .join("ProxyLens")
+        .join("data")
+        .join("proxylens.db");
+    if path_exists(&path) {
+        return Ok(path);
+    }
+    Err(format!(
+        "DB_NOT_READY: canonical database is not initialized at '{}'",
+        path.display()
+    ))
 }
 
 pub async fn spawn_query_sidecar(
@@ -130,4 +174,85 @@ pub fn stop_query_sidecar(mut child: CommandChild) {
     // 优雅停止: 先尝试发送 STOP\n，随后调用 kill
     let _ = child.write(b"STOP\n");
     let _ = child.kill();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_db_path_from_values;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn explicit_path_has_highest_precedence() {
+        let resolved = resolve_db_path_from_values(
+            Some(r"C:\fixture\explicit.db".to_string()),
+            Some(r"C:\fixture\data".to_string()),
+            Some(r"C:\Users\tester\AppData\Local".to_string()),
+            |_| true,
+        )
+        .expect("explicit path should resolve");
+        assert_eq!(resolved, PathBuf::from(r"C:\fixture\explicit.db"));
+    }
+
+    #[test]
+    fn data_dir_is_second_precedence() {
+        let resolved = resolve_db_path_from_values(
+            None,
+            Some(r"C:\fixture\data".to_string()),
+            Some(r"C:\Users\tester\AppData\Local".to_string()),
+            |_| true,
+        )
+        .expect("data dir path should resolve");
+        assert_eq!(resolved, PathBuf::from(r"C:\fixture\data\proxylens.db"));
+    }
+
+    #[test]
+    fn default_path_is_local_app_data_proxy_lens_data() {
+        let resolved = resolve_db_path_from_values(
+            None,
+            None,
+            Some(r"C:\Users\tester\AppData\Local".to_string()),
+            |_| true,
+        )
+        .expect("default path should resolve");
+        assert_eq!(
+            resolved,
+            PathBuf::from(r"C:\Users\tester\AppData\Local\ProxyLens\data\proxylens.db")
+        );
+    }
+
+    #[test]
+    fn missing_database_is_db_not_ready_and_does_not_create_anything() {
+        let resolved = resolve_db_path_from_values(
+            None,
+            None,
+            Some(r"C:\Users\tester\AppData\Local".to_string()),
+            |_path: &Path| false,
+        );
+        let error = resolved.expect_err("missing database should be deferred to runtime");
+        assert!(error.starts_with("DB_NOT_READY:"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn explicit_missing_database_names_the_override() {
+        let error = resolve_db_path_from_values(
+            Some(r"C:\fixture\missing.db".to_string()),
+            None,
+            None,
+            |_path: &Path| false,
+        )
+        .expect_err("missing explicit database should fail closed");
+        assert!(error.contains("PROXYLENS_DB_PATH"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn data_dir_missing_database_is_db_not_ready() {
+        let error = resolve_db_path_from_values(
+            None,
+            Some(r"C:\fixture\data".to_string()),
+            None,
+            |_path: &Path| false,
+        )
+        .expect_err("missing data-dir database should fail closed");
+        assert!(error.contains("PROXYLENS_DATA_DIR"), "unexpected error: {error}");
+    }
 }

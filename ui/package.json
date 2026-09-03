@@ -8,10 +8,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "sidecar:build": "node scripts/build-sidecar.mjs",
+    "sidecar:build": "node scripts/build-binaries.mjs",
     "tauri": "tauri",
-    "tauri:dev": "node scripts/build-sidecar.mjs && tauri dev",
-    "tauri:build": "node scripts/build-sidecar.mjs && tauri build"
+    "tauri:dev": "node scripts/build-binaries.mjs && tauri dev",
+    "tauri:build": "node scripts/build-binaries.mjs && tauri build"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.66.0",

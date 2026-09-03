@@ -28,7 +28,8 @@ export const PageGate: React.FC<{
                 {t('gate.apiUnavailableBody')}
                 <br />
                 <span className="pl-secondary">
-                  {t('gate.commonCause')} <code className="pl-state__code">PROXYLENS_DB_PATH</code> {t('gate.restart')}
+                  {t('gate.commonCause')} <code className="pl-state__code">PROXYLENS_DB_PATH</code> /{' '}
+                  <code className="pl-state__code">PROXYLENS_DATA_DIR</code> {t('gate.restart')}
                 </span>
               </>
             }
