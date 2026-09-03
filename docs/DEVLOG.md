@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-09-03 — Final semantic closure: rangeKey guard and History query isolation
+
+**Scope:** 彻底解决查询缓存语义边界：在 `keepLiveTickOnly` 中引入 `rangeKey` 与 `isLiveRangeKey` 语义约束，将 live tick 保留限定为滚动 live 窗口（today/7d/30d），彻底消除手动修改 Custom 范围被误判为 live tick 的漏洞；移除 `useConnectionsQuery` 的 `keepPreviousData`，确保用户更改过滤条件、路由或分页时，History 立即进入明确骨架屏加载状态，绝不呈现陈旧连接记录；补全针对性回归测试（测试集扩充至 78 项全部 PASS）。
+
+### Completed
+
+- **Time Range 语义身份校验**：在 `queries.ts` 中引入 `isLiveRangeKey` 并把 `rangeKey`（如 `today`, `7d`, `30d`, `custom:from..to`）注入分析查询；只有同一种滚动 live 范围且 `to >= prevTo` 时才允许保留旧数据；用户手动拉长 Custom 时间范围或切换范围种类，均立即触发显式 loading 过渡，与 Interaction Framework 规范 100% 对齐；
+- **History 连接证据隔离**：移除 `useConnectionsQuery` 的 `placeholderData: keepPreviousData`；在过滤条件（host/process/destIp）、Route Focus、分页改变时，表格立即进入轻量骨架屏加载，彻底杜绝上一页或上一个过滤条件的数据在当前新条件下方短暂逗留冒充；
+- **精准回归测试**：在 `queries.test.ts` 中增加对 Custom 手动拉长拦截、Today → Custom 切换拦截、Yesterday 拦截以及 History 查询 key 隔离的严格断言；前端单元测试扩充至 78 tests（18 个 Suite 全部通过）；
+- **生产构建验证**：TypeScript 编译与 Vite 生产构建 0 错误。
+
+---
+
 ## 2026-09-03 — Independent review precision fixes 2 (Semantic scope guard & stable gap identity)
 
 **Scope:** 对 C 组前端第二轮独立审查提出的新问题实施精准修复。将 `keepPreviousData` 严格收敛为 `keepLiveTickOnly` 语义作用域防护函数（防止旧作用域证据冒充新作用域数据）；重构 Coverage Gap 选取为基于真实证据的稳定身份（`source(s) + startedAt + endedAt`），彻底杜绝 live 重新查询引发的选择漂移；修正 Inspector 的 `.pl-date-picker__popover` typo 与 `data-date-picker` 守卫；新增 10 项精准回归测试（测试集扩充至 73 项全部通过）；同步交互框架文档删除 sidebar anchored popover 误导文案。
