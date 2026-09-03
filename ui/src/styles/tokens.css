@@ -17,8 +17,8 @@
   --pl-surface-hover: #f0f1ee;
 
   /* Contextual aliases: keep selection and workspace hierarchy separate. */
-  --pl-inspector: #fafaf8;
-  --pl-row-selected: #e2e5e1;
+  --pl-inspector: #f8f7f4;
+  --pl-row-selected: #dce0dc;
   --pl-sidebar-hover: #e8eae7;
   --pl-sidebar-selected: #e2e5e1;
   --pl-control-selected: #ffffff;
@@ -145,7 +145,7 @@
   --pl-surface-selected: #242824;
   --pl-surface-hover: #1c201d;
 
-  --pl-inspector: #151715;
+  --pl-inspector: #191817;
   --pl-row-selected: #292d29;
   --pl-sidebar-hover: #1c201d;
   --pl-sidebar-selected: #242824;

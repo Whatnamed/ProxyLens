@@ -669,7 +669,7 @@
   width: 14px;
   height: 10px;
   border-radius: 2px;
-  border: 1px solid var(--pl-border-muted);
+  border: 1px solid var(--pl-border-strong);
 }
 
 /* ---------- Session/DB gate ---------- */
