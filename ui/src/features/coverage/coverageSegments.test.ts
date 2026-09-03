@@ -255,4 +255,34 @@ describe('Coverage: stable gapIdentity and timeline mapping', () => {
     assert.ok(gapSeg, 'Expected a segment with gapId');
     assert.equal(gapSeg?.gapId, gapIdentity(gap));
   });
+
+  it('assigns kind mixed to segments when gap provenance is mixed', () => {
+    const gap = {
+      source: 'controller_stream',
+      sources: ['controller_stream', 'collector_session_boundary'],
+      startedAt: '2026-08-28T10:15:00.000Z',
+      endedAt: '2026-08-28T10:20:00.000Z',
+      durationMs: 300000,
+      reason: 'test mixed',
+    };
+    const coverage: CoverageSummary = {
+      ...baseCoverage,
+      coveredDurationMs: 3300000,
+      uncoveredDurationMs: 300000,
+      outsideKnownScopeMs: 0,
+      futureDurationMs: 0,
+      coverageRatio: 0.916,
+      effectiveScopeStart: '2026-08-28T10:00:00.000Z',
+      effectiveScopeEnd: '2026-08-28T11:00:00.000Z',
+      mergedGaps: [gap],
+    };
+
+    const windowStart = new Date('2026-08-28T10:00:00.000Z').getTime();
+    const windowEnd = new Date('2026-08-28T11:00:00.000Z').getTime();
+    const segments = buildSegments(coverage, windowStart, windowEnd, 'en', t);
+
+    const mixedSeg = segments.find((s) => s.gapId !== undefined);
+    assert.ok(mixedSeg);
+    assert.equal(mixedSeg?.kind, 'mixed');
+  });
 });

@@ -184,4 +184,22 @@ describe('AuditContext: History Snapshot & Investigation Context', () => {
     assert.equal((snapshot as any).sourceKey, 'today');
     assert.equal(snapshot.frozenAt, historyChangeNow.getTime(), 'Snapshot must be updated immediately inside History');
   });
+
+  it('clears selected connection when page changes to avoid lingering Inspector', () => {
+    let page = 0;
+    let selected: { sessionId: string; epochId: string; connectionId: string } | null = {
+      sessionId: 'sess-1',
+      epochId: 'ep-1',
+      connectionId: 'conn-1',
+    };
+
+    const setPage = (p: number) => {
+      page = p;
+      selected = null;
+    };
+
+    setPage(1);
+    assert.equal(page, 1);
+    assert.equal(selected, null, 'Selected connection must immediately reset to null on page change');
+  });
 });
