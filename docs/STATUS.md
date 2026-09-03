@@ -7,13 +7,14 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现、交互收口与终审语义精准修复（Review Fixes & Final Targeted Cleanup）；UI 单元测试达 85 个（18 个 Suite 全部本地 PASS），Go 收集器测试与 Phase 0 回归 100% 本地通过。当前维持 Design System = Draft，Full Tauri multi-fixture 视觉验收待办。
-- **活动分支**：`experiment/qwen38max-directed-ui`
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现、交互收口与终审语义精准修复（Review Fixes & Final Targeted Cleanup），并已正式合入 `main`；UI 单元测试达 85 个（18 个 Suite 全部本地 PASS），Go 收集器测试与 Phase 0 回归 100% 本地通过。当前维持 Design System = Draft；Final Full Tauri multi-fixture / real-data visual acceptance 因目前仍是本地服务/fixture 预览、尚未进入完整桌面 runtime 而 Deferred。
+- **活动分支**：`main`
 - **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
-- **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
-- **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留；工程/语义 Gate 全部通过。
-- **当前视觉 Freeze 前剩余事项**：
-  1. Full Tauri multi-fixture visual acceptance（`healthy / gaps / stale / empty / scaled` 全 fixture，1280×800 与 1600×1000，Light / Dark 完整一致性）。
+- **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
+- **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 `main`；工程/语义 Gate 全部通过。
+- **当前状态与待办**：
+  1. Final Full Tauri multi-fixture / real-data visual acceptance（Deferred：因目前仍是本地服务/fixture 预览、尚未进入完整桌面 runtime）。
+  2. UI Design System 继续保持 Draft。
 
 ### 已实现的正式 UI
 
@@ -134,7 +135,6 @@
 
 ## Next Step
 
-1. 对 C 分支做真实 Tauri 多状态、多尺寸视觉验收：`healthy / gaps / stale / empty / scaled`，至少覆盖 1280×800 与 1600×1000，并检查 Light / Dark。
-2. 根据真实视觉问题做最小、系统性的 token / density / typography / pattern 调整；若 Design System 规则改变，同步 `docs/design/`。
-3. 视觉验收通过后，决定是否 Freeze Design System v1，并规划 C 线进入正式主线的方式。
-4. 后续功能开发按 `ROADMAP.md` 未完成项继续，不重新实现已经完成的 Phase 3 UI 基础能力。
+1. 待后续具备完整桌面 runtime 条件时，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
+2. 在完整桌面视觉验收前，UI Design System 继续保持 Draft。
+3. 后续功能开发按 `ROADMAP.md` 既定阶段推进，不重新实现已经完成的 Phase 3 UI 基础能力。
