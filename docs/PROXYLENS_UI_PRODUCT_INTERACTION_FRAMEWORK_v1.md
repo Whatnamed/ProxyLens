@@ -243,27 +243,46 @@ Evidence should remain quiet when normal and visible when abnormal.
 
 ---
 
-## 6. Stable History Snapshot
+## 6. Time Model: Live Analysis Range vs Frozen History Snapshot
 
-Offset pagination can drift if the Collector keeps adding new connections.
+ProxyLens balances live traffic awareness with stable, auditable evidence review by decoupling analytical surfaces from historical pagination:
 
-When entering History, resolve a concrete upper boundary `to`.
+### 6.1 Live Analysis Range (Overview & Coverage)
 
-For a live range such as Today:
+Overview and Coverage provide live analytical briefings over the current observation period:
+
+- For rolling ranges (`today`, `7d`, `30d`), the upper boundary `to = now` advances on a low-frequency tick (~30s).
+- Closed ranges (`yesterday`, fixed `custom`) remain strictly fixed over their defined `[from, to)` interval.
+- Background re-queries preserve previous analytical data (`keepPreviousData`) to eliminate visual skeleton flashing during low-frequency boundary ticks.
+- Changing the time range in Overview or Coverage updates the live analysis range and invalidates any previous History snapshot, so entering History later freezes freshly at that entry instant.
+
+### 6.2 Stable History Snapshot (History)
+
+Offset pagination and causal investigation can drift if the Collector keeps appending new connections.
+
+When entering History, the UI freezes an authoritative upper boundary `to = now`:
 
 ```text
-History entry
-→ freeze `to = now`
+History entry (from Overview/Coverage)
+→ freeze `to = now` at entry moment
+→ create stable History snapshot
 
 filter/pagination/Inspector
-→ preserve that `to`
+→ preserve frozen snapshot `to`
+
+returning to History (unchanged range)
+→ preserve snapshot, active filters, page, and inspected row
+
+changing range inside History
+→ immediately freeze new snapshot `to = now`
+→ reset to page 1
 
 explicit Refresh
-→ advance `to`
+→ advance `to = now`
 → return to page 1
 ```
 
-This preserves the frozen `[from,to)` semantics and makes pagination auditable.
+This preserves frozen `[from, to)` semantics and makes paginated audits reproducible.
 
 ---
 
@@ -409,11 +428,15 @@ Covered
 Controller Gap
 Collector Offline Gap
 Outside Monitored History
+Future (Post-Now Interval)
 ```
 
 These states must not collapse into one generic red failure.
 
-### 9.3 Gap list
+- `Future` represents the unoccurred portion of the requested window when `windowEnd > now`. It is rendered with neutral diagonal hatching, clearly distinguished from failure gaps, and its legend item is displayed conditionally only when `futureDurationMs > 0`.
+- Estimated gap physical traffic: Controller gaps calculate window-level estimated physical bytes with a mandatory `[estimated]` evidence chip.
+
+### 9.3 Gap list and bidirectional selection
 
 For known gaps show, where available:
 
@@ -423,6 +446,15 @@ For known gaps show, where available:
 - duration;
 - reason;
 - estimated physical bytes / precision if supported.
+
+Interaction model:
+
+- Timeline and Gap rows support true bidirectional persistent selection:
+  - Clicking a timeline gap segment selects it, highlights the corresponding table row, and smoothly scrolls it into view.
+  - Clicking a gap table row selects it and highlights the corresponding timeline segment.
+  - Clicking an already-selected segment or row deselects it.
+- Timeline uses a semantic container (`role="region"`, `aria-label`) with interactive gap segments (`role="button"`, `tabindex="0"`, `aria-pressed`, Enter/Space support).
+- Hover, Focus (`:focus-visible`), and Selected (`.pl-timeline__seg--selected`) states are visually and semantically distinct.
 
 ### 9.4 Investigation entry
 
@@ -440,19 +472,18 @@ Do not imply that ProxyLens can reconstruct missing connection evidence inside t
 
 ## 10. System Status
 
-System status is secondary.
+System status is secondary and contextual.
 
 Healthy state should be quiet.
 
-Relevant signals may include:
+The detailed system status is rendered as a lightweight dialog/popover anchored to the sidebar footer, with full focus management (auto-focus, Tab focus trap, Esc closure, and focus return to trigger button).
+
+System status presents Meta API authority facts only—no speculative advice or predictions:
 
 - Query API;
-- Database;
-- schema compatibility;
-- Collector session/liveness;
-- heartbeat;
-- latest accounting run;
-- freshness lag events.
+- Database state and schema compatibility;
+- Collector session, last heartbeat, and heartbeat interval;
+- Accounting Engine run ID, algorithm version, and freshness lag events count.
 
 Important distinction:
 

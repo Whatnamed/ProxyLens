@@ -7,40 +7,42 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现、独立审查与前端交互/语义收口（严格执行 `PROXYLENS_C_FRONTEND_INTERACTION_CLOSURE_PLAN_2026-09-03.md` Stage 1 ~ Stage 7 100% 验收收口）；UI 单元测试达 62 个（15 个 Suite 全部 PASS），Tauri Release E2E 探针冒烟与 100,000 事件性能基准均 100% PASS。
+- **当前阶段**：Phase 3 Audit UI — C 组 Directed UI 已完成工程实现、交互收口与独立审查精准修复（Review Fixes）；UI 单元测试达 63 个（15 个 Suite 全部本地 PASS），Go 收集器测试与 Phase 0 回归 100% 本地通过。当前维持 Design System = Draft，Full Tauri multi-fixture 视觉验收待办。
 - **活动分支**：`experiment/qwen38max-directed-ui`
 - **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果。
-- **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish 与 Frontend Interaction Closure 均已保留；工程/语义 Gate 全部通过。
+- **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留；工程/语义 Gate 全部通过。
 - **当前视觉 Freeze 前剩余事项**：
-  1. Full Tauri multi-fixture visual acceptance。
+  1. Full Tauri multi-fixture visual acceptance（`healthy / gaps / stale / empty / scaled` 全 fixture，1280×800 与 1600×1000，Light / Dark 完整一致性）。
 
 ### 已实现的正式 UI
 
 - App Shell 与 V1 顶层导航：Overview / History / Coverage；
 - Light + Dark semantic token / typography / density / interaction foundation；
-- Overview：流量汇总（全局与分流作用域隔离）、Evidence Trust、Top Processes / Rules / Hosts / Final Proxies、Unknown Route 异常展示；
+- Overview：流量汇总（全局出站物理汇总与分流作用域隔离）、Evidence Trust、Top Processes / Rules / Hosts / Final Proxies、Unknown Route 异常展示；
 - History：双重时间模型（Live Analysis Range vs Frozen History Snapshot，30s 低频向前推进，关闭区间稳定，独立 `refreshHistory()` 刷新）、即时筛选保留、显式分页、键盘可选连接行；
 - 调查上下文（Investigation Context）：Overview 钻取清空旧条件并重置选择、侧边栏切回保留现有调查、Coverage 缺口检查清空旧条件并带入 ±15min 区间；
-- Connection Inspector：Causal Path、Traffic Accounting、Evidence Quality、Lifecycle、Accounting Events、Raw Traffic Frames；增加前一条/后一条边界受控切换（Prev/Next 与 J/K/[,/] 快捷键，输入框避让保护，表格行自动滚动视口同步）；
-- Coverage：Coverage summary、Gap timeline、Controller / Collector provenance、Outside Monitored History、Inspect Around Gap；Future 灰色斜纹占位与条件摘要/图例；Gap 物理流量估算芯片；Timeline ↔ Gap List 双向 hover 与点击平滑滚动联动；
-- System Status：紧凑状态指示器，点击呼出系统与运行诊断对话框（System & Runtime Diagnostics），展示 Collector 会话与心跳、Accounting 引擎与 Freshness 落后、数据库状态与 Schema 版本，异常时提供针对性修复建议并支持一键复制诊断 JSON；
+- Connection Inspector：Causal Path、Traffic Accounting、Evidence Quality、Lifecycle、Accounting Events、Raw Traffic Frames；增加前一条/后一条边界受控切换（Prev/Next 与 ↑/↓/Esc 快捷键，严格让位复合交互控件，表格行自动滚动视口同步）；
+- Coverage：Coverage summary、Gap timeline、Controller / Collector provenance、Outside Monitored History、Inspect Around Gap；Future 灰色斜纹占位与条件摘要/图例；Gap 物理流量估算芯片；Timeline ↔ Gap List 双向持久选中与点击平滑滚动联动；
+- System Status：紧凑状态指示器，点击呼出轻量系统状态对话框，展示 Collector 会话与心跳、Accounting 引擎与 Freshness 落后、数据库状态与 Schema 版本，全闭环焦点管理；
 - ErrorBoundary 与 Query/API 可恢复状态。
-- Design System family overlays：自定义 date/time picker、network/page-size listbox、系统诊断弹窗，共用 surface / border / radius / selected / hover / focus / shadow 语言；
-- Overlay accessibility：Select 使用单一 listbox focus + `aria-activedescendant`；DatePicker 使用 `grid → row → gridcell` 与单一 roving day focus，支持方向键跨月移动和 focus-out close；Dialog 具备焦点管理、Escape 监听与 backdrop 关闭；
+- Design System family overlays：自定义 date/time picker、network/page-size listbox、系统状态弹窗，共用 surface / border / radius / selected / hover / focus / shadow 语言；
+- Overlay accessibility：Select 使用单一 listbox focus + `aria-activedescendant`；DatePicker 使用 `grid → row → gridcell` 与单一 roving day focus，支持方向键跨月移动和 focus-out close；Dialog 具备完整的打开聚焦、Tab 循环截获、Escape 监听与焦点返还；
 - Compact inline alignment：固定高度控件统一 optical center；多列、因果链和事件时间线让 key/timestamp 与 primary content 共用 first-baseline；Status 的 marker 对齐 primary label，Causal Path / Accounting Events 的 marker 对齐 primary 首行，secondary 内容独立下沉，连接线位于 marker 下方；不使用 optical-shift token，共用 `--pl-leading-control` 与 compact label/text-box progressive enhancement；
 - 全局 UI locale：English / 中文即时切换、`localStorage` 持久化、`document.lang` 同步、locale-aware date/time formatting；原始技术证据值保持不翻译；严格保持 1:1 键名对齐。
 - 确定性 typography：正式产品 bundled Manrope 400/500、Sarasa Gothic UI SC Regular 与 SemiBold→CSS 500、JetBrains Mono 400/500 WOFF2；Narrative 以 Latin/CJK script axis 组合，locale 不改变字体或几何，系统字体只作最后 fallback；正式 Inspector surface 为 Warm Paper（Light `#f8f7f4` / Dark `#191817`）。
 
-### 独立审查与交互收口已完成
+### 独立审查与交互收口修复（Review Fixes Applied）
 
-1. **语义基准收口**：修复 Overview 顶部全局卡片在 routeFocus 激活时不当受限的问题，顶栏保持反映全部实际流量构成；严格核查证据范围，Unknown Route 在存在时作为异常 chip 展示；
-2. **时间模型收口**：实现 Live Analysis Range（Overview/Coverage 随 30s 低频时钟推进）与 Frozen History Snapshot 分离；关闭区间（yesterday/custom）严格不推进；History 独立 refresh 仅推进 live shortcut，关闭区间保持 window 不变；
-3. **调查上下文保护**：从 Overview 钻取到 History 时清空无关旧条件、重置分页与选择并冻结新 snapshot；通过侧边栏切回 History 保持现有 snapshot 与条件；从 Coverage 钻取清空旧条件并冻结 ±15min 自定义区间；History 保持原生即时筛选无额外 Apply 负担；
-4. **语义完整性补充**：Coverage 支持 Future 区间（中性 45° 斜纹）、动态摘要与图例仅在存在未来区间时显示；窗口级 Gap 流量估算以 `pl-evidence-chip--estimated` 标出；
-5. **调查效率提升**：Inspector 增加上一条/下一条导航按键与 J/K/[,/] 快捷键，边界自动禁用，选中时表格行平滑居中；Coverage Timeline 缺口块与 Gap 列表行建立双向 hover 高亮与点击滚动关联；
-6. **系统状态渐进披露**：侧边栏状态栏升级为可交互触发器，点击展开 System & Runtime Diagnostics 弹窗，显示完整 Meta、会话心跳、核算落后、Schema 版本并给出异常诊断建议与诊断数据复制；
-7. **自动化测试与端到端验证**：前端单元测试从 42 项扩充至 62 项（覆盖时间演进、快照冻结、钻取重置、Future 分段 7 种边界、核算落后 vs 失败、DB 不兼容等），15 个 Suite 全部通过；Phase 0 测试 18/18 通过；Go 收集器测试全部通过；Tauri Release 可执行文件端到端冒烟 100% 通过；100k 数据集查询基准全部通过。
+1. **快照冻结时机精准修复**：在 Overview / Coverage 调整时间范围仅更新 Live Analysis Range，不预先生成快照（旧快照置空）；仅在真正切入 History 时刻才冻结为快照，或在 History 内修改时间范围时立即冻结；
+2. **消除 30s 周期性 Skeleton 闪烁**：分析查询（Summary、Top Queries、Protocols、Coverage）全面配置 `placeholderData: keepPreviousData`，低频时钟刷新时无感知平滑更新；
+3. **Inspector 快捷键避让与收敛**：移除非必要的 J/K/[,/] Vim 快捷键，保留 `↑`/`↓`/`Esc`，并严格对所有自定义弹层控件（SelectMenu、DatePicker、Dialog）做焦点与 DOM 存在性让位检查；
+4. **Coverage Gap 双向持久选择**：重构 GapRow 与 Timeline Segment 为真实持久选中与取消选中逻辑，修正 Timeline 容器的 ARIA 结构（`role="region"`），分离 Hover / Focus / Selected 视觉状态；
+5. **System Status 纯粹事实收敛与完整焦点闭环**：收敛全屏黑色 Backdrop/Blur 为轻量 Dialog，移除预测性排查建议与 Copy 按钮，修复空 Callout 状态组合，补齐打开自动聚焦、Tab Focus Trap 与关闭返还焦点至触发按钮的完整闭环；
+6. **App.tsx 生产探针 Gate**：严格通过 `get_e2e_mode` 控制，仅在 `PROXYLENS_E2E_MODE=1` 时执行探针，普通用户正常运行不发起额外探针请求；
+7. **Overview Traffic Summary 副标题语义对齐**：副标题统一为全量路由统计语义，避免与当前 `routeFocus` 混淆；
+8. **交互框架文档同步**：`docs/PROXYLENS_UI_PRODUCT_INTERACTION_FRAMEWORK_v1.md` 全面同步双时间模型、Future 分段与 Gap 选择规范；
+9. **视觉状态诚实声明**：维持 Design System 为 Draft，视觉验收待通过完整 Tauri 多 fixture 执行，不妄自宣称 100% 结束。
 
 ---
 
@@ -56,7 +58,7 @@
 - System Status heartbeat consistency：PASS；
 - Inspector crash resilience：PASS；
 - TypeScript / frontend build：本轮本地 PASS；
-- UI regression coverage：62 tests（本地执行结果），包含 locale dictionary parity、静态 translation-key audit、calendar navigation utilities、time snapshot、drill reset、future segments 与 system diagnostics；
+- UI regression coverage：63 tests（本地执行结果），包含 locale dictionary parity、静态 translation-key audit、calendar navigation utilities、time snapshot、drill reset、future segments 与 system diagnostics；
 - Locale dictionary parity：EN / 中文各 396 个 key，静态 UI translation keys 严格 1:1 对齐无缺失；
 - Typography asset build：6 个 WOFF2、17,066,080 bytes（约 17.07MB / 16.28MiB）；Manrope/Sarasa/JetBrains 均为本地正式资产，无 TTF/WOFF/italic 或额外字重；Sarasa SemiBold 源以 CSS 500 角色加载；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；

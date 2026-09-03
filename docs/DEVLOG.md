@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-09-03 — Independent review precision fixes and boundary restraint
+
+**Scope:** 对 C 组前端交互收口进行独立审查后实施精准修复。修正快照冻结时机、消除 30s Live Range 刷新引发的骨架屏闪烁、收敛 Inspector 快捷键并增加复合组件冲突避让、实现 Coverage Gap 真实双向持久选中与语义化容器重构、收敛 System Status 视觉和内容（去除伪诊断与 Copy，补齐打开聚焦、Tab 循环与焦点返还全闭环）、将 App.tsx 生产探针受控于 E2E 模式、修正 Overview 副标题语义歧义并全面同步交互框架文档。
+
+### Completed
+
+- **快照冻结时机**：在 Overview / Coverage 切换时间范围不再预先生成快照（重置为待冻结），仅在真正切入 History 时刻冻结当前瞬时快照，或在 History 内修改时间范围时立即生效；
+- **防闪烁平滑更新**：为 `useSummaryQuery`、`useTopProcessesQuery`、`useTopHostsQuery`、`useTopRulesQuery`、`useTopFinalProxiesQuery`、`useProtocolsQuery`、`useCoverageQuery` 配置 `placeholderData: keepPreviousData`，30s 低频时钟推进时在后台静默更新，绝不闪现 Skeleton；
+- **Inspector 快捷键安全**：移除非标准 J/K/[,/] 快捷键，仅保留 ↑/↓/Esc；检测到页面存在打开的下拉菜单、日期选择器或弹窗时，或焦点处于复合交互控件时，严格让位不拦截；
+- **Coverage Gap 双向持久选择**：重构 GapRow 与 Timeline 联动为持久选中与取消选中；Timeline 容器重构为 `role="region"`，色块赋予 `role="button"` 与 `aria-pressed`；明确区分 Hover、Focus 与 Selected 三态；
+- **System Status 纯粹事实收敛**：去除 45% black backdrop 与 blur，换用轻量 Dialog 表面；移除预测性质的 Advice 与 Copy Diagnostics 按钮，彻底杜绝空 Callout bug；补全初始聚焦、Tab Focus Trap 与关闭返还焦点的完整闭环；
+- **生产环境 Probe Gate**：调用 `get_e2e_mode`，仅在显式开启 `PROXYLENS_E2E_MODE=1` 时执行探针，普通用户正常运行零开销；
+- **Overview 副标题语义**：将副标题更新为 `Routing outcome totals across all routes · reconciled accounted bytes`，清晰表明汇总卡片反映全局事实；
+- **文档同步**：同步更新 `PROXYLENS_UI_PRODUCT_INTERACTION_FRAMEWORK_v1.md`，真实对齐 Live Analysis、History Snapshot、Future 分段与 Gap 选择交互规范；
+- **测试覆盖**：UI 单元测试达 63 项（15 个 Suite 全部通过），Go 收集器测试与 Phase 0 回归通过；诚实维持 Design System 为 Draft，视觉验收待多 fixture 实测。
+
+---
+
 ## 2026-09-03 — Frontend interaction, time model, and semantic completeness closure
 
 **Scope:** 完整实施并收口 `PROXYLENS_C_FRONTEND_INTERACTION_CLOSURE_PLAN_2026-09-03.md` 全部 7 个 Stage。涵盖 Overview 语义基准（全局与分流作用域隔离）、双重时间模型（Live Analysis Range 随 30s 低频时钟推进 vs Frozen History Snapshot 稳定快照）、调查上下文无损保护与即时筛选、Coverage Future 灰色斜纹与条件摘要/图例/缺口流量估算、Inspector 上下条边界切换与 J/K 快捷键避让、Coverage Timeline 与 Gap 列表双向平滑滚动联动、以及系统状态渐进披露对话框与诊断复制。
