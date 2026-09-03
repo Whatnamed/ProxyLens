@@ -18,10 +18,10 @@ export interface OverviewTotals {
 }
 
 export interface OverviewEvidenceMetrics {
-  missingAttributionBytes: number;
+  missingAttributionBytes: number | null;
   missingAttributionScoped: boolean;
 
-  ambiguousRelayBytes: number;
+  ambiguousRelayBytes: number | null;
   ambiguousRelayScoped: boolean;
 
   samplingResidualBytes: number;
@@ -79,12 +79,16 @@ export function deriveOverviewEvidence(
   const effectiveScoped = isRouteScoped ? scopedSummary : allSummary;
 
   const missingAttributionBytes =
-    (effectiveScoped?.missingAttributionUpload ?? 0) +
-    (effectiveScoped?.missingAttributionDownload ?? 0);
+    effectiveScoped !== undefined
+      ? (effectiveScoped.missingAttributionUpload ?? 0) +
+        (effectiveScoped.missingAttributionDownload ?? 0)
+      : null;
 
   const ambiguousRelayBytes =
-    (effectiveScoped?.ambiguousRelayUpload ?? 0) +
-    (effectiveScoped?.ambiguousRelayDownload ?? 0);
+    effectiveScoped !== undefined
+      ? (effectiveScoped.ambiguousRelayUpload ?? 0) +
+        (effectiveScoped.ambiguousRelayDownload ?? 0)
+      : null;
 
   const samplingResidualBytes =
     (allSummary?.samplingResidualUpload ?? 0) +

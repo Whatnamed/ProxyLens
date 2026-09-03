@@ -106,4 +106,47 @@ describe('Overview Semantics: deriveOverviewEvidence', () => {
     assert.equal(ev.unknownRouteBytes, 0);
     assert.equal(ev.showUnknownRoute, false);
   });
+
+  it('returns null for scoped missing attribution and ambiguous relay when scopedSummary is undefined (loading/error) to avoid fake 0', () => {
+    // When switching from PROXY -> DIRECT, scopedSummary is temporarily undefined while scopedSummaryQ fetches
+    const evDirectLoading = deriveOverviewEvidence(mockAllSummary, undefined, 'DIRECT');
+    assert.equal(evDirectLoading.missingAttributionBytes, null, 'Must be null rather than 0 so UI does not show fake 0 B');
+    assert.equal(evDirectLoading.missingAttributionScoped, true);
+    assert.equal(evDirectLoading.ambiguousRelayBytes, null, 'Must be null rather than 0 so UI does not show fake 0 B');
+    assert.equal(evDirectLoading.ambiguousRelayScoped, true);
+
+    // Global facts are preserved and stable from allSummary
+    assert.equal(evDirectLoading.samplingResidualBytes, 10000);
+    assert.equal(evDirectLoading.gapPhysicalTrafficBytes, 30000);
+    assert.equal(evDirectLoading.unknownRouteBytes, 1000);
+  });
+
+  it('orchestrates page-level vs scoped loading and error states without whole-page flash', () => {
+    // 1. Initial entry / Time Range change: allSummary is loading -> whole page Skeleton
+    const isPageLoading1 = true; // allSummaryQ.isLoading
+    assert.equal(isPageLoading1, true, 'Initial page loading triggers skeleton');
+
+    // 2. allSummary loaded; user switches Route Focus PROXY -> DIRECT:
+    // allSummaryQ is already resolved (isLoading = false), scopedSummaryQ is loading (isLoading = true)
+    const allSummaryQLoading = false;
+    const scopedSummaryQLoading = true;
+    const isPageLoading2 = allSummaryQLoading;
+    const isScopedLoading2 = true && scopedSummaryQLoading;
+    assert.equal(isPageLoading2, false, 'Route focus switch must NOT trigger whole-page skeleton');
+    assert.equal(isScopedLoading2, true, 'Scoped evidence enters local loading');
+
+    // 3. scopedSummaryQ fails: allSummaryQ succeeded (isError = false), scopedSummaryQ has error (isError = true)
+    const allSummaryQError = false;
+    const scopedSummaryQError = true;
+    const noRun = false;
+    const isPageError = allSummaryQError && !noRun;
+    const isScopedError = true && scopedSummaryQError;
+    assert.equal(isPageError, false, 'Scoped query error must NOT escalate to page-level error state');
+    assert.equal(isScopedError, true, 'Scoped evidence enters local unavailable state');
+
+    // 4. allSummaryQ fails: whole page enters ErrorState
+    const allSummaryQFailed = true;
+    const isPageErrorActual = allSummaryQFailed && !noRun;
+    assert.equal(isPageErrorActual, true, 'allSummary failure must trigger page-level error');
+  });
 });

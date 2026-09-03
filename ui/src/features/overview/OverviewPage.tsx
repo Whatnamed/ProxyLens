@@ -149,9 +149,15 @@ export const OverviewPage: React.FC<{
   const freshness = allSummary?.freshness ?? meta?.freshness;
   const coverage = coverageQ.data ?? allSummary?.coverage;
   const noRun = isNoAccountingRunError(allSummaryQ.error);
-  const isSummaryLoading = allSummaryQ.isLoading || (isRouteScoped && scopedSummaryQ.isLoading);
-  const isSummaryError = (allSummaryQ.isError || (isRouteScoped && scopedSummaryQ.isError)) && !noRun;
-  const summaryError = (allSummaryQ.error || (isRouteScoped ? scopedSummaryQ.error : null)) as Error | null;
+  const isSummaryLoading = allSummaryQ.isLoading;
+  const isSummaryError = allSummaryQ.isError && !noRun;
+  const summaryError = allSummaryQ.error as Error | null;
+
+  const isScopedLoading = isRouteScoped && scopedSummaryQ.isLoading;
+  const isScopedError = isRouteScoped && scopedSummaryQ.isError;
+  const scopedErrorMsg = scopedSummaryQ.error
+    ? String((scopedSummaryQ.error as Error)?.message ?? scopedSummaryQ.error)
+    : undefined;
 
   return (
     <PageGate client={client} sessionError={sessionError} meta={meta}>
@@ -240,32 +246,54 @@ export const OverviewPage: React.FC<{
                         {t('overview.missingAttribution')}
                         {evidence.missingAttributionScoped && <RouteBadge route={routeFocus} quiet />}
                       </span>
-                      <span
-                        className="pl-evidence-fact__value"
-                        title={
-                          evidence.missingAttributionScoped
-                            ? t('overview.trafficObservedWithoutProcessScoped', { route: routeFocus })
-                            : t('overview.trafficObservedWithoutProcess')
-                        }
-                      >
-                        {formatBytes(evidence.missingAttributionBytes)}
-                      </span>
+                      {isScopedLoading ? (
+                        <span className="pl-evidence-fact__value pl-muted">…</span>
+                      ) : isScopedError || evidence.missingAttributionBytes === null ? (
+                        <span
+                          className="pl-evidence-fact__value pl-muted"
+                          title={scopedErrorMsg || t('common.notAvailable')}
+                        >
+                          {t('common.notAvailable')}
+                        </span>
+                      ) : (
+                        <span
+                          className="pl-evidence-fact__value"
+                          title={
+                            evidence.missingAttributionScoped
+                              ? t('overview.trafficObservedWithoutProcessScoped', { route: routeFocus })
+                              : t('overview.trafficObservedWithoutProcess')
+                          }
+                        >
+                          {formatBytes(evidence.missingAttributionBytes)}
+                        </span>
+                      )}
                     </div>
                     <div className="pl-evidence-fact">
                       <span className="pl-evidence-fact__label">
                         {t('overview.ambiguousRelay')}
                         {evidence.ambiguousRelayScoped && <RouteBadge route={routeFocus} quiet />}
                       </span>
-                      <span
-                        className="pl-evidence-fact__value"
-                        title={
-                          evidence.ambiguousRelayScoped
-                            ? t('overview.relayCandidatesScoped', { route: routeFocus })
-                            : t('overview.relayCandidates')
-                        }
-                      >
-                        {formatBytes(evidence.ambiguousRelayBytes)}
-                      </span>
+                      {isScopedLoading ? (
+                        <span className="pl-evidence-fact__value pl-muted">…</span>
+                      ) : isScopedError || evidence.ambiguousRelayBytes === null ? (
+                        <span
+                          className="pl-evidence-fact__value pl-muted"
+                          title={scopedErrorMsg || t('common.notAvailable')}
+                        >
+                          {t('common.notAvailable')}
+                        </span>
+                      ) : (
+                        <span
+                          className="pl-evidence-fact__value"
+                          title={
+                            evidence.ambiguousRelayScoped
+                              ? t('overview.relayCandidatesScoped', { route: routeFocus })
+                              : t('overview.relayCandidates')
+                          }
+                        >
+                          {formatBytes(evidence.ambiguousRelayBytes)}
+                        </span>
+                      )}
                     </div>
                     <div className="pl-evidence-fact">
                       <span className="pl-evidence-fact__label">{t('overview.samplingResidual')}</span>
