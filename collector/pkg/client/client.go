@@ -29,10 +29,17 @@ type VersionInfo struct {
 
 // ControllerClient 提供基于工业级成熟 WebSocket 库的只读 Mihomo 客户端
 type ControllerClient struct {
-	config                              *config.Config
-	httpClient                          *http.Client
-	hasConnectedBefore                  atomic.Bool
+	config                               *config.Config
+	httpClient                           *http.Client
+	hasConnectedBefore                   atomic.Bool
 	ValidationForceDisconnectAfterFrames int
+	StatusCallback                       func(status string)
+}
+
+func (c *ControllerClient) notifyStatus(status string) {
+	if c.StatusCallback != nil {
+		c.StatusCallback(status)
+	}
 }
 
 // NewControllerClient 创建只读客户端
@@ -158,6 +165,7 @@ func (c *ControllerClient) RunStreamLoop(
 		// 1. Preflight 检查
 		_, err := c.CheckVersion(ctx)
 		if err != nil {
+			c.notifyStatus("waiting")
 			if !c.hasConnectedBefore.Load() {
 				// 启动时尚未连上：仅记录 Health，不生成虚假 Gap
 				_ = q.Push(ctx, &types.IngestItem{
@@ -186,6 +194,7 @@ func (c *ControllerClient) RunStreamLoop(
 		// 2. 建立 WebSocket 连接
 		conn, err := c.ConnectWebSocket(ctx)
 		if err != nil {
+			c.notifyStatus("waiting")
 			select {
 			case <-ctx.Done():
 				return nil
@@ -199,6 +208,7 @@ func (c *ControllerClient) RunStreamLoop(
 		}
 
 		c.hasConnectedBefore.Store(true)
+		c.notifyStatus("connected")
 		backoff = time.Duration(c.config.InitialBackoffMs) * time.Millisecond
 
 		// 异步响应 Context 取消
@@ -218,6 +228,7 @@ func (c *ControllerClient) RunStreamLoop(
 			_ = conn.SetReadDeadline(time.Now().Add(watchdogTimeout))
 			messageType, payloadBytes, err := conn.ReadMessage()
 			if err != nil {
+				c.notifyStatus("reconnecting")
 				close(closeCh)
 				_ = conn.Close()
 

@@ -11,13 +11,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/Whatnamed/ProxyLens/collector/pkg/client"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/config"
-	"github.com/Whatnamed/ProxyLens/collector/pkg/queue"
+	proxylensruntime "github.com/Whatnamed/ProxyLens/collector/pkg/runtime"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/sink"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/state"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/storage"
@@ -102,14 +100,11 @@ func runCollector(args []string) {
 		os.Exit(1)
 	}
 
-	cfg := &config.Config{
-		ControllerURL:       *controllerURL,
-		ConnectionsInterval: *interval,
-		Secret:              *secret,
-		QueueCapacity:       *queueCapacity,
-		InitialBackoffMs:    500,
-		MaxBackoffMs:        10000,
-	}
+	cfg := config.DefaultConfig()
+	cfg.ControllerURL = *controllerURL
+	cfg.ConnectionsInterval = *interval
+	cfg.Secret = *secret
+	cfg.QueueCapacity = *queueCapacity
 
 	sessionID := fmt.Sprintf("sess-%d", time.Now().UnixNano())
 
@@ -152,104 +147,32 @@ func runCollector(args []string) {
 		}
 	}()
 
-	var eventSink sink.EventSink
-	var sqliteSink *storage.SQLiteEventSink
-
-	if *dbPath != "" {
-		sSink, err := storage.OpenSQLiteSink(ctx, *dbPath, sessionID, version)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize SQLite storage sink at %s: %v\n", *dbPath, err)
-			os.Exit(1)
-		}
-		sqliteSink = sSink
-		eventSink = sSink
-	} else if *validationJSONL != "" {
-		vSink, err := sink.NewValidationJSONLSink(*validationJSONL)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to create validation sink: %v\n", err)
-			os.Exit(1)
-		}
-		defer vSink.Close()
-		eventSink = vSink
-	} else {
-		eventSink = sink.NewProductionStatsSink()
-	}
-
-	engine := state.NewStateEngine(state.EngineOptions{
-		Sink:      eventSink,
-		SessionID: sessionID,
+	runner, err := proxylensruntime.NewCollectorRunner(proxylensruntime.CollectorOptions{
+		ControllerURL:                        cfg.ControllerURL,
+		ConnectionsInterval:                  cfg.ConnectionsInterval,
+		QueueCapacity:                        cfg.QueueCapacity,
+		Secret:                               cfg.Secret,
+		DBPath:                               *dbPath,
+		ValidationJSONL:                      *validationJSONL,
+		ValidationForceDisconnectAfterFrames: *forceDisconnectAfterFrames,
+		InitialBackoffMs:                     cfg.InitialBackoffMs,
+		MaxBackoffMs:                         cfg.MaxBackoffMs,
+		SessionID:                            sessionID,
+		CollectorVersion:                     version,
 	})
-	q := queue.NewBoundedQueue[*types.IngestItem](cfg.QueueCapacity)
-	c := client.NewControllerClient(cfg)
-	c.ValidationForceDisconnectAfterFrames = *forceDisconnectAfterFrames
-
-	var fatalWorkerErr atomic.Value
-	workerDone := make(chan struct{})
-
-	// 单一 Worker 协程串行消费有序项
-	go func() {
-		defer close(workerDone)
-		for {
-			item, ok := q.Pop(ctx)
-			if !ok {
-				return
-			}
-			if err := engine.ProcessIngestItem(item); err != nil {
-				fmt.Fprintf(os.Stderr, "[FATAL SINK/STATE ERROR] %v\n", err)
-				fatalWorkerErr.Store(err)
-				cancel() // 立即通知所有生产者停止
-				return
-			}
-		}
-	}()
-
-	// 启动 Controller 监听循环
-	err := c.RunStreamLoop(ctx, q)
-	if err != nil && ctx.Err() == nil {
-		fmt.Fprintf(os.Stderr, "[FATAL] Stream loop error: %v\n", err)
-		fatalWorkerErr.Store(err)
-	}
-
-	q.Close()
-	<-workerDone
-
-	if sqliteSink != nil {
-		var finalStatus = storage.SessionStatusClosedClean
-		if fatalWorkerErr.Load() != nil {
-			finalStatus = storage.SessionStatusInterrupted
-		}
-		if err := sqliteSink.EndSession(context.Background(), sessionID, finalStatus); err != nil {
-			fmt.Fprintf(os.Stderr, "[FATAL] Failed to end session: %v\n", err)
-			os.Exit(1)
-		}
-		if err := sqliteSink.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "[FATAL] Failed to close sqlite sink: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	if fatalErr := fatalWorkerErr.Load(); fatalErr != nil {
-		fmt.Fprintf(os.Stderr, "\n[FATAL EXIT] Collector stopped due to fatal error: %v\n", fatalErr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize collector runner: %v\n", err)
 		os.Exit(1)
 	}
 
-	var summary map[string]any
-	if ps, ok := eventSink.(*sink.ProductionStatsSink); ok {
-		summary = ps.GetSummary()
-	} else if vs, ok := eventSink.(*sink.ValidationJSONLSink); ok {
-		summary = vs.GetSummary()
-	} else if sqliteSink != nil {
-		summary = map[string]any{
-			"status":            "Session persisted successfully to SQLite",
-			"db":                *dbPath,
-			"sessionID":         sessionID,
-			"activeConnections": engine.GetActiveConnectionsCount(),
-		}
+	result, err := runner.Run(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n[FATAL EXIT] Collector stopped due to fatal error: %v\n", err)
+		os.Exit(1)
 	}
 
-	if summary != nil {
-		summary["queueMetrics"] = q.GetMetrics()
-		summaryBytes, _ := json.MarshalIndent(summary, "", "  ")
+	if result != nil && result.Summary != nil {
+		summaryBytes, _ := json.MarshalIndent(result.Summary, "", "  ")
 		fmt.Println("----------------------------------------------------------------")
 		fmt.Println("Session Summary:")
 		fmt.Println(string(summaryBytes))
