@@ -678,6 +678,56 @@
   border: 1px solid var(--pl-border-strong);
 }
 
+.pl-legend__swatch--covered {
+  background: var(--pl-surface-inset);
+}
+
+.pl-legend__swatch--controller {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--pl-status-gap-soft),
+    var(--pl-status-gap-soft) 3px,
+    var(--pl-status-gap) 3px,
+    var(--pl-status-gap) 4px
+  );
+}
+
+.pl-legend__swatch--collector {
+  background: var(--pl-status-offline);
+  opacity: 0.85;
+}
+
+.pl-legend__swatch--mixed {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--pl-status-offline),
+    var(--pl-status-offline) 3px,
+    var(--pl-status-gap) 3px,
+    var(--pl-status-gap) 6px
+  );
+}
+
+.pl-legend__swatch--outside {
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 2px,
+    var(--pl-border-muted) 2px,
+    var(--pl-border-muted) 3px
+  );
+}
+
+.pl-legend__swatch--future {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 2px,
+    var(--pl-border-muted) 2px,
+    var(--pl-border-muted) 3px
+  );
+  opacity: 0.85;
+}
+
 /* ---------- Session/DB gate ---------- */
 
 .pl-gate {

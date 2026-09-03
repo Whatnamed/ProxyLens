@@ -142,6 +142,11 @@ export const HistoryPage: React.FC<{
   const noRun = isNoAccountingRunError(connectionsQ.error);
   const errCode = errorCodeOf(connectionsQ.error);
 
+  // Clear selected connection immediately on page change to avoid lingering Inspector
+  useEffect(() => {
+    setSelected(null);
+  }, [page, setSelected]);
+
   useEffect(() => {
     if (selected && !items.some((i) => i.sessionId === selected.sessionId && i.epochId === selected.epochId && i.connectionId === selected.connectionId)) {
       if (!connectionsQ.isLoading) {

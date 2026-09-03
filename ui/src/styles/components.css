@@ -882,10 +882,6 @@
   cursor: pointer;
 }
 
-.pl-gap-row.pl-row--selected td:first-child {
-  box-shadow: inset 2px 0 0 var(--pl-status-gap);
-}
-
 .pl-gap-row.pl-row--hovered td {
   background: var(--pl-surface-hover);
 }
@@ -1141,6 +1137,16 @@
 .pl-timeline__seg--collector {
   background: var(--pl-status-offline);
   opacity: 0.65;
+}
+
+.pl-timeline__seg--mixed {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--pl-status-offline),
+    var(--pl-status-offline) 4px,
+    var(--pl-status-gap) 4px,
+    var(--pl-status-gap) 8px
+  );
 }
 
 .pl-timeline__seg--outside {

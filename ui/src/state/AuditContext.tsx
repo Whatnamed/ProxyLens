@@ -157,7 +157,11 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [customEditorOpen, setCustomEditorOpen] = useState(false);
   const [routeFocus, setRouteFocusRaw] = useState<RouteFocus>('PROXY');
   const [filters, setFilters] = useState<HistoryFilters>({});
-  const [page, setPage] = useState(0);
+  const [page, setPageRaw] = useState(0);
+  const setPage = useCallback((p: number) => {
+    setPageRaw(p);
+    setSelected(null);
+  }, []);
   const [pageSize, setPageSizeRaw] = useState(50);
   const [snapshot, setSnapshot] = useState<HistorySnapshot | null>(null);
   const [selected, setSelected] = useState<ConnectionKey | null>(null);

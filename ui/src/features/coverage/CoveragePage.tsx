@@ -41,7 +41,6 @@ export interface TimelineSegment {
   to: number;
   title: string;
   gapId?: string;
-  gapIndex?: number;
 }
 
 export function buildSegments(
@@ -93,9 +92,8 @@ export function buildSegments(
 
     if (effEnd > windowStart && effStart < effectiveWindowEnd) {
       const gaps = [...(coverage.mergedGaps ?? [])]
-        .map((g, originalIndex) => ({
+        .map((g) => ({
           g,
-          originalIndex,
           start: new Date(g.startedAt).getTime(),
           end: new Date(g.endedAt).getTime(),
         }))
@@ -103,7 +101,7 @@ export function buildSegments(
         .sort((a, b) => a.start - b.start);
 
       let cursor = Math.max(effStart, windowStart);
-      for (const { g, originalIndex, start, end } of gaps) {
+      for (const { g, start, end } of gaps) {
         const gs = Math.max(start, windowStart);
         const ge = Math.min(end, effectiveWindowEnd);
         if (gs > cursor) {
@@ -125,7 +123,6 @@ export function buildSegments(
           to: Math.max(ge, gs + (windowEnd - windowStart) * 0.004),
           title: t(titleKey, { reason, from: fromStr, to: toStr }),
           gapId: gapIdentity(g),
-          gapIndex: originalIndex,
         });
         cursor = Math.max(cursor, ge);
       }
@@ -156,18 +153,16 @@ export function buildSegments(
 const GapRow: React.FC<{
   gap: MergedGap;
   gapId: string;
-  index: number;
   isSelected: boolean;
   isHovered: boolean;
   onSelect: () => void;
   onHover: (active: boolean) => void;
   onInspect: (e: React.MouseEvent) => void;
-}> = ({ gap, gapId, index, isSelected, isHovered, onSelect, onHover, onInspect }) => {
+}> = ({ gap, gapId, isSelected, isHovered, onSelect, onHover, onInspect }) => {
   const { locale, t } = useLocale();
   const src = gapProvenance(gap);
   return (
     <tr
-      id={`pl-gap-row-${index}`}
       data-gap-id={gapId}
       className={`pl-gap-row${isSelected ? ' pl-row--selected' : ''}${isHovered && !isSelected ? ' pl-row--hovered' : ''}`}
       onClick={onSelect}
@@ -360,14 +355,15 @@ export const CoveragePage: React.FC<{
                   ) : (
                     <>
                       <div className="pl-timeline" role="region" aria-label={t('coverage.timelineAria')}>
-                        {segments.map((seg, idx) => {
+                        {segments.map((seg) => {
                           const isGapSeg = !!seg.gapId;
                           const isSelected = isGapSeg && seg.gapId === selectedGapId;
                           const isHovered = isGapSeg && seg.gapId === hoveredGapId;
+                          const segKey = seg.gapId ? `gap-${seg.gapId}` : `${seg.kind}-${seg.from}-${seg.to}`;
                           return (
                             <span
-                              key={idx}
-                              className={`pl-timeline__seg pl-timeline__seg--${seg.kind === 'mixed' ? 'collector' : seg.kind}${isGapSeg ? ' pl-timeline__seg--interactive' : ''}${isSelected ? ' pl-timeline__seg--selected' : ''}${isHovered && !isSelected ? ' pl-timeline__seg--hovered' : ''}`}
+                              key={segKey}
+                              className={`pl-timeline__seg pl-timeline__seg--${seg.kind}${isGapSeg ? ' pl-timeline__seg--interactive' : ''}${isSelected ? ' pl-timeline__seg--selected' : ''}${isHovered && !isSelected ? ' pl-timeline__seg--hovered' : ''}`}
                               style={{ width: `${Math.max(0.4, ((seg.to - seg.from) / totalSpan) * 100)}%` }}
                               title={seg.title}
                               role={isGapSeg ? 'button' : undefined}
@@ -418,10 +414,7 @@ export const CoveragePage: React.FC<{
                         )}
                         {hasFuture && (
                           <span className="pl-legend__item">
-                            <span
-                              className="pl-legend__swatch pl-timeline__seg--future"
-                              style={{ border: '1px solid var(--pl-border-strong)' }}
-                            />
+                            <span className="pl-legend__swatch pl-legend__swatch--future" />
                             <span className="pl-legend__label pl-compact-label">{t('coverage.legendFuture')}</span>
                           </span>
                         )}
@@ -455,13 +448,12 @@ export const CoveragePage: React.FC<{
                         </tr>
                       </thead>
                       <tbody>
-                        {gaps.map((g, idx) => {
+                        {gaps.map((g) => {
                           const id = gapIdentity(g);
                           return (
                             <GapRow
                               key={id}
                               gapId={id}
-                              index={idx}
                               gap={g}
                               isSelected={selectedGapId === id}
                               isHovered={hoveredGapId === id}
