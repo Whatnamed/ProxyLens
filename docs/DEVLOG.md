@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-09-03 — Frontend interaction, time model, and semantic completeness closure
+
+**Scope:** 完整实施并收口 `PROXYLENS_C_FRONTEND_INTERACTION_CLOSURE_PLAN_2026-09-03.md` 全部 7 个 Stage。涵盖 Overview 语义基准（全局与分流作用域隔离）、双重时间模型（Live Analysis Range 随 30s 低频时钟推进 vs Frozen History Snapshot 稳定快照）、调查上下文无损保护与即时筛选、Coverage Future 灰色斜纹与条件摘要/图例/缺口流量估算、Inspector 上下条边界切换与 J/K 快捷键避让、Coverage Timeline 与 Gap 列表双向平滑滚动联动、以及系统状态渐进披露对话框与诊断复制。
+
+### Root cause & Motivation
+
+- Overview 顶栏卡片此前受 routeFocus 过滤，导致顶栏与全局流量构成脱节；
+- 缺少 Live Analysis Range 与 Snapshot 分离机制，导致快照提前生成或实时推进逻辑混乱；
+- 钻取到 History 时未清理无关历史筛选，造成无结果或混杂状态；
+- Coverage 缺少对查询窗口超出当前时刻的 Future 状态表达，容易误导用户以为存在真实监控空洞；
+- Connection Inspector 缺少就近浏览与单键快捷键，多连接审查效率偏低；
+- Coverage Timeline 概览与下方 Gap List 明细缺乏双向高亮与平滑滚动导航；
+- 侧边栏底部系统状态过于简略，缺少对会话心跳、核算滞后和排查建议的完整受控披露。
+
+### Completed
+
+- **Stage 1 (语义基准)**：分离 Overview 全局卡片（全量 route 查询）与分流策略卡片；隔离 Evidence 范围；Unknown Route 作为异常 chip 展示；
+- **Stage 2 (时间模型)**：定义 `isLiveRangeKind`，Overview/Coverage 采用随 30s 低频时钟自增的 `resolvedRange`，History 采用独立冻结的 `snapshot`，关闭区间（yesterday/custom）严格不推进，`refreshHistory()` 显式刷新仅对 live 范围推进上限；
+- **Stage 3 (调查上下文)**：Overview 钻取清空旧筛选并重置分页与选中，侧边栏切回 History 保留现有调查，Coverage 缺口检查带入 ±15min 区间并清空旧筛选；保持即时筛选零按钮摩擦；
+- **Stage 4 (语义完整性)**：Coverage 增加中性 45° 斜纹 Future segment，仅在 `futureDurationMs > 0` 时展示摘要与图例；计算并展示窗口级 Gap 流量估算芯片；
+- **Stage 5 (调查效率)**：Inspector 增加上一条/下一条操作与 J/K/[,/] 快捷键（输入框安全避让），表格行平滑滚动同步；Coverage Timeline 缺口块与 Gap 列表行双向 hover 与点击平滑滚动联动；
+- **Stage 6 (渐进披露)**：底部状态栏升级为可交互弹窗触发器，点击呼出 System & Runtime Diagnostics 弹窗，完整披露 Collector、Accounting、DB Schema 元数据与排查建议，支持一键复制诊断数据；
+- **Stage 7 (全面验证与收口)**：UI 单元测试从 42 增至 62 个（15 个 Suite 100% PASS）；Go 收集器测试通过；Phase 0 回归 18/18 通过；Tauri Release E2E 探针冒烟 100% PASS；100k 数据集查询基准 100% PASS；i18n 396 键严格 1:1 对齐。
+
+### Validation state
+
+- `npm test`：62 tests, 15 suites, 0 failures, 0 skips;
+- `npm run build`：Vite production build clean in 1.16s;
+- `go test ./pkg/... ./test/...`：all passed (0.2s ~ 9.9s);
+- `node --test tools/discovery/test/*.test.mjs`：18 tests passed;
+- `node tools/benchmark/run-phase3a-smoke.mjs`：100% PASS;
+- `node tools/benchmark/run-pre-ui-query-sanity.mjs`：100% PASS.
+
+---
+
 ## 2026-09-03 — Inspector surface selection and visual closure
 
 **Scope:** 完成 Inspector 正式 surface 定色，并处理一项 History 与一项

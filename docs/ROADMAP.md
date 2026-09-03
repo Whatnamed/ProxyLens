@@ -121,16 +121,18 @@ Later    长期增强                                 [PLANNED]
 已实现：
 
 - [x] 历史连接列表，newest-first；
-- [x] Time / Route / Process / Host / Destination IP / Network 等当前 Query API 支持的筛选；
-- [x] 冻结 History snapshot；
+- [x] Time / Route / Process / Host / Destination IP / Network 等当前 Query API 支持的筛选（保持即时筛选）；
+- [x] 冻结 History snapshot 与 Live Analysis Range（30s 低频推进）；
 - [x] 显式 offset pagination，不伪造 total count；
 - [x] Connection Inspector；
 - [x] Causal Path；
 - [x] Traffic Accounting、Evidence Quality、Lifecycle；
 - [x] Accounting Event Timeline；
 - [x] Raw Traffic Frames advanced disclosure；
-- [x] 行级键盘选择与可恢复 render error boundary。
+- [x] 行级键盘选择与可恢复 render error boundary；
 - [x] Select / DatePicker composite keyboard navigation、focus-out close 与 ARIA semantics；
+- [x] Connection Inspector 边界受控前/后连接切换（Prev/Next 按钮、J/K/[,/] 快捷键与输入框避让保护）；
+- [x] 调查上下文管理（Overview 钻取清空无关筛选、侧边栏保留当前调查、Coverage 缺口检查清空旧条件并带入 ±15min）；
 
 仍待后续、且不得在无后端契约时伪造：
 
@@ -142,12 +144,14 @@ Later    长期增强                                 [PLANNED]
 
 已实现：
 
-- [x] Coverage summary；
+- [x] Coverage summary 与物理缺口流量估算芯片；
 - [x] Covered / Controller Gap / Collector Offline / Outside Monitored History timeline；
+- [x] Future 未来区间（中性斜纹）与条件摘要/图例；
 - [x] merged gap provenance（含 mixed）；
-- [x] Gap list；
-- [x] Inspect Around Gap → History；
-- [x] Collector heartbeat stale semantics 与 Coverage 后端一致。
+- [x] Gap list 与 Timeline 双向 hover / 点击平滑滚动联动；
+- [x] Inspect Around Gap → History（带入 ±15min 自定义区间并冻结快照）；
+- [x] Collector heartbeat stale semantics 与 Coverage 后端一致；
+- [x] System 状态渐进式披露对话框（完整 Meta、会话心跳、核算新鲜度落后、异常排查建议与诊断复制）；
 
 仍待后续：
 
