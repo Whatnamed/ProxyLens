@@ -82,6 +82,7 @@
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 - Phase 3E-1 Go runtime/scheduler mock E2E、Tauri path unit tests、双 binary build 与 Tauri release build 均已完成本地验证；这些结果不是 GitHub CI PASS。
 - 本任务正式 runtime 测试使用 `httptest` / mock WebSocket 与隔离临时 SQLite DB；真实 FLClash/Mihomo lifecycle 与 real-data validation 未纳入本阶段正式验收。
+- `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
 
 ### Rendered visual QA
 
