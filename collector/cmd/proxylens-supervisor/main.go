@@ -17,6 +17,7 @@ import (
 
 	proxylensruntime "github.com/Whatnamed/ProxyLens/collector/pkg/runtime"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/runtimeconfig"
+	"golang.org/x/term"
 )
 
 type configStatus struct {
@@ -282,16 +283,11 @@ func configSetSecretCommand() int {
 		fmt.Fprintf(os.Stderr, "Failed to prepare secure runtime config: %v\n", err)
 		return 1
 	}
-	reader := bufio.NewScanner(os.Stdin)
-	if !reader.Scan() {
-		if err := reader.Err(); err != nil {
-			fmt.Fprintln(os.Stderr, "Failed to read Controller Secret from stdin")
-		} else {
-			fmt.Fprintln(os.Stderr, "Controller Secret must be provided as one non-empty stdin line")
-		}
+	value, err := readControllerSecret(os.Stdin, os.Stderr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	value := reader.Text()
 	if strings.TrimSpace(value) == "" {
 		fmt.Fprintln(os.Stderr, "Controller Secret must be non-empty")
 		return 1
@@ -301,6 +297,35 @@ func configSetSecretCommand() int {
 		return 1
 	}
 	return 0
+}
+
+func readControllerSecret(stdin *os.File, prompt io.Writer) (string, error) {
+	if stdin == nil {
+		return "", fmt.Errorf("Controller Secret stdin is unavailable")
+	}
+	if term.IsTerminal(int(stdin.Fd())) {
+		if prompt != nil {
+			_, _ = io.WriteString(prompt, "Controller Secret: ")
+		}
+		value, err := term.ReadPassword(int(stdin.Fd()))
+		if prompt != nil {
+			_, _ = io.WriteString(prompt, "\n")
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to read Controller Secret securely: %w", err)
+		}
+		return string(value), nil
+	}
+
+	// Pipes and lifecycle harnesses retain the existing one-line contract.
+	reader := bufio.NewScanner(stdin)
+	if !reader.Scan() {
+		if err := reader.Err(); err != nil {
+			return "", fmt.Errorf("failed to read Controller Secret from stdin")
+		}
+		return "", fmt.Errorf("Controller Secret must be provided as one non-empty stdin line")
+	}
+	return reader.Text(), nil
 }
 
 func configClearSecretCommand() int {
