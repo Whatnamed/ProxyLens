@@ -11,7 +11,8 @@
     "sidecar:build": "node scripts/build-binaries.mjs",
     "tauri": "tauri",
     "tauri:dev": "node scripts/build-binaries.mjs && tauri dev",
-    "tauri:build": "node scripts/build-binaries.mjs && tauri build"
+    "tauri:build": "node scripts/build-binaries.mjs && tauri build",
+    "tauri:build:windows": "node scripts/build-binaries.mjs && tauri build --config src-tauri/tauri.windows.conf.json --bundles nsis"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.66.0",
