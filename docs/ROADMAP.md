@@ -25,7 +25,7 @@ Phase 2  持久化、核算与运行时验证                  [COMPLETED]
    ↓
 Phase 3  审计 UI                                  [IN PROGRESS — core UI implemented]
    ↓
-Phase 3E Desktop Runtime Integration              [IN PROGRESS — 3E-1/3E-2A implemented; 3E-2B pending]
+Phase 3E Desktop Runtime Integration              [IN PROGRESS — 3E-1/3E-2A/3E-2B1 complete; 3E-2B2 pending]
    ↓
 Phase 4  Audit Intelligence                       [PLANNED]
    ↓
@@ -162,7 +162,7 @@ Later    长期增强                                 [PLANNED]
   - [ ] 桌面应用图标、安装版生命周期与启动性能最终打磨；
   - [ ] 最终视觉 polish 与 Design System freeze。
 
-### Phase 3E — Desktop Runtime Integration [IN PROGRESS — Phase 3E-1 and 3E-2A complete / 3E-2B pending]
+### Phase 3E — Desktop Runtime Integration [IN PROGRESS — Phase 3E-1, 3E-2A and 3E-2B1 complete / 3E-2B2 pending]
 
 已完成 Phase 3E-1：
 
@@ -182,12 +182,22 @@ Later    长期增强                                 [PLANNED]
 - [x] UI close 后 Runtime 保持运行、reopen 复用既有 Runtime；
 - [x] random-port mock Controller + temporary data directory lifecycle smoke。
 
-#### Phase 3E-2B — Installed Runtime & Secure Configuration [PLANNED]
+#### Phase 3E-2B1 — Background Supervisor & Secure Runtime Configuration [COMPLETED]
 
-- [ ] independent installed background supervisor / continuous whole-process crash restart；
+- [x] independent `proxylens-supervisor` process-continuity owner；
+- [x] per-authority-DB Supervisor single-instance 与 Runtime named-mutex presence/observation；
+- [x] bounded whole-process Runtime crash restart、existing Runtime takeover 与 exact `STOP\n` lifecycle contract；
+- [x] non-secret `runtime.json` config path/schema/atomic write 与 Controller precedence；
+- [x] Windows Credential Manager Generic Credential、random E2E target isolation 与 `MIHOMO_SECRET` explicit override；
+- [x] Tauri ensure Supervisor → Runtime，Query-only UI lifecycle，Supervisor/Runtime UI-close survival 与 reopen reuse；
+- [x] mock-only secure credential / crash-restart / Tauri lifecycle acceptance。
+
+#### Phase 3E-2B2 — Installed Runtime Lifecycle [PLANNED]
+
 - [ ] login/autostart policy；
-- [ ] secure Mihomo Controller Secret provisioning/persistence；
-- [ ] installer lifecycle、upgrade ownership 与 real installed-data-path validation；
+- [ ] Windows Service / tray ownership decision；
+- [ ] installer lifecycle、upgrade ownership、uninstall cleanup 与 real installed-data-path validation；
+- [ ] minimal user-facing Settings/config surface；
 - [ ] real FLClash/Mihomo validation 与最终 real-data visual acceptance。
 
 ---

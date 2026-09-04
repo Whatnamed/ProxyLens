@@ -5,11 +5,46 @@
 
 ---
 
-## 2026-09-04 — Phase 3E-2A Windows Runtime Ownership & Tauri Ensure-Start
+## 2026-09-04 — Phase 3E-2B1 Supervisor & Secure Runtime Configuration
+
+**Scope:** 在 3E-2A Runtime ownership / ensure-start 基线上完成 3E-2B1：新增独立
+`proxylens-supervisor`，接管 per-authority-DB 的 Runtime process continuity、已有
+Runtime observation、bounded crash restart 与 exact `STOP\n` graceful lifecycle；新增
+非敏感 `runtime.json`、Windows Credential Manager Secret storage、Tauri ensure
+Supervisor，以及 Query-only UI lifecycle。
+
+**Completed:**
+
+- Supervisor 与 Runtime 使用独立但同一 DB identity 的 Windows named mutex；presence
+  probe 不保留 ownership，race 仍由 Runtime writer mutex 最终裁决；
+- Controller URL 采用 `--controller` → environment → persisted config → product
+  default（E2E 只允许显式随机 `127.0.0.1` mock），Secret 采用 `MIHOMO_SECRET` →
+  Credential Manager → empty；Secret 不写 JSON、argv、handshake 或日志；
+- Tauri 改为 detached Supervisor bootstrap，UI close 仅停止 Query，Supervisor/Runtime
+  保活并支持 reopen reuse；build/bundle 纳入三个 Go binary；
+- 未实现 2B2 的 login/autostart、Windows Service、tray、installer/upgrade/uninstall
+  lifecycle、最终 Settings UI 或真实 FLClash/Mihomo acceptance。
+
+### Validation state
+
+- `go test ./pkg/runtime/... ./pkg/runtimeconfig/...`：PASS；
+- `go test ./test -run '^TestSupervisorSubprocessUsesMockControllerAndSecureCredential$' -count=1 -v`：PASS；
+- `cargo fmt --check --manifest-path src-tauri\Cargo.toml` 与
+  `cargo test --manifest-path src-tauri\Cargo.toml`：PASS；
+- `npm.cmd test`、`npm.cmd run build`、`npm.cmd run sidecar:build` 与
+  `npm.cmd run tauri:build`：PASS；
+- `node tools/runtime/run-phase3e2b1-supervisor.mjs`：PASS，覆盖 secure credential、
+  Tauri A/B、UI-close survival、Runtime crash/restart、duplicate/different DB、
+  existing Runtime takeover 与 exact cleanup；所有 Controller 连接均为随机端口 mock，
+  DB/config 均为临时目录。
+
+---
+
+## 2026-09-04 — Phase 3E-2A Windows Runtime Ownership & Tauri Ensure-Start (historical baseline)
 
 **Scope:** 在 Phase 3E-1 Runtime Core 之上完成按 authority DB path 的 Windows Runtime ownership、startup handshake 与 Tauri ensure-start；Query API 仍由 UI 独立持有，UI close 不停止 Runtime。
 
-**Closure:** 使用随机 loopback mock Controller 与临时数据目录完成 first launch → `Started`、UI close 后 Runtime 保活、同 DB duplicate → `AlreadyRunning`、reopen reuse、different-DB concurrency 及 GET-only Controller lifecycle smoke。登录/自启动、安装版 ownership、secure secret provisioning、continuous crash supervisor 与真实 FLClash/Mihomo 验证继续延期到 Phase 3E-2B/Deferred。
+**Closure:** 当时使用随机 loopback mock Controller 与临时数据目录完成 first launch → `Started`、UI close 后 Runtime 保活、同 DB duplicate → `AlreadyRunning`、reopen reuse、different-DB concurrency 及 GET-only Controller lifecycle smoke。随后 3E-2B1 已将 Tauri 的直接 Runtime ensure-start 扩展为 Supervisor ensure/observe/restart 与 secure config；登录/自启动、安装版 ownership 与真实 FLClash/Mihomo 验证仍延期到 3E-2B2/Deferred。
 
 ---
 

@@ -4,6 +4,10 @@
 - **Date**: 2026-09-04
 - **Scope**: Phase 3E-2A
 
+This ADR records the 3E-2A ownership baseline. Phase 3E-2B1 extends the
+desktop process lifecycle with `proxylens-supervisor` and secure configuration;
+the current combined architecture is recorded in ADR 0008.
+
 ## Context
 
 Phase 3E-1 supplied a reusable Go Runtime Core and a bundled Runtime binary,
@@ -61,9 +65,9 @@ The reusable `CollectorRunner` remains stricter than the CLI boundary:
 `ControllerURL` must be explicit and non-empty, so library callers cannot
 silently inherit the real-controller default.
 
-### 3. Tauri ownership split and startup ordering
+### 3. Tauri ownership split and startup ordering (3E-2A baseline)
 
-Tauri uses the official bundled `proxylens-runtime` sidecar resolver and
+At the 3E-2A baseline, Tauri used the official bundled `proxylens-runtime` sidecar resolver and
 performs this order:
 
 ```text
@@ -82,11 +86,18 @@ same authority DB. If Runtime bootstrap fails while a valid existing DB is
 available, Tauri still attempts the read-only Query sidecar and reports the
 bootstrap failure as factual status.
 
+In the current 3E-2B1 implementation, this direct Runtime ensure-start is
+replaced by Tauri ensuring `proxylens-supervisor`; Supervisor then ensures or
+observes Runtime. Query remains UI-owned and the UI-close behavior remains the
+same. See ADR 0008 for the current process and secure-config contract.
+
 ### 4. Explicitly deferred scope
 
-This ADR does not introduce login/autostart, Windows Service, tray ownership,
+This ADR did not introduce login/autostart, Windows Service, tray ownership,
 installer or upgrade ownership, final secure secret provisioning, or a
-continuous whole-process crash supervisor. Those belong to Phase 3E-2B.
+continuous whole-process crash supervisor. The Supervisor and secure-config
+foundation now belong to completed Phase 3E-2B1; remaining installed lifecycle
+work belongs to Phase 3E-2B2.
 Real FLClash/Mihomo lifecycle validation and final real-data visual acceptance
 remain deferred.
 
