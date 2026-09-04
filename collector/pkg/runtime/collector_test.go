@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -97,5 +98,17 @@ func TestCollectorRunnerIsSingleUse(t *testing.T) {
 	_, _ = runner.Run(ctx)
 	if _, err := runner.Run(context.Background()); err == nil {
 		t.Fatal("expected second Run call to fail")
+	}
+}
+
+func TestCollectorRunnerRequiresExplicitControllerURL(t *testing.T) {
+	for _, controllerURL := range []string{"", " \t"} {
+		_, err := NewCollectorRunner(CollectorOptions{ControllerURL: controllerURL})
+		if err == nil {
+			t.Fatalf("expected missing ControllerURL %q to fail", controllerURL)
+		}
+		if !strings.Contains(err.Error(), "explicit ControllerURL") {
+			t.Fatalf("unexpected missing ControllerURL error: %v", err)
+		}
 	}
 }

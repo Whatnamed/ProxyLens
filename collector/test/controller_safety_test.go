@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,7 +25,22 @@ func forbiddenControllerEndpoints() []string {
 // user's conventional Mihomo Controller endpoint. Mock URLs must be passed
 // through a variable created by httptest.Server instead.
 func TestSubprocessIntegrationCommandsDoNotUseRealControllerEndpoint(t *testing.T) {
-	paths, err := filepath.Glob("*_test.go")
+	var paths []string
+	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || entry.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(entry.Name(), "_test.go") {
+			paths = append(paths, path)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("failed to enumerate Go tests: %v", err)
 	}
@@ -56,7 +72,9 @@ func TestSubprocessIntegrationCommandsDoNotUseRealControllerEndpoint(t *testing.
 			if !ok || packageIdent.Name != "exec" {
 				return true
 			}
-			for _, arg := range call.Args {
+			hasRunSubcommand := false
+			hasExplicitController := false
+			for index, arg := range call.Args {
 				literal, ok := arg.(*ast.BasicLit)
 				if !ok || literal.Kind != token.STRING {
 					continue
@@ -65,6 +83,15 @@ func TestSubprocessIntegrationCommandsDoNotUseRealControllerEndpoint(t *testing.
 				if err == nil && containsForbiddenControllerEndpoint(value) {
 					t.Errorf("%s passes the real Controller endpoint directly to exec.Command; use an httptest mock", path)
 				}
+				if index > 0 && value == "run" {
+					hasRunSubcommand = true
+				}
+				if index > 0 && (value == "--controller" || strings.HasPrefix(value, "--controller=")) {
+					hasExplicitController = true
+				}
+			}
+			if hasRunSubcommand && !hasExplicitController {
+				t.Errorf("%s invokes a collector run subprocess without an explicit --controller; use an httptest mock URL", path)
 			}
 			return true
 		})

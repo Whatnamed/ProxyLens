@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -69,9 +70,15 @@ type CollectorRunner struct {
 }
 
 // NewCollectorRunner validates and prepares a reusable live collector runner.
+// ControllerURL must be explicit so reusable callers cannot silently inherit
+// the CLI's real-controller default.
 // It does not open a database, connect a controller, parse flags, or create
 // any process-wide signal handlers.
 func NewCollectorRunner(opts CollectorOptions) (*CollectorRunner, error) {
+	if strings.TrimSpace(opts.ControllerURL) == "" {
+		return nil, fmt.Errorf("collector runner requires an explicit ControllerURL")
+	}
+
 	cfg := config.DefaultConfig()
 	if opts.ControllerURL != "" {
 		cfg.ControllerURL = opts.ControllerURL
