@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -67,6 +69,14 @@ func RuntimeInstanceKey(dbPath string) (string, error) {
 // object name. The raw path is hashed and never appears in the name.
 func SupervisorInstanceKey(dbPath string) (string, error) {
 	return instanceKey(dbPath, `Local\ProxyLens.Supervisor.v1.`)
+}
+
+// SupervisorStopEventName returns the per-database local stop-event name.
+// The normalized database path is hashed so it never appears in the global
+// object namespace. The event is deliberately separate from the Supervisor
+// mutex: the mutex proves ownership, while the event is only a stop request.
+func SupervisorStopEventName(dbPath string) (string, error) {
+	return instanceKey(dbPath, `Local\ProxyLens.Supervisor.Stop.v1.`)
 }
 
 func instanceKey(dbPath, prefix string) (string, error) {
@@ -156,4 +166,115 @@ func ProbeRuntimePresence(dbPath string) (RuntimePresence, error) {
 		return RuntimePresent, nil
 	}
 	return RuntimeAbsent, nil
+}
+
+// SupervisorPresence describes the non-destructive Supervisor ownership
+// probe. It never enumerates processes or tasks and never retains the mutex.
+type SupervisorPresence string
+
+const (
+	SupervisorPresent SupervisorPresence = "present"
+	SupervisorAbsent  SupervisorPresence = "absent"
+)
+
+func ProbeSupervisorPresence(dbPath string) (SupervisorPresence, error) {
+	key, err := SupervisorInstanceKey(dbPath)
+	if err != nil {
+		return "", err
+	}
+	localOwnership.Lock()
+	_, localPresent := localOwnership.keys[key]
+	localOwnership.Unlock()
+	if localPresent {
+		return SupervisorPresent, nil
+	}
+	present, err := probeNamedOwnership(key)
+	if err != nil {
+		return "", err
+	}
+	if present {
+		return SupervisorPresent, nil
+	}
+	return SupervisorAbsent, nil
+}
+
+// SupervisorStopEvent is the exact per-database control primitive held by
+// the owning Supervisor. Wait observes only this event and invokes cancel on
+// a planned stop; it does not terminate a process by PID.
+type SupervisorStopEvent struct {
+	closeOnce sync.Once
+	closeFunc func() error
+	waitFunc  func(context.Context, func()) error
+	closeErr  error
+}
+
+func (e *SupervisorStopEvent) Close() error {
+	if e == nil {
+		return nil
+	}
+	e.closeOnce.Do(func() {
+		if e.closeFunc != nil {
+			e.closeErr = e.closeFunc()
+		}
+	})
+	return e.closeErr
+}
+
+func (e *SupervisorStopEvent) Wait(ctx context.Context, cancel func()) error {
+	if e == nil || e.waitFunc == nil {
+		return ErrRuntimeOwnershipUnsupported
+	}
+	return e.waitFunc(ctx, cancel)
+}
+
+// OpenSupervisorStopEvent resets any stale signal while the caller holds the
+// Supervisor mutex, then waits for future control requests.
+func OpenSupervisorStopEvent(dbPath string) (*SupervisorStopEvent, error) {
+	name, err := SupervisorStopEventName(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	return openSupervisorStopEvent(name)
+}
+
+// SignalSupervisorStop opens only the exact event for dbPath and requests a
+// graceful stop. A missing event means no current Supervisor has initialized
+// the control endpoint.
+func SignalSupervisorStop(dbPath string) error {
+	name, err := SupervisorStopEventName(dbPath)
+	if err != nil {
+		return err
+	}
+	return signalSupervisorStopEvent(name)
+}
+
+// WaitForSupervisorAbsence provides a bounded, non-destructive wait for the
+// ownership mutex to be released after a planned stop.
+func WaitForSupervisorAbsence(ctx context.Context, dbPath string, timeout time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		presence, err := ProbeSupervisorPresence(dbPath)
+		if err != nil {
+			return err
+		}
+		if presence == SupervisorAbsent {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("timed out waiting for Supervisor ownership to stop")
+		case <-ticker.C:
+		}
+	}
 }

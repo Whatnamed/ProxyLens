@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -152,4 +153,71 @@ func createMutexHandle(instanceKey string) (windows.Handle, error) {
 		return 0, fmt.Errorf("failed to create ownership mutex: %w", createErr)
 	}
 	return handle, nil
+}
+
+func openSupervisorStopEvent(eventName string) (*SupervisorStopEvent, error) {
+	name, err := windows.UTF16PtrFromString(eventName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode Supervisor stop event name: %w", err)
+	}
+	handle, createErr := windows.CreateEvent(nil, 1, 0, name)
+	if handle == 0 {
+		if createErr != nil {
+			return nil, fmt.Errorf("failed to create Supervisor stop event: %w", createErr)
+		}
+		return nil, fmt.Errorf("failed to create Supervisor stop event: empty handle")
+	}
+	if createErr != nil && !errors.Is(createErr, windows.ERROR_ALREADY_EXISTS) {
+		_ = windows.CloseHandle(handle)
+		return nil, fmt.Errorf("failed to create Supervisor stop event: %w", createErr)
+	}
+	if err := windows.ResetEvent(handle); err != nil {
+		_ = windows.CloseHandle(handle)
+		return nil, fmt.Errorf("failed to reset Supervisor stop event: %w", err)
+	}
+	return &SupervisorStopEvent{
+		closeFunc: func() error { return windows.CloseHandle(handle) },
+		waitFunc: func(ctx context.Context, cancel func()) error {
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				default:
+				}
+				result, waitErr := windows.WaitForSingleObject(handle, 100)
+				if waitErr != nil {
+					return fmt.Errorf("failed to wait for Supervisor stop event: %w", waitErr)
+				}
+				switch result {
+				case windows.WAIT_OBJECT_0:
+					if cancel != nil {
+						cancel()
+					}
+					return nil
+				case uint32(windows.WAIT_TIMEOUT):
+				default:
+					return fmt.Errorf("failed to wait for Supervisor stop event: result=%d", result)
+				}
+			}
+		},
+	}, nil
+}
+
+func signalSupervisorStopEvent(eventName string) error {
+	name, err := windows.UTF16PtrFromString(eventName)
+	if err != nil {
+		return fmt.Errorf("failed to encode Supervisor stop event name: %w", err)
+	}
+	handle, err := windows.OpenEvent(windows.EVENT_MODIFY_STATE, false, name)
+	if err != nil {
+		return fmt.Errorf("failed to open Supervisor stop event: %w", err)
+	}
+	defer windows.CloseHandle(handle)
+	if err := windows.SetEvent(handle); err != nil {
+		return fmt.Errorf("failed to signal Supervisor stop event: %w", err)
+	}
+	return nil
 }

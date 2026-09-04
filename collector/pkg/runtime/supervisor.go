@@ -163,6 +163,18 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = ownership.Close() }()
+	stopEvent, err := OpenSupervisorStopEvent(s.dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Supervisor stop event: %w", err)
+	}
+	defer func() { _ = stopEvent.Close() }()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		if err := stopEvent.Wait(runCtx, cancel); err != nil {
+			s.logger("[supervisor] stop event watcher failed: %v", err)
+		}
+	}()
 
 	// The Supervisor owns the per-DB process-continuity lease before it can
 	// probe or start Runtime. Publish that fact separately through the existing
@@ -184,7 +196,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	restartCount := 0
 	var owned *managedRuntime
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := runCtx.Err(); err != nil {
 			if owned != nil {
 				s.stopOwnedRuntime(owned)
 			}
@@ -195,7 +207,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			presence, err = ProbeRuntimePresence(s.dbPath)
 			if err != nil {
 				s.logger("[supervisor] Runtime presence probe failed: %v", err)
-				if !waitContext(ctx, s.probeInterval) {
+				if !waitContext(runCtx, s.probeInterval) {
 					return nil
 				}
 				continue
@@ -205,16 +217,16 @@ func (s *Supervisor) Run(ctx context.Context) error {
 					s.emitReady(SupervisorReadyInfo{RuntimeState: SupervisorRuntimeStateAlreadyRunning})
 					runtimeReadyEmitted = true
 				}
-				if !waitContext(ctx, s.probeInterval) {
+				if !waitContext(runCtx, s.probeInterval) {
 					return nil
 				}
 				continue
 			}
 
-			candidate, signal, startErr := s.startRuntime(ctx)
+			candidate, signal, startErr := s.startRuntime(runCtx)
 			if startErr != nil {
 				s.logger("[supervisor] Runtime start failed; retrying with bounded backoff: %v", startErr)
-				if !waitContext(ctx, backoff.NextDelay()) {
+				if !waitContext(runCtx, backoff.NextDelay()) {
 					return nil
 				}
 				continue
@@ -248,7 +260,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			}
 
 			select {
-			case <-ctx.Done():
+			case <-runCtx.Done():
 				s.stopOwnedRuntime(owned)
 				return nil
 			case <-owned.waitCh:
@@ -257,7 +269,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				}
 				s.logger("[supervisor] owned Runtime PID %d exited; restart scheduled", owned.pid)
 				owned = nil
-				if !waitContext(ctx, backoff.NextDelay()) {
+				if !waitContext(runCtx, backoff.NextDelay()) {
 					return nil
 				}
 			}

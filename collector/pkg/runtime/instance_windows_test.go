@@ -3,9 +3,11 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestWindowsRuntimeOwnershipIsPathKeyedAndReleasable(t *testing.T) {
@@ -118,5 +120,52 @@ func TestWindowsSupervisorOwnershipIsIndependentAndPathKeyed(t *testing.T) {
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("Supervisor ownership close failed: %v", err)
+	}
+}
+
+func TestWindowsSupervisorStopEventIsPathKeyedResettableAndSignallable(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "authority.db")
+	name, err := SupervisorStopEventName(dbPath)
+	if err != nil {
+		t.Fatalf("stop event name failed: %v", err)
+	}
+	if name == "" || filepath.Base(name) == filepath.Base(dbPath) {
+		t.Fatalf("stop event name exposed database path: %q", name)
+	}
+	ownership, err := AcquireSupervisorOwnership(dbPath)
+	if err != nil {
+		t.Fatalf("Supervisor ownership acquisition failed: %v", err)
+	}
+	defer ownership.Close()
+	event, err := OpenSupervisorStopEvent(dbPath)
+	if err != nil {
+		t.Fatalf("stop event creation failed: %v", err)
+	}
+	defer event.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- event.Wait(ctx, cancel) }()
+	if err := SignalSupervisorStop(dbPath); err != nil {
+		t.Fatalf("stop event signal failed: %v", err)
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("stop event wait failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stop event watcher did not observe the exact signal")
+	}
+	if err := event.Close(); err != nil {
+		t.Fatalf("stop event close failed: %v", err)
+	}
+	reset, err := OpenSupervisorStopEvent(dbPath)
+	if err != nil {
+		t.Fatalf("stale stop event could not be reset: %v", err)
+	}
+	if err := reset.Close(); err != nil {
+		t.Fatalf("reset stop event close failed: %v", err)
 	}
 }

@@ -24,12 +24,20 @@ type configStatus struct {
 	SchemaVersion        int    `json:"schemaVersion"`
 	ControllerConfigured bool   `json:"controllerConfigured"`
 	ControllerURL        string `json:"controllerUrl,omitempty"`
+	AutostartEnabled     bool   `json:"autostartEnabled"`
 	SecretPresent        bool   `json:"secretPresent"`
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "config" {
-		os.Exit(runConfigCommand(os.Args[2:]))
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "config":
+			os.Exit(runConfigCommand(os.Args[2:]))
+		case "control":
+			os.Exit(runControlCommand(os.Args[2:]))
+		case "install":
+			os.Exit(runInstallCommand(os.Args[2:]))
+		}
 	}
 	os.Exit(runSupervisor(os.Args[1:]))
 }
@@ -205,7 +213,7 @@ func emitSupervisorSignal(encode func(io.Writer) error) error {
 
 func runConfigCommand(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: proxylens-supervisor config <status|set-controller|set-secret|clear-secret>")
+		fmt.Fprintln(os.Stderr, "Usage: proxylens-supervisor config <status|set-controller|set-autostart|set-secret|clear-secret>")
 		return 2
 	}
 	switch args[0] {
@@ -213,6 +221,8 @@ func runConfigCommand(args []string) int {
 		return configStatusCommand()
 	case "set-controller":
 		return configSetControllerCommand(args[1:])
+	case "set-autostart":
+		return configSetAutostartCommand(args[1:])
 	case "set-secret":
 		return configSetSecretCommand()
 	case "clear-secret":
@@ -238,6 +248,7 @@ func configStatusCommand() int {
 		SchemaVersion:        cfg.SchemaVersion,
 		ControllerConfigured: strings.TrimSpace(cfg.ControllerURL) != "",
 		ControllerURL:        cfg.ControllerURL,
+		AutostartEnabled:     cfg.AutostartEnabled,
 		SecretPresent:        secretPresent,
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(status); err != nil {
