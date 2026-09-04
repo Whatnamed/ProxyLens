@@ -1,5 +1,5 @@
-use crate::runtime_process::RuntimeBootstrapStatus;
 use crate::state::{AppState, QueryApiSession};
+use crate::supervisor_process::SupervisorBootstrapStatus;
 use serde::Deserialize;
 use std::env;
 use tauri::State;
@@ -17,8 +17,8 @@ pub fn get_query_api_session(state: State<'_, AppState>) -> Result<QueryApiSessi
 }
 
 #[tauri::command]
-pub fn get_runtime_bootstrap_status(state: State<'_, AppState>) -> RuntimeBootstrapStatus {
-    state.runtime_status.lock().unwrap().clone()
+pub fn get_supervisor_bootstrap_status(state: State<'_, AppState>) -> SupervisorBootstrapStatus {
+    state.supervisor_status.lock().unwrap().clone()
 }
 
 #[tauri::command]

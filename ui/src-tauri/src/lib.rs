@@ -1,7 +1,7 @@
 pub mod commands;
-pub mod runtime_process;
 pub mod sidecar;
 pub mod state;
+pub mod supervisor_process;
 
 use state::AppState;
 use std::env;
@@ -17,7 +17,7 @@ pub fn run() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_query_api_session,
-            commands::get_runtime_bootstrap_status,
+            commands::get_supervisor_bootstrap_status,
             commands::get_e2e_mode,
             commands::report_e2e_probe
         ])
@@ -25,52 +25,57 @@ pub fn run() {
             let handle = app.handle().clone();
             let state: State<AppState> = app.state();
 
-            // Runtime owns the writable authority path first. The Query API
-            // remains a separate UI-owned, read-only sidecar below.
+            // Supervisor owns process continuity for the writable authority
+            // path. It starts/observes Runtime; Query remains a separate
+            // UI-owned, read-only sidecar below.
             match sidecar::resolve_runtime_db_path() {
                 Ok(runtime_db_path) => {
-                    match tauri::async_runtime::block_on(runtime_process::ensure_runtime(
+                    match tauri::async_runtime::block_on(supervisor_process::ensure_supervisor(
                         &handle,
                         &runtime_db_path,
                     )) {
                         Ok(bootstrap) => {
                             eprintln!(
-                                "PROXYLENS_RUNTIME_BOOTSTRAP {}",
+                                "PROXYLENS_SUPERVISOR_BOOTSTRAP {}",
                                 serde_json::to_string(&bootstrap.status)
                                     .unwrap_or_else(|_| "{}".to_string())
                             );
-                            *state.runtime_status.lock().unwrap() = bootstrap.status;
-                            *state.runtime.lock().unwrap() = bootstrap.child;
+                            *state.supervisor_status.lock().unwrap() = bootstrap.status;
+                            *state.supervisor.lock().unwrap() = bootstrap.child;
                         }
                         Err(error) => {
-                            let status = runtime_process::RuntimeBootstrapStatus {
-                                state: runtime_process::RuntimeBootstrapState::Failed,
+                            let status = supervisor_process::SupervisorBootstrapStatus {
+                                state: supervisor_process::SupervisorBootstrapState::Failed,
                                 pid: None,
                                 error: Some(error),
+                                runtime_state: None,
+                                runtime_pid: None,
                             };
                             eprintln!(
-                                "PROXYLENS_RUNTIME_BOOTSTRAP {}",
+                                "PROXYLENS_SUPERVISOR_BOOTSTRAP {}",
                                 serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string())
                             );
-                            *state.runtime_status.lock().unwrap() = status;
+                            *state.supervisor_status.lock().unwrap() = status;
                         }
                     }
                 }
                 Err(error) => {
-                    let status = runtime_process::RuntimeBootstrapStatus {
-                        state: runtime_process::RuntimeBootstrapState::Failed,
+                    let status = supervisor_process::SupervisorBootstrapStatus {
+                        state: supervisor_process::SupervisorBootstrapState::Failed,
                         pid: None,
                         error: Some(error),
+                        runtime_state: None,
+                        runtime_pid: None,
                     };
                     eprintln!(
-                        "PROXYLENS_RUNTIME_BOOTSTRAP {}",
+                        "PROXYLENS_SUPERVISOR_BOOTSTRAP {}",
                         serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string())
                     );
-                    *state.runtime_status.lock().unwrap() = status;
+                    *state.supervisor_status.lock().unwrap() = status;
                 }
             }
 
-            let db_res = if runtime_bootstrap_succeeded(&state) {
+            let db_res = if supervisor_bootstrap_succeeded(&state) {
                 tauri::async_runtime::block_on(sidecar::wait_for_query_db_path(
                     Duration::from_secs(2),
                 ))
@@ -116,9 +121,9 @@ pub fn run() {
                     eprintln!("[ProxyLens Tauri] Stopping query sidecar on window destroy...");
                     sidecar::stop_query_sidecar(child);
                 }
-                // The Runtime child intentionally outlives this UI window.
-                // It is held in the independent AppState.runtime slot and is
-                // never stopped by normal UI-close handling.
+                // Supervisor and its Runtime child intentionally outlive this
+                // UI window. They are held in independent AppState state and
+                // are never stopped by normal UI-close handling.
             }
         })
         .run(tauri::generate_context!())
@@ -149,10 +154,10 @@ fn schedule_e2e_auto_exit(app_handle: &tauri::AppHandle) {
     });
 }
 
-fn runtime_bootstrap_succeeded(state: &State<AppState>) -> bool {
+fn supervisor_bootstrap_succeeded(state: &State<AppState>) -> bool {
     matches!(
-        state.runtime_status.lock().unwrap().state.clone(),
-        runtime_process::RuntimeBootstrapState::Started
-            | runtime_process::RuntimeBootstrapState::AlreadyRunning
+        state.supervisor_status.lock().unwrap().state.clone(),
+        supervisor_process::SupervisorBootstrapState::Started
+            | supervisor_process::SupervisorBootstrapState::AlreadyRunning
     )
 }

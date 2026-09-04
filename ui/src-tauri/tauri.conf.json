@@ -29,7 +29,8 @@
     "targets": "all",
     "externalBin": [
       "binaries/proxylens-query-api",
-      "binaries/proxylens-runtime"
+      "binaries/proxylens-runtime",
+      "binaries/proxylens-supervisor"
     ],
     "resources": {
       "../src/assets/fonts/LICENSES.md": "licenses/LICENSES.md",

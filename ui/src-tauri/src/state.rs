@@ -1,4 +1,4 @@
-use crate::runtime_process::RuntimeBootstrapStatus;
+use crate::supervisor_process::{SupervisorBootstrapStatus, SupervisorChild};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri_plugin_shell::process::CommandChild;
@@ -14,8 +14,8 @@ pub struct QueryApiSession {
 pub struct AppState {
     pub session: Mutex<Option<QueryApiSession>>,
     pub child: Mutex<Option<CommandChild>>,
-    pub runtime: Mutex<Option<CommandChild>>,
-    pub runtime_status: Mutex<RuntimeBootstrapStatus>,
+    pub supervisor: Mutex<Option<SupervisorChild>>,
+    pub supervisor_status: Mutex<SupervisorBootstrapStatus>,
 }
 
 impl AppState {
@@ -23,8 +23,8 @@ impl AppState {
         Self {
             session: Mutex::new(None),
             child: Mutex::new(None),
-            runtime: Mutex::new(None),
-            runtime_status: Mutex::new(RuntimeBootstrapStatus::not_attempted()),
+            supervisor: Mutex::new(None),
+            supervisor_status: Mutex::new(SupervisorBootstrapStatus::not_attempted()),
         }
     }
 }

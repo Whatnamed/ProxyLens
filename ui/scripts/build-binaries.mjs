@@ -39,6 +39,7 @@ const ext = process.platform === 'win32' ? '.exe' : '';
 const binaries = [
   { name: 'proxylens-query-api', packagePath: './cmd/proxylens-query-api' },
   { name: 'proxylens-runtime', packagePath: './cmd/proxylens-runtime' },
+  { name: 'proxylens-supervisor', packagePath: './cmd/proxylens-supervisor' },
 ];
 
 for (const binary of binaries) {
