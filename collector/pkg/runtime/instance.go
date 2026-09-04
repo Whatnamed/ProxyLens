@@ -18,9 +18,13 @@ var (
 	// ErrRuntimeOwnershipUnsupported is returned on platforms where the
 	// Windows named-mutex ownership contract is not available.
 	ErrRuntimeOwnershipUnsupported = errors.New("ProxyLens runtime ownership is unsupported on this platform")
+
+	// ErrSupervisorAlreadyRunning means another Supervisor owns the same
+	// authority database identity.
+	ErrSupervisorAlreadyRunning = errors.New("ProxyLens supervisor already running")
 )
 
-// RuntimeOwnership is an idempotent handle to the per-database Runtime
+// RuntimeOwnership is an idempotent handle to a per-database process
 // ownership lease. The underlying platform handle is held until Close.
 type RuntimeOwnership struct {
 	closeOnce sync.Once
@@ -56,6 +60,16 @@ func (o *RuntimeOwnership) Close() error {
 // case-insensitive filesystem semantics and then hashed so it never appears
 // in the named object identity.
 func RuntimeInstanceKey(dbPath string) (string, error) {
+	return instanceKey(dbPath, `Local\ProxyLens.Runtime.v1.`)
+}
+
+// SupervisorInstanceKey returns the deterministic per-database Supervisor
+// object name. The raw path is hashed and never appears in the name.
+func SupervisorInstanceKey(dbPath string) (string, error) {
+	return instanceKey(dbPath, `Local\ProxyLens.Supervisor.v1.`)
+}
+
+func instanceKey(dbPath, prefix string) (string, error) {
 	if strings.TrimSpace(dbPath) == "" {
 		return "", fmt.Errorf("runtime ownership requires a database path")
 	}
@@ -66,14 +80,24 @@ func RuntimeInstanceKey(dbPath string) (string, error) {
 	}
 	normalized := strings.ToLower(filepath.ToSlash(filepath.Clean(absPath)))
 	digest := sha256.Sum256([]byte(normalized))
-	return `Local\ProxyLens.Runtime.v1.` + hex.EncodeToString(digest[:]), nil
+	return prefix + hex.EncodeToString(digest[:]), nil
 }
 
 // AcquireRuntimeOwnership acquires one OS-level writer lease for dbPath.
 // The platform implementation owns the exact handle for the caller's full
 // Runtime lifetime; it is not a PID-file approximation.
 func AcquireRuntimeOwnership(dbPath string) (*RuntimeOwnership, error) {
-	key, err := RuntimeInstanceKey(dbPath)
+	return acquireInstanceOwnership(dbPath, `Local\ProxyLens.Runtime.v1.`, ErrRuntimeAlreadyRunning)
+}
+
+// AcquireSupervisorOwnership acquires the independent per-database
+// Supervisor lease. It intentionally does not share the Runtime mutex name.
+func AcquireSupervisorOwnership(dbPath string) (*RuntimeOwnership, error) {
+	return acquireInstanceOwnership(dbPath, `Local\ProxyLens.Supervisor.v1.`, ErrSupervisorAlreadyRunning)
+}
+
+func acquireInstanceOwnership(dbPath, prefix string, alreadyRunningErr error) (*RuntimeOwnership, error) {
+	key, err := instanceKey(dbPath, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -84,10 +108,10 @@ func AcquireRuntimeOwnership(dbPath string) (*RuntimeOwnership, error) {
 	localOwnership.Lock()
 	defer localOwnership.Unlock()
 	if _, exists := localOwnership.keys[key]; exists {
-		return nil, fmt.Errorf("%w: %s", ErrRuntimeAlreadyRunning, key)
+		return nil, fmt.Errorf("%w: %s", alreadyRunningErr, key)
 	}
 
-	ownership, err := acquireRuntimeOwnership(key)
+	ownership, err := acquireNamedOwnership(key, alreadyRunningErr)
 	if err != nil {
 		return nil, err
 	}
@@ -101,4 +125,35 @@ func AcquireRuntimeOwnership(dbPath string) (*RuntimeOwnership, error) {
 		return closeErr
 	}
 	return ownership, nil
+}
+
+type RuntimePresence string
+
+const (
+	RuntimePresent RuntimePresence = "present"
+	RuntimeAbsent  RuntimePresence = "absent"
+)
+
+// ProbeRuntimePresence checks the Runtime mutex without retaining ownership.
+// A successful temporary acquisition means no Runtime currently owns the DB;
+// the platform implementation releases that temporary lease before returning.
+func ProbeRuntimePresence(dbPath string) (RuntimePresence, error) {
+	key, err := RuntimeInstanceKey(dbPath)
+	if err != nil {
+		return "", err
+	}
+	localOwnership.Lock()
+	_, localPresent := localOwnership.keys[key]
+	localOwnership.Unlock()
+	if localPresent {
+		return RuntimePresent, nil
+	}
+	present, err := probeNamedOwnership(key)
+	if err != nil {
+		return "", err
+	}
+	if present {
+		return RuntimePresent, nil
+	}
+	return RuntimeAbsent, nil
 }

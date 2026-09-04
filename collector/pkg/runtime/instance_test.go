@@ -43,3 +43,24 @@ func TestRuntimeInstanceKeyRejectsBlankPath(t *testing.T) {
 		t.Fatal("expected blank database path to fail")
 	}
 }
+
+func TestSupervisorInstanceKeyIsStableAndSeparateFromRuntimeKey(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "authority.db")
+	runtimeKey, err := RuntimeInstanceKey(dbPath)
+	if err != nil {
+		t.Fatalf("RuntimeInstanceKey failed: %v", err)
+	}
+	supervisorKey, err := SupervisorInstanceKey(dbPath)
+	if err != nil {
+		t.Fatalf("SupervisorInstanceKey failed: %v", err)
+	}
+	if runtimeKey == supervisorKey {
+		t.Fatal("Runtime and Supervisor must use independent mutex names")
+	}
+	if !strings.HasPrefix(supervisorKey, `Local\ProxyLens.Supervisor.v1.`) {
+		t.Fatalf("unexpected Supervisor key prefix: %q", supervisorKey)
+	}
+	if strings.Contains(supervisorKey, dbPath) {
+		t.Fatalf("Supervisor key leaked raw database path: %q", supervisorKey)
+	}
+}
