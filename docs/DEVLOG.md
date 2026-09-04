@@ -14,7 +14,7 @@ ownership，不引入 Service、tray、Settings UI、MSI 或 updater。
 
 - 通过 non-elevated feasibility gate；安装版使用 current-user、interactive、limited-
   privilege Task Scheduler，固定生产 task 为 `\ProxyLens\Background Supervisor`，并配置
-  bounded restart-on-failure。E2E 只使用随机 `\ProxyLens-Test\<UUID>` task 与 harmless
+  LogonTrigger + 无限 `PT1M` repetition。E2E 只使用随机 `\ProxyLens-Test\<UUID>` task 与 harmless
   fixture，不枚举或触碰生产 task；
 - 新增 exact-task `install` lifecycle CLI、per-authority-DB Supervisor presence probe、
   `Local\ProxyLens.Supervisor.Stop.v1.<sha256(normalized-db-path)>` graceful stop event，
@@ -32,8 +32,9 @@ ownership，不引入 Service、tray、Settings UI、MSI 或 updater。
 - Task Scheduler feasibility gate：PASS；未请求 elevation，测试后 exact random task 已清理；
 - `go test` affected packages、`go vet`、Rust `cargo fmt --check` / `cargo test`、UI test/build
   与 Windows NSIS build：PASS；
-- `node tools/runtime/run-phase3e2b2a-task-owner.mjs`：PASS；harmless fixture 的 exact crash/
-  relaunch 与 task cleanup：PASS；
+- `node tools/runtime/run-phase3e2b2a-task-owner.mjs`：PASS；harness 确认
+  `IsElevated=false`，E2E TimeTrigger 激活第一次运行，精确终止 PID A，下一次
+  production-equivalent `PT1M` Task Scheduler repetition 拉起 PID B，且完成 exact cleanup；
 - `node tools/runtime/run-phase3e2b2a-installed-lifecycle.mjs`：PASS；isolated Package A →
   Package B → uninstall、UI-close persistence、disabled autostart 与 data/credential
   preservation：PASS；

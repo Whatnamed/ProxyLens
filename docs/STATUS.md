@@ -31,7 +31,7 @@
 - Tauri 使用 bundled Supervisor ensure-start，Supervisor 使用同一 authority DB 的 Runtime mutex 观察/启动/重启 Runtime；先完成 Supervisor ownership handshake/DB 就绪，再解析 existing-only Query path 并启动只读 Query API；
 - UI close 只清理 Query API；Supervisor 与其 Runtime/Collector 保持运行，重开 UI 通过 `AlreadyRunning` 复用既有 ownership；bootstrap status 对外仅报告 `Started`、`Starting`、`AlreadyRunning`、`Failed` 或 `NotAttempted` 事实；
 - `proxylens-supervisor config` 提供 non-secret `runtime.json` 的 Controller URL 管理与 stdin-only Secret 管理；生产 Secret 仅写 Windows Credential Manager，E2E 只使用随机 `ProxyLens/Test/<UUID>` target，`MIHOMO_SECRET` 优先作为显式环境 override；
-- Runtime whole-process / child crash 时由当前 Supervisor 按 bounded backoff 重启整个 Runtime；Supervisor 自身退出后的无 UI 自动恢复在本阶段曾属于后续 installed ownership，现由 Phase 3E-2B2A 的 Task Scheduler 提供；Supervisor 不读取 Mihomo、不写 SQLite 业务数据，Runtime 仍是唯一 writer authority；
+- Runtime whole-process / child crash 时由当前 Supervisor 按 bounded backoff 重启整个 Runtime；安装版 Supervisor 自身 crash/退出由 Phase 3E-2B2A current-user Task Scheduler 的 LogonTrigger + 无限 `PT1M` repetition 在下一周期重新拉起，最坏约 1 分钟，期间按 Monitoring Gap 记录；Supervisor 不读取 Mihomo、不写 SQLite 业务数据，Runtime 仍是唯一 writer authority；
 - mock-only Windows lifecycle smoke 已验证 first launch、UI-close persistence、duplicate candidate、reopen reuse、different-DB concurrency 与 GET-only mock Controller。
 
 ### Phase 3E-2B1 Supervisor & Secure Runtime Configuration (Complete)
@@ -47,12 +47,12 @@
 
 ### Phase 3E-2B2A Installed Runtime Lifecycle (Complete)
 
-- Windows V1 使用 current-user、interactive、limited-privilege Task Scheduler owner，固定生产任务为 `\ProxyLens\Background Supervisor`；测试任务只允许随机 `\ProxyLens-Test\<UUID>`，不枚举或触碰其他任务；
+- Windows V1 使用 current-user、interactive、limited-privilege Task Scheduler owner，固定生产任务为 `\ProxyLens\Background Supervisor`；生产 LogonTrigger 使用无限 `PT1M` repetition 和 `MultipleInstances=IgnoreNew`，Supervisor crash/退出由下一周期恢复；测试任务只允许随机 `\ProxyLens-Test\<UUID>`，不枚举或触碰其他任务；
 - 已实现 exact-task `install status/register/unregister/ensure-owner/run` 与 per-authority-DB `control status/stop`；Supervisor stop 使用 `Local\ProxyLens.Supervisor.Stop.v1.<sha256(normalized-db-path)>`，沿既有 graceful path 收尾；
 - `runtime.json` v2 的 `autostartEnabled` 默认 true，v1 迁移 lossless；disabled preference 在 upgrade/reconcile 中保持 false，关闭偏好不停止当前 collection；
 - Windows Tauri installed mode 优先让 Go lifecycle CLI 复用/ensure Task Scheduler owner；无已注册 owner 的 developer checkout 保留 direct Supervisor fallback；Query API 仍是 UI-owned read-only sidecar；
 - canonical NSIS 配置为 `installMode=currentUser`。PREINSTALL/PREUNINSTALL 先 exact unregister + graceful stop，POSTINSTALL reconcile owner；upgrade 保留 DB、config、Controller URL、autostart preference 与 WinCred，uninstall 删除程序/task/process 但保留用户数据与 credential；
-- 已通过非 elevated feasibility gate（随机 `\ProxyLens-Test\<UUID>` + harmless temporary executable）及 isolated Package A → Package B → uninstall acceptance；未使用 Service、tray、MSI 或 updater。
+- 已通过非 elevated feasibility gate（随机 `\ProxyLens-Test\<UUID>` + harmless temporary executable）及 isolated Package A → Package B → uninstall acceptance；task-owner acceptance 使用 E2E TimeTrigger 激活同一无限 `PT1M` repetition contract，未使用 Service、tray、MSI 或 updater。
 
 ### 已实现的正式 UI
 
@@ -175,7 +175,7 @@
 
 - 交互模型收口已完成：Overview / Coverage 使用动态推进的 Live Analysis Range，History 使用确定性冻结快照，已解决快照提前生成与展示范围语义漂移问题。
 - UI Design System 仍为 Draft，不应在最终视觉验收前标记 Frozen。
-- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻、Supervisor crash recovery 与 upgrade/uninstall ownership 已由 Phase 3E-2B2A 的 current-user Task Scheduler + NSIS lifecycle 提供，后续只剩 2B2B 的 Settings/status polish。
+- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻与 Supervisor crash recovery 已由 Phase 3E-2B2A 的 current-user Task Scheduler LogonTrigger + 无限 `PT1M` repetition 提供，Runtime crash recovery 仍由 Supervisor bounded backoff 负责；后续只剩 2B2B 的 Settings/status polish。
 
 ---
 

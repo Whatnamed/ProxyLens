@@ -10,17 +10,16 @@ import (
 )
 
 const (
-	ProductionTaskName       = `\ProxyLens\Background Supervisor`
-	E2ETaskNameEnv           = "PROXYLENS_E2E_TASK_NAME"
-	E2ETaskExecutableEnv     = "PROXYLENS_E2E_TASK_EXE"
-	E2ETaskScheduleEnv       = "PROXYLENS_E2E_TASK_SCHEDULE"
-	E2EDirectOwnerEnv        = "PROXYLENS_E2E_DIRECT_OWNER"
-	E2EModeEnv               = "PROXYLENS_E2E_MODE"
-	DefaultRestartCount      = 10
-	DefaultRestartInterval   = "PT1M"
-	TaskOwnerModeInstalled   = "installed-task"
-	TaskOwnerModeDirect      = "direct-supervisor"
-	TaskOwnerModeUnavailable = "unavailable"
+	ProductionTaskName            = `\ProxyLens\Background Supervisor`
+	E2ETaskNameEnv                = "PROXYLENS_E2E_TASK_NAME"
+	E2ETaskExecutableEnv          = "PROXYLENS_E2E_TASK_EXE"
+	E2ETaskScheduleEnv            = "PROXYLENS_E2E_TASK_SCHEDULE"
+	E2EDirectOwnerEnv             = "PROXYLENS_E2E_DIRECT_OWNER"
+	E2EModeEnv                    = "PROXYLENS_E2E_MODE"
+	DefaultTaskRepetitionInterval = "PT1M"
+	TaskOwnerModeInstalled        = "installed-task"
+	TaskOwnerModeDirect           = "direct-supervisor"
+	TaskOwnerModeUnavailable      = "unavailable"
 )
 
 var (
@@ -89,6 +88,10 @@ func IsE2EDirectOwner() bool {
 
 func isE2E() bool {
 	return strings.TrimSpace(os.Getenv(E2EModeEnv)) == "1"
+}
+
+func isE2ETaskScheduleEnabled() bool {
+	return isE2E() && strings.TrimSpace(os.Getenv(E2ETaskScheduleEnv)) == "1"
 }
 
 func validateTaskName(name string) error {

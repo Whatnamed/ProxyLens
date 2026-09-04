@@ -55,3 +55,21 @@ func TestResolveTaskExecutableOverrideIsE2EOnly(t *testing.T) {
 		t.Fatalf("E2E task executable=%q err=%v, want %q", resolved, err, executable)
 	}
 }
+
+func TestTaskScheduleOverrideIsE2EOnly(t *testing.T) {
+	t.Setenv(E2EModeEnv, "")
+	t.Setenv(E2ETaskScheduleEnv, "1")
+	if isE2ETaskScheduleEnabled() {
+		t.Fatal("E2E task activation trigger was enabled outside E2E mode")
+	}
+
+	t.Setenv(E2EModeEnv, "1")
+	t.Setenv(E2ETaskScheduleEnv, "")
+	if isE2ETaskScheduleEnabled() {
+		t.Fatal("E2E task activation trigger was enabled without its explicit opt-in")
+	}
+	t.Setenv(E2ETaskScheduleEnv, "1")
+	if !isE2ETaskScheduleEnabled() {
+		t.Fatal("explicit E2E task activation trigger was not enabled")
+	}
+}

@@ -194,7 +194,7 @@ Later    长期增强                                 [PLANNED]
 
 #### Phase 3E-2B2A — Installed Runtime Lifecycle [COMPLETED]
 
-- [x] current-user Windows Task Scheduler owner、login start 与 bounded Supervisor restart-on-failure；
+- [x] current-user Windows Task Scheduler owner、LogonTrigger login start 与无限 `PT1M` repetition-based Supervisor recovery；
 - [x] exact installed control/status、per-DB stop event 与 config v2 autostart preference；
 - [x] NSIS current-user fresh install、upgrade quiesce/reconcile、disabled preference preservation 与 uninstall cleanup；
 - [x] actual installed binary layout 与 isolated Package A → Package B → uninstall acceptance；

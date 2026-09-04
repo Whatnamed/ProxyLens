@@ -34,10 +34,17 @@ fixed at:
 
 It runs the installed `proxylens-supervisor.exe` under the current user's
 interactive token, with limited privilege, no stored password, and no SYSTEM
-or highest-privilege elevation. The task uses a current-user logon trigger,
-`StartWhenAvailable`, `MultipleInstances=IgnoreNew`, no battery shutdown
-policy, unlimited execution time, and bounded restart-on-failure (10 attempts
-with a one-minute interval in the current implementation).
+or highest-privilege elevation. The task uses a current-user LogonTrigger with
+an indefinite `PT1M` repetition (`StopAtDurationEnd=false`, no `Duration`),
+`StartWhenAvailable`, `MultipleInstances=IgnoreNew`, no battery shutdown policy,
+and unlimited execution time. The repetition is the Supervisor crash/exit
+recovery contract: a running Supervisor rejects the next instance through
+`IgnoreNew`; after a crash/exit, the next cycle starts it again, with a worst
+case recovery window of about one minute.
+
+Task Scheduler `RestartOnFailure` is intentionally not configured. It is not
+the V1 contract for recovering an already-started Supervisor process after it
+exits; Runtime process recovery remains the Supervisor's bounded backoff.
 
 Task Scheduler access is native and narrow: lifecycle operations address only
 the exact folder/task path and never enumerate or delete arbitrary tasks.
@@ -103,8 +110,9 @@ ADR.
 
 ## 3. Consequences
 
-- Installed users receive current-user login residence and bounded Supervisor
-  crash recovery without a service or elevated install.
+- Installed users receive current-user login residence and one-minute periodic
+  Supervisor crash recovery without a service or elevated install. Runtime
+  crash recovery remains inside the Supervisor's bounded backoff loop.
 - The Runtime/Collector/Accounting ownership and read-only Query boundary from
   ADR 0006/0008 remain unchanged.
 - Task registration is a durable OS owner configuration, not a Secret or Query
@@ -121,17 +129,20 @@ ADR.
 - Go lifecycle tests passed for identity restrictions, exact Task Scheduler
   register/status/action/unregister, per-DB presence/stop event, config v2
   migration, and Supervisor lifecycle behavior.
-- The task-owner harness passed with a random test task and harmless fixture;
-  production task identity was not used or enumerated.
+- The task-owner harness verified `IsElevated=false`, registered one random
+  `\ProxyLens-Test\<UUID>` task, and used one E2E-only TimeTrigger only to
+  activate the same indefinite `PT1M` repetition contract as production. It
+  observed fixture PID A, terminated only PID A, and observed PID B only after
+  the next Task Scheduler repetition; production task identity was not used or
+  enumerated.
 - The isolated NSIS harness passed fresh Package A install, Package B upgrade,
   UI-close owner persistence, disabled preference preservation, and uninstall
   with DB/config/credential retention. Package identity, task identity,
   credential target, DB/config roots, and Controller were all temporary or
   random.
-- When the isolated harness explicitly enables its E2E scheduling aid, it may
-  add a short-lived test-only repetition trigger so the harmless fixture's
-  relaunch is observable within the test bound. Production registration keeps
-  only the logon trigger and bounded restart-on-failure settings.
+- The E2E TimeTrigger is only an activation substitute for the current session;
+  it shares the production LogonTrigger repetition helper and does not add a
+  separate recovery policy. Production registration contains no E2E TimeTrigger.
 
 ## 5. Safety boundary
 

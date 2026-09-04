@@ -5,7 +5,6 @@ package installedlifecycle
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,6 +17,7 @@ import (
 
 const (
 	taskTriggerLogon          = int32(9)
+	taskTriggerTime           = int32(1)
 	taskActionExec            = int32(0)
 	taskCreateOrUpdate        = int32(6)
 	taskLogonInteractiveToken = int32(3)
@@ -195,8 +195,6 @@ func configureTaskDefinition(definition *ole.IDispatch, executable, userID strin
 		"DisallowStartIfOnBatteries": false,
 		"ExecutionTimeLimit":         "PT0S",
 		"MultipleInstances":          taskInstancesIgnoreNew,
-		"RestartCount":               int32(DefaultRestartCount),
-		"RestartInterval":            DefaultRestartInterval,
 	} {
 		if err := putProperty(settings, property, value); err != nil {
 			settings.Release()
@@ -239,9 +237,13 @@ func configureTaskDefinition(definition *ole.IDispatch, executable, userID strin
 			return fmt.Errorf("failed to configure Task Scheduler logon trigger %s: %w", property, err)
 		}
 	}
+	if err := configureTaskTriggerRepetition(trigger); err != nil {
+		trigger.Release()
+		return err
+	}
 	trigger.Release()
 	if isE2ETaskScheduleEnabled() {
-		if err := addE2ERepetitionTrigger(triggersDefinition(definition), userID); err != nil {
+		if err := addE2EActivationTrigger(definition); err != nil {
 			return err
 		}
 	}
@@ -269,22 +271,33 @@ func configureTaskDefinition(definition *ole.IDispatch, executable, userID strin
 	return nil
 }
 
-func triggersDefinition(definition *ole.IDispatch) *ole.IDispatch {
-	triggers, err := getPropertyDispatch(definition, "Triggers")
+func configureTaskTriggerRepetition(trigger *ole.IDispatch) error {
+	repetition, err := getPropertyDispatch(trigger, "Repetition")
 	if err != nil {
-		return nil
+		return fmt.Errorf("failed to access Task Scheduler trigger repetition: %w", err)
 	}
-	return triggers
+	defer repetition.Release()
+	for property, value := range map[string]interface{}{
+		"Interval":          DefaultTaskRepetitionInterval,
+		"StopAtDurationEnd": false,
+	} {
+		if err := putProperty(repetition, property, value); err != nil {
+			return fmt.Errorf("failed to configure Task Scheduler trigger repetition %s: %w", property, err)
+		}
+	}
+	// Duration is intentionally left unset: the PT1M repetition is indefinite.
+	return nil
 }
 
-func addE2ERepetitionTrigger(triggers *ole.IDispatch, userID string) error {
-	if triggers == nil {
-		return fmt.Errorf("failed to access Task Scheduler E2E trigger collection")
+func addE2EActivationTrigger(definition *ole.IDispatch) error {
+	triggers, err := getPropertyDispatch(definition, "Triggers")
+	if err != nil {
+		return fmt.Errorf("failed to access Task Scheduler E2E trigger collection: %w", err)
 	}
 	defer triggers.Release()
-	timeTrigger, err := callDispatch(triggers, "Create", int32(1))
+	timeTrigger, err := callDispatch(triggers, "Create", taskTriggerTime)
 	if err != nil {
-		return fmt.Errorf("failed to create isolated E2E repetition trigger: %w", err)
+		return fmt.Errorf("failed to create isolated E2E activation trigger: %w", err)
 	}
 	defer timeTrigger.Release()
 	for property, value := range map[string]interface{}{
@@ -292,29 +305,13 @@ func addE2ERepetitionTrigger(triggers *ole.IDispatch, userID string) error {
 		"StartBoundary": time.Now().Add(2 * time.Second).Format("2006-01-02T15:04:05"),
 	} {
 		if err := putProperty(timeTrigger, property, value); err != nil {
-			return fmt.Errorf("failed to configure isolated E2E repetition trigger %s: %w", property, err)
+			return fmt.Errorf("failed to configure isolated E2E activation trigger %s: %w", property, err)
 		}
 	}
-	repetition, err := getPropertyDispatch(timeTrigger, "Repetition")
-	if err != nil {
-		return fmt.Errorf("failed to access isolated E2E trigger repetition: %w", err)
+	if err := configureTaskTriggerRepetition(timeTrigger); err != nil {
+		return err
 	}
-	defer repetition.Release()
-	for property, value := range map[string]interface{}{
-		"Interval":          "PT1M",
-		"Duration":          "PT2M",
-		"StopAtDurationEnd": false,
-	} {
-		if err := putProperty(repetition, property, value); err != nil {
-			return fmt.Errorf("failed to configure isolated E2E trigger repetition %s: %w", property, err)
-		}
-	}
-	_ = userID
 	return nil
-}
-
-func isE2ETaskScheduleEnabled() bool {
-	return isE2E() && strings.TrimSpace(os.Getenv(E2ETaskScheduleEnv)) == "1"
 }
 
 func firstAction(task *ole.IDispatch) (*ole.IDispatch, error) {

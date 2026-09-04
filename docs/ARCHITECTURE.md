@@ -12,7 +12,7 @@ ProxyLens 是一个**旁路只读观察系统（Bypass Observer）**。
 
 ```text
 Windows login (installed mode)
-   │ current-user Task Scheduler, bounded restart-on-failure
+   │ current-user Task Scheduler LogonTrigger, indefinite PT1M repetition
    ▼
 proxylens-supervisor ───────────────┐
    │ per-authority-DB ownership      │
@@ -38,11 +38,14 @@ Tauri v2（Desktop Shell）
 
 `proxylens-runtime` 仍是前台 executable；Windows 安装版的真正 background residence
 由 current-user、interactive、limited-privilege Task Scheduler 任务托管，任务动作是
-独立的 `proxylens-supervisor`。Supervisor 按 authority DB path single-instance，负责
-观察、启动和重启 Runtime；Runtime mutex 仍是唯一 writer race authority。Tauri 在安装版
-优先复用/ensure 该 owner，在没有已注册 owner 的开发 checkout 使用 direct Supervisor
-fallback。正常关闭 UI 只停止 Query API，Supervisor 与 Runtime/Collector 继续运行，
-下一次 UI 打开时复用同一 authority DB。这不等同于 Runtime 自行 daemonize。
+独立的 `proxylens-supervisor`。LogonTrigger 登录时启动 Supervisor，并以无限 `PT1M`
+repetition 周期性 ensure；`MultipleInstances=IgnoreNew` 在 Supervisor 正常运行时阻止
+重复实例，Supervisor crash/退出时由下一次 repetition 重新拉起，最坏恢复窗口约 1 分钟。
+Supervisor 按 authority DB path single-instance，负责观察、启动和重启 Runtime；Runtime
+mutex 仍是唯一 writer race authority。Tauri 在安装版优先复用/ensure 该 owner，在没有
+已注册 owner 的开发 checkout 使用 direct Supervisor fallback。正常关闭 UI 只停止 Query
+API，Supervisor 与 Runtime/Collector 继续运行，下一次 UI 打开时复用同一 authority DB。
+这不等同于 Runtime 自行 daemonize。
 
 当前 3E-2B2A 已覆盖登录启动、安装版 ownership、upgrade/uninstall lifecycle 与 UI-close
 后的持续运行；Windows Service、托盘、Settings/autostart UI 和其他产品 polish 仍属于
@@ -70,7 +73,7 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 - `collector run` 保留为薄 CLI wrapper，继续提供原有 flags、signal/stdin STOP、validation sink 与 summary；
 - Phase 3E-2A 增加按 authority DB path 归一化后的 Windows named-mutex ownership、`READY` / `ALREADY_RUNNING` 启动握手，以及 Tauri 对 bundled Runtime 的 ensure-start；同一 DB 只允许一个 Runtime writer，不同 DB 可以并行；
 - Phase 3E-2B1 新增独立 `proxylens-supervisor`：Supervisor mutex 与 Runtime writer mutex 分离，但均按同一 authority DB identity；它能观察已有 Runtime、避免重复 writer，并在自己拥有的 Runtime 进程退出后按有界 backoff 重启；
-- Phase 3E-2B2A 增加 current-user Task Scheduler 外层 owner、exact lifecycle CLI、per-DB local stop event 与 NSIS `currentUser` hooks；安装版登录启动和 Supervisor restart-on-failure 不改变 Runtime writer authority；
+- Phase 3E-2B2A 增加 current-user Task Scheduler 外层 owner、LogonTrigger 的无限 `PT1M` repetition、exact lifecycle CLI、per-DB local stop event 与 NSIS `currentUser` hooks；安装版登录启动和 Supervisor 周期性恢复不改变 Runtime writer authority；
 - Tauri 在安装版优先调用 Go lifecycle CLI ensure 已注册且 enabled 的 owner；没有已安装 owner 的 dev checkout 保留 direct Supervisor ensure。两条路径都让 UI close 只停止 Query API，Supervisor 与 Runtime/Collector 在 UI 关闭后继续运行；
 - `runtime.json` v2 只保存非敏感 Controller URL 与 `autostartEnabled`，Secret 通过 Windows Credential Manager 的 Generic Credential 保存；`MIHOMO_SECRET` 仍是显式开发环境 override，Secret 不进入 JSON、argv、handshake 或日志；
 - Supervisor 不读取 Mihomo、不打开或写入 SQLite 业务数据；Runtime 继续拥有 Collector、Accounting 与唯一 writer DB 生命周期；
@@ -86,7 +89,7 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   - 记录 Controller / Collector 监控缺口（Monitoring Gaps 与 Counter Epoch Breaks）；
   - 通过有界队列（Bounded Queue）背压机制输出确定性事件流（详见 `docs/collector-rfc.md` 与 `docs/phase2-storage-handoff.md`）。
 - **运行特征与生命周期边界**:
-  - Collector 作为 Supervisor 管理的 Runtime 子进程可在 UI 未运行时继续工作；3E-2B1 提供 per-DB ownership 和 Runtime crash-restart，3E-2B2A 由 current-user Task Scheduler 提供安装版登录启动与 Supervisor restart-on-failure；
+  - Collector 作为 Supervisor 管理的 Runtime 子进程可在 UI 未运行时继续工作；3E-2B1 提供 per-DB ownership 和 Runtime crash-restart，3E-2B2A 由 current-user Task Scheduler 提供安装版登录启动与每分钟 Supervisor periodic ensure；
   - UI 随开随用；关闭 UI 仅终止 Query API，不终止 Supervisor 或其 Runtime/Collector；
   - Controller 不可用时通过指数退避 + Jitter 自动恢复。
 
@@ -412,7 +415,7 @@ ProxyLens 只保存审计所需的连接元数据，不保存内容载荷。
 当前真正确定的只有：
 
 1. **旁路只读**：ProxyLens 不进入网络主路径。
-2. **Collector / UI 解耦**：Supervisor/Runtime/Collector 可以在 UI 未运行时独立工作；Phase 3E-2A/B1 已实现 per-DB ownership、Supervisor ensure/observe/restart、Tauri ensure Supervisor 与 UI-close persistence，3E-2B2A 再由 current-user Task Scheduler 与 NSIS 提供安装版托管。
+2. **Collector / UI 解耦**：Supervisor/Runtime/Collector 可以在 UI 未运行时独立工作；Phase 3E-2A/B1 已实现 per-DB ownership、Supervisor ensure/observe/restart、Tauri ensure Supervisor 与 UI-close persistence，3E-2B2A 再由 current-user Task Scheduler 的 LogonTrigger + 无限 `PT1M` repetition 与 NSIS 提供安装版托管。Runtime crash recovery 由 Supervisor bounded backoff 负责；Supervisor crash recovery 由下一次 Task Scheduler repetition 负责，期间按 Monitoring Gap 记录观测缺口。
 3. **Mihomo First**：第一阶段只使用 Mihomo External Controller，除非实测证明不足，否则不引入第二套底层网络观测机制。
 4. **本地持久化**：历史保存在本机 SQLite + WAL authority DB，Runtime 写入，Query API 只读。
 5. **显式 Monitoring Gap**：采集中断必须独立表达，不能混入 Unknown。
