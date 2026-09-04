@@ -125,6 +125,6 @@ func TestNewCollectorRunnerKeepsInheritedSecretInMemory(t *testing.T) {
 		t.Fatalf("NewCollectorRunner failed: %v", err)
 	}
 	if got := runner.Config().Secret; got != syntheticSecret {
-		t.Fatalf("expected inherited secret to reach runner config, got %q", got)
+		t.Fatal("expected inherited secret to reach runner config")
 	}
 }

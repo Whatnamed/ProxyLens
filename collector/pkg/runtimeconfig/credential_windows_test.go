@@ -38,14 +38,14 @@ func TestWindowsCredentialStoreUsesOnlyRandomTestTarget(t *testing.T) {
 	}
 	value, found, err := store.Read(ctx)
 	if err != nil || !found || value != "synthetic-wincred-secret" {
-		t.Fatalf("CredReadW round trip value=%q found=%t err=%v", value, found, err)
+		t.Fatalf("CredReadW round trip state was unexpected: found=%t err=%v", found, err)
 	}
 	if err := store.Write(ctx, "synthetic-wincred-updated"); err != nil {
 		t.Fatalf("CredWriteW overwrite failed: %v", err)
 	}
 	value, found, err = store.Read(ctx)
 	if err != nil || !found || value != "synthetic-wincred-updated" {
-		t.Fatalf("CredReadW overwrite value=%q found=%t err=%v", value, found, err)
+		t.Fatalf("CredReadW overwrite state was unexpected: found=%t err=%v", found, err)
 	}
 	if err := store.Delete(ctx); err != nil {
 		t.Fatalf("CredDeleteW exact test-target cleanup failed: %v", err)
