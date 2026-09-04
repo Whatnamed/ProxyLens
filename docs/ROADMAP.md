@@ -25,7 +25,7 @@ Phase 2  持久化、核算与运行时验证                  [COMPLETED]
    ↓
 Phase 3  审计 UI                                  [IN PROGRESS — core UI implemented]
    ↓
-Phase 3E Desktop Runtime Integration              [IN PROGRESS — Runtime Core implemented]
+Phase 3E Desktop Runtime Integration              [IN PROGRESS — 3E-1/3E-2A implemented; 3E-2B pending]
    ↓
 Phase 4  Audit Intelligence                       [PLANNED]
    ↓
@@ -162,7 +162,7 @@ Later    长期增强                                 [PLANNED]
   - [ ] 桌面应用图标、安装版生命周期与启动性能最终打磨；
   - [ ] 最终视觉 polish 与 Design System freeze。
 
-### Phase 3E — Desktop Runtime Integration [IN PROGRESS — Runtime Core implemented / Windows lifecycle pending]
+### Phase 3E — Desktop Runtime Integration [IN PROGRESS — Phase 3E-1 and 3E-2A complete / 3E-2B pending]
 
 已完成 Phase 3E-1：
 
@@ -174,14 +174,19 @@ Later    长期增强                                 [PLANNED]
 - [x] mock controller + temporary DB runtime end-to-end test；
 - [x] desktop bundle includes Query API 与 Runtime binaries。
 
-Phase 3E-2 保留为后续独立 Windows lifecycle 任务：
+#### Phase 3E-2A — Windows Runtime Ownership & Tauri Ensure-Start [COMPLETED]
 
-- [ ] independent background supervisor / detached runtime ownership；
-- [ ] single-instance 与 ownership；
-- [ ] Tauri ensure-start，且 UI close 后 Runtime 保持运行的真实验收；
-- [ ] crash restart policy；
+- [x] per-authority-DB Windows Runtime ownership 与 path-keyed single instance；
+- [x] `READY` / `ALREADY_RUNNING` startup handshake；
+- [x] Tauri ensure-start、first-run writable DB ordering 与 existing-only Query path；
+- [x] UI close 后 Runtime 保持运行、reopen 复用既有 Runtime；
+- [x] random-port mock Controller + temporary data directory lifecycle smoke。
+
+#### Phase 3E-2B — Installed Runtime & Secure Configuration [PLANNED]
+
+- [ ] independent installed background supervisor / continuous whole-process crash restart；
 - [ ] login/autostart policy；
-- [ ] secure Mihomo Controller Secret provisioning；
+- [ ] secure Mihomo Controller Secret provisioning/persistence；
 - [ ] installer lifecycle、upgrade ownership 与 real installed-data-path validation；
 - [ ] real FLClash/Mihomo validation 与最终 real-data visual acceptance。
 

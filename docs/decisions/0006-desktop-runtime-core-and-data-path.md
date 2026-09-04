@@ -5,6 +5,9 @@
 - **Deciders**: ProxyLens Core Team
 - **Scope**: Phase 3E-1 Desktop Runtime Core
 
+This ADR records the Phase 3E-1 core boundary. The subsequent Windows
+ownership and Tauri ensure-start extension is recorded in ADR 0007.
+
 ---
 
 ## 1. Context
@@ -58,7 +61,7 @@ Accounting 继续复用 ADR 0004 的 snapshot boundary、短事务和 raw author
 
 ### 2.4 Runtime 与 UI lifecycle 解耦
 
-Runtime 与 Query API 使用同一正式 DB path，但各自拥有职责边界：Runtime 写入原始事实与派生核算，Query API 以 `mode=ro` + `query_only=ON` 只读查询。Tauri 在本阶段仍只 spawn/stop `proxylens-query-api`，绝不自动 spawn 或 stop `proxylens-runtime`。
+Runtime 与 Query API 使用同一正式 DB path，但各自拥有职责边界：Runtime 写入原始事实与派生核算，Query API 以 `mode=ro` + `query_only=ON` 只读查询。Phase 3E-1 的 Tauri 只 spawn/stop `proxylens-query-api`，绝不自动 spawn 或 stop `proxylens-runtime`；Phase 3E-2A 的当前扩展见 ADR 0007。
 
 Runtime 收到 caller cancellation 时按 scheduler-first 顺序收尾，再停止 Collector；Collector fatal 会让 Runtime 返回非零错误，而 Accounting 失败不会杀死 Collector。
 

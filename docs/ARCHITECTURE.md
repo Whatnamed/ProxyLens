@@ -19,17 +19,23 @@ Mihomo ────────────────────────�
    │
    │ External Controller（只读观察）
    ▼
-proxylens-runtime
-   ├─ Collector
-   └─ Scheduled Accounting
-   │
-   ▼
-SQLite + WAL（Authority DB）
-   │
-   │ read-only
-   ▼
-proxylens-query-api → ProxyLens UI
+Tauri v2（Desktop Shell）
+   ├─ ensure-start ─────────────→ proxylens-runtime
+   │                               ├─ Collector
+   │                               └─ Scheduled Accounting
+   │                                      │
+   │                                      ▼
+   │                              SQLite + WAL（Authority DB）
+   │                                      │
+   └─ owns / starts / stops ─────→ proxylens-query-api
+                                   │ read-only
+                                   ▼
+                              ProxyLens UI
 ```
+
+Tauri 只在需要时 ensure-start `proxylens-runtime`，正常关闭窗口不停止已启动的
+Runtime；Tauri 负责 Query API 的 UI 会话与关闭清理。Runtime 本身仍是一个前台
+executable，不自行 daemonize 或注册系统服务。
 
 核心隔离原则：
 
@@ -45,14 +51,15 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 
 当前确定 Runtime、Collector、Storage、UI 四类职责解耦运行：
 
-### Desktop Runtime Core (Phase 3E-1)
+### Desktop Runtime Core & Windows Ownership (Phase 3E-1 / 3E-2A)
 
-- `proxylens-runtime` 是新的 Go 前台 Runtime Core executable，组合可复用的 `CollectorRunner` 与周期性 `AccountingScheduler`；
+- `proxylens-runtime` 是 Go Runtime executable，组合可复用的 `CollectorRunner` 与周期性 `AccountingScheduler`；它保持前台进程语义，不自行 daemonize；
 - Runtime 负责解析 DB path、初始化 writer DB、启动 Collector 与自动核算，并在 cancellation 时按 scheduler-first 顺序 graceful shutdown；
 - Accounting 默认每 30s 检查 Freshness，fresh 或无事件时 skip，落后时复用 `storage.RebuildAccounting`；单次核算失败不终止 Collector；
 - `collector run` 保留为薄 CLI wrapper，继续提供原有 flags、signal/stdin STOP、validation sink 与 summary；
-- Phase 3E-1 只提供可独立前台运行的 Runtime Core；它不承担 Windows background residence、Windows Service、开机/登录自启、托盘、single-instance、detached ownership 或安装器生命周期；
-- 已经由外部启动的 Runtime/Collector 不依赖 UI 生命周期；真正的 Windows background residence、UI 关闭后持续运行的 supervisor/launcher、single-instance 与 ownership 仍属于 Phase 3E-2。
+- Phase 3E-2A 增加按 authority DB path 归一化后的 Windows named-mutex ownership、`READY` / `ALREADY_RUNNING` 启动握手，以及 Tauri 对 bundled Runtime 的 ensure-start；同一 DB 只允许一个 Runtime writer，不同 DB 可以并行；
+- Tauri 将 Runtime child 保存在独立生命周期槽位，关闭 UI 只停止 Query API；已由 Tauri ensure-start 的 Runtime/Collector 在 UI 关闭后继续运行，下一次打开 UI 复用同一 authority DB 的 Runtime；
+- 登录/开机自启、安装版与升级 ownership、Windows Service/托盘、secure Controller Secret 最终 provisioning，以及无 UI 时的 whole-process continuous crash supervisor 仍属于 Phase 3E-2B。
 
 ### Collector (已确立生产原型)
 
@@ -64,7 +71,7 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   - 记录 Controller / Collector 监控缺口（Monitoring Gaps 与 Counter Epoch Breaks）；
   - 通过有界队列（Bounded Queue）背压机制输出确定性事件流（详见 `docs/collector-rfc.md` 与 `docs/phase2-storage-handoff.md`）。
 - **运行特征与生命周期边界**:
-  - Collector 作为 Runtime 的独立进程可在 UI 未运行时继续工作；Phase 3E-1 不提供 Windows background residence 或自动托管；
+  - Collector 作为 Runtime 的独立进程可在 UI 未运行时继续工作；Phase 3E-2A 的 Tauri ensure-start 提供当前桌面会话内的 Runtime ownership，但不提供登录自启或安装器托管；
   - UI 随开随用；关闭 UI 仅终止 Query API，不终止已经独立运行的 Runtime/Collector；
   - Controller 不可用时通过指数退避 + Jitter 自动恢复。
 
@@ -101,12 +108,12 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
                            Tauri v2 (Desktop Shell)
   ```
 - **核心契约**:
-  - **Tauri / Rust**: 仅负责桌面原生窗口生命周期与 Go Query API Sidecar 启停，生成单次会话高熵 Bearer Token（>=256-bit），**严禁** 在 Rust 中实现 Analytics SQL、核算或存储业务逻辑；Phase 3E-1 不自动 spawn/stop `proxylens-runtime`；
+  - **Tauri / Rust**: 负责桌面窗口生命周期、bundled `proxylens-runtime` ensure-start、Go Query API Sidecar 启停与单次会话高熵 Bearer Token（>=256-bit），**严禁** 在 Rust 中实现 Analytics SQL、核算或存储业务逻辑；Runtime child 不纳入 UI close 的 Query cleanup；
   - **Go Local Query API (`proxylens-query-api`)**: 以只读模式（`query_only=ON`, `busy_timeout=10000`）打开数据库，严格绑定 `127.0.0.1` 随机端口，校验 Bearer Token 与 CORS，完全复用 `storage.AnalyticsService` 与 `storage.QueryService`；
   - **React / TypeScript**: 纯 Web 前端，通过 TanStack React Query 消费 HTTP JSON API，**严禁** 直接读取 SQLite 数据库；
-  - **零耦合生命周期**: UI 随开随用，UI 关闭时仅终止 Query API Sidecar；已经独立运行的 Runtime/Collector 保持运行，完全不受 UI 生命周期影响。这不等同于 Phase 3E-1 已提供自动启动或 Windows background residence。
+  - **零耦合生命周期**: Tauri 启动顺序为 writable DB resolve → Runtime ensure-start/handshake → existing read-only DB resolve → Query API；UI 关闭时仅终止 Query API，Runtime/Collector 保持运行并可被下一次 UI 复用；这不包含登录自启、安装器 ownership 或 continuous supervisor。
 
-### 2.1 Desktop data path contract (Phase 3E-1)
+### 2.1 Desktop data path contract (Phase 3E-1 / Phase 3E-2A)
 
 正式 Windows V1 authority DB 默认位于 `%LOCALAPPDATA%\ProxyLens\data\proxylens.db`。路径 precedence 为 `PROXYLENS_DB_PATH` → `PROXYLENS_DATA_DIR\proxylens.db` → 默认路径；Runtime writer 可创建目录/DB，Tauri/Query API 只读 resolver 在 DB 缺失时返回 `DB_NOT_READY`，不创建或猜测数据库。
 
@@ -176,7 +183,8 @@ rulePayload
 }
 ```
 
-这只是字段示例，不代表当前版本已经验证了所有字段、命名和 Chains 顺序。
+这是字段形态示例；当前支持范围、命名和 Chains 顺序以代码、正式 Query contract 与
+`docs/research/` 中的受控验证记录为准。
 
 ---
 
@@ -235,7 +243,8 @@ Phase 0C-4 受控实测正式确立 `[Scoped Observed / Provisional]`：
 - UI 长时间看不到正在产生的大流量；
 - Collector 异常退出或崩溃时丢失未持久化的中间进度。
 
-因此系统必须支持长连接阶段性增量持久化（Checkpointing）。具体多久提交一次、达到多少增量流量时写入，属于 Phase 1 / Phase 2 待测参数。
+因此系统必须支持长连接阶段性增量持久化（Checkpointing）。提交边界以当前
+Collector/Storage 实现与对应验证记录为准；未验证的 RAM、CPU 或批量 KPI 不写成产品保证。
 
 ### 4.6 连接消失与生命周期恢复状态机 (Lifecycle & Gap Recovery Semantics)
 
@@ -310,7 +319,7 @@ optional_detail
 
 不能简单地用“是否存在 chains”或“最终名字不是 DIRECT”拍脑袋判断。
 
-Phase 0 需要针对以下场景记录真实数据：
+Phase 0 已针对以下场景记录真实数据，正式分类算法以这些记录与当前实现为准：
 
 - 明确 DIRECT 规则；
 - 明确代理规则；
@@ -319,7 +328,7 @@ Phase 0 需要针对以下场景记录真实数据：
 - REJECT；
 - 多层代理链（例如入口 → 第二跳出口）。
 
-确认 Mihomo 的真实字段表现后，再定义正式分类算法。
+真实字段表现与分类边界已沉淀到 Phase 0 调研和当前 Collector 实现。
 
 ---
 
@@ -361,7 +370,7 @@ ProxyLens 只保存审计所需的连接元数据，不保存内容载荷。
 - 优先评估内存缓冲 + 批量提交；
 - 数据库设计必须支持长期历史查询，而不会因为大量短连接迅速退化。
 
-Phase 1 / Phase 2 应建立真实 benchmark，再根据实测结果确定：
+后续 benchmark 与实测用于持续校准以下工程指标，不构成当前未经验证的硬性承诺：
 
 - 常驻 RAM 目标；
 - 日常 / 高并发 CPU 预算；
@@ -377,21 +386,21 @@ Phase 1 / Phase 2 应建立真实 benchmark，再根据实测结果确定：
 当前真正确定的只有：
 
 1. **旁路只读**：ProxyLens 不进入网络主路径。
-2. **Collector / UI 解耦**：为了历史连续性，Runtime/Collector 可以在 UI 未运行时独立工作；Phase 3E-2 才决定如何提供 Windows background residence、UI 关闭后持续运行、single-instance 与 ownership。
+2. **Collector / UI 解耦**：Runtime/Collector 可以在 UI 未运行时独立工作；Phase 3E-2A 已实现当前桌面会话的 per-DB ownership、Tauri ensure-start 与 UI-close persistence，安装版托管仍延期。
 3. **Mihomo First**：第一阶段只使用 Mihomo External Controller，除非实测证明不足，否则不引入第二套底层网络观测机制。
-4. **本地持久化**：历史必须保存在本机；具体存储实现仍需验证。
+4. **本地持久化**：历史保存在本机 SQLite + WAL authority DB，Runtime 写入，Query API 只读。
 5. **显式 Monitoring Gap**：采集中断必须独立表达，不能混入 Unknown。
 6. **正确性优先**：先解决归因、double counting、重启与缺口，再做完整 UI。
 
 ---
 
-## 10. 当前首选候选与开放问题
+## 10. 已确认技术实现与开放问题
 
 ### Storage
 
-首选候选：SQLite + WAL。
+已确认：SQLite + WAL。
 
-需要验证：
+持续验证：
 
 - Collector 单写 + UI 并发读取；
 - 大量短连接；
@@ -401,30 +410,31 @@ Phase 1 / Phase 2 应建立真实 benchmark，再根据实测结果确定：
 
 ### Collector 语言
 
-候选：Go / Rust。
+已确认：Go（v1.24+）。
 
-Phase 0 不做最终选择，先确定真实 API 交互模式和数据模型。
+Collector 使用 Go；真实 API 语义与数据模型已由 Phase 0/后续验证记录支撑。
 
 ### UI
 
-候选：Tauri 或本地 Web UI 等轻量方案。
+已确认：Tauri v2 + React 19 + TypeScript + Vite。
 
-在 Phase 2 正确性稳定前，不因为 UI 偏好反向约束 Collector。
+UI 通过 Go Local Query API 与 Runtime 解耦，不反向承载 Collector 业务语义。
 
 ### Collector 与 UI 通信
 
-待比较：
+已确认：
 
-- UI 只读访问本地数据库；
-- Collector 暴露本地 IPC / HTTP 查询接口。
+- UI 通过 Go Local Query API 只读访问本地数据库；
+- Collector/Runtime 不向 React 暴露可写查询路径。
 
 选择依据应包括并发安全、部署复杂度、查询能力和长期维护成本。
 
 ---
 
-## 11. Phase 0 必须回答的问题
+## 11. Phase 0 验证结论入口
 
-进入正式 Collector 开发前，至少应得到这些结论：
+以下问题已作为 Phase 0 的验证清单处理；结论与证据等级见
+`docs/research/mihomo-data-source.md` 及相关正式文档：
 
 1. `/connections` 的推送频率和快照语义是什么？
 2. `upload` / `download` 是否稳定表现为连接级累计值？
@@ -438,4 +448,5 @@ Phase 0 不做最终选择，先确定真实 API 交互模式和数据模型。
 10. `/traffic` 能否用于可靠的整体一致性辅助校验，以及它在 Mihomo 重启时如何变化？
 11. MetaCubeXD 等参考实现采用的 diff 方式，与真实 Mihomo 行为是否一致？
 
-这些结论应以“官方文档 / 真实观察 / 推断”三种证据等级分别记录，并最终沉淀到 Phase 0 调研报告中。
+结论以“官方文档 / 真实观察 / 推断”三种证据等级维护；后续实现若发现漂移，
+以当前代码和新的受控验证更新正式文档。

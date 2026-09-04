@@ -5,6 +5,14 @@
 
 ---
 
+## 2026-09-04 — Phase 3E-2A Windows Runtime Ownership & Tauri Ensure-Start
+
+**Scope:** 在 Phase 3E-1 Runtime Core 之上完成按 authority DB path 的 Windows Runtime ownership、startup handshake 与 Tauri ensure-start；Query API 仍由 UI 独立持有，UI close 不停止 Runtime。
+
+**Closure:** 使用随机 loopback mock Controller 与临时数据目录完成 first launch → `Started`、UI close 后 Runtime 保活、同 DB duplicate → `AlreadyRunning`、reopen reuse、different-DB concurrency 及 GET-only Controller lifecycle smoke。登录/自启动、安装版 ownership、secure secret provisioning、continuous crash supervisor 与真实 FLClash/Mihomo 验证继续延期到 Phase 3E-2B/Deferred。
+
+---
+
 ## 2026-09-04 — Phase 3E-1 Desktop Runtime Core
 
 **Scope:** 完成 Desktop Runtime Core 的 Go 侧运行时整合与桌面交付契约：抽取可复用 live Collector runner，新增 standalone `proxylens-runtime` 与 30s scheduled Accounting，确定 Windows canonical local data path，并让 Tauri bundle 同时包含 Query API 与 Runtime binary。Runtime 与 Query API 共享 authority DB path，但 Tauri 本阶段仍不自动管理 Runtime lifecycle。
