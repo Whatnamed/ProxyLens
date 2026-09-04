@@ -5,6 +5,43 @@
 
 ---
 
+## 2026-09-04 — Phase 3E-2B2A Installed Runtime Ownership & NSIS Lifecycle
+
+**Scope:** 在 3E-2B1 Supervisor / secure config 基线上完成 Windows V1 安装版运行时
+ownership，不引入 Service、tray、Settings UI、MSI 或 updater。
+
+**Completed:**
+
+- 通过 non-elevated feasibility gate；安装版使用 current-user、interactive、limited-
+  privilege Task Scheduler，固定生产 task 为 `\ProxyLens\Background Supervisor`，并配置
+  bounded restart-on-failure。E2E 只使用随机 `\ProxyLens-Test\<UUID>` task 与 harmless
+  fixture，不枚举或触碰生产 task；
+- 新增 exact-task `install` lifecycle CLI、per-authority-DB Supervisor presence probe、
+  `Local\ProxyLens.Supervisor.Stop.v1.<sha256(normalized-db-path)>` graceful stop event，
+  以及 v2 `runtime.json` 的 `autostartEnabled` / v1 migration；
+- Tauri 安装版优先调用 Go lifecycle CLI 复用/ensure owner；无已注册 owner 的开发路径
+  保留 direct Supervisor fallback。NSIS `currentUser` hooks 在 install/upgrade/uninstall
+  前后执行 exact unregister、graceful stop 与 owner reconcile；upgrade 保留 DB/config/
+  Controller/credential，uninstall 只清理程序与 ownership；
+- 使用 isolated Tauri product identity 构建 Package A/B，完成实际 installed layout、fresh
+  install → upgrade → disabled preference → uninstall acceptance；mock Controller、DB、
+  config、WinCred target 与 task identity 全部隔离。
+
+### Validation state
+
+- Task Scheduler feasibility gate：PASS；未请求 elevation，测试后 exact random task 已清理；
+- `go test` affected packages、`go vet`、Rust `cargo fmt --check` / `cargo test`、UI test/build
+  与 Windows NSIS build：PASS；
+- `node tools/runtime/run-phase3e2b2a-task-owner.mjs`：PASS；harmless fixture 的 exact crash/
+  relaunch 与 task cleanup：PASS；
+- `node tools/runtime/run-phase3e2b2a-installed-lifecycle.mjs`：PASS；isolated Package A →
+  Package B → uninstall、UI-close persistence、disabled autostart 与 data/credential
+  preservation：PASS；
+- 本阶段没有启动、停止、重启或修改真实 FLClash/Mihomo/TUN/系统代理，没有连接真实
+  `127.0.0.1:9090` 或 `127.0.0.1:7988`；本地 PASS 不表述为 GitHub CI PASS。
+
+---
+
 ## 2026-09-04 — Phase 3E-2B1 Supervisor & Secure Runtime Configuration
 
 **Scope:** 在 3E-2A Runtime ownership / ensure-start 基线上完成 3E-2B1：新增独立

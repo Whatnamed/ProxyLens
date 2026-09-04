@@ -7,12 +7,12 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3E Desktop Runtime Integration — Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start 与 Phase 3E-2B1 Supervisor + secure runtime configuration complete；Phase 3E-2B2 installed lifecycle pending。Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
+- **当前阶段**：Phase 3E Desktop Runtime Integration — Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration 与 Phase 3E-2B2A installed lifecycle complete；Phase 3E-2B2B pending。Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
 - **代码线**：以当前 checkout 的 Git HEAD 及其相对 `origin/main` 的关系为准；活动分支名和短期 SHA 不在此处硬编码。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
 - **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 `main`；工程/语义 Gate 全部通过。
 - **当前状态与待办**：
-  1. Phase 3E-2B2 installed Runtime lifecycle（login/autostart、Windows Service/托盘、installer/upgrade ownership、uninstall/upgrade cleanup）。
+  1. Phase 3E-2B2B minimal Settings/autostart surface、installed startup/status polish 与 product acceptance。
   2. Final Full Tauri multi-fixture / real-data visual acceptance（Deferred：当前不以真实 FLClash/Mihomo lifecycle validation 作为验收路径）。
   3. UI Design System 继续保持 Draft。
 
@@ -31,7 +31,7 @@
 - Tauri 使用 bundled Supervisor ensure-start，Supervisor 使用同一 authority DB 的 Runtime mutex 观察/启动/重启 Runtime；先完成 Supervisor ownership handshake/DB 就绪，再解析 existing-only Query path 并启动只读 Query API；
 - UI close 只清理 Query API；Supervisor 与其 Runtime/Collector 保持运行，重开 UI 通过 `AlreadyRunning` 复用既有 ownership；bootstrap status 对外仅报告 `Started`、`Starting`、`AlreadyRunning`、`Failed` 或 `NotAttempted` 事实；
 - `proxylens-supervisor config` 提供 non-secret `runtime.json` 的 Controller URL 管理与 stdin-only Secret 管理；生产 Secret 仅写 Windows Credential Manager，E2E 只使用随机 `ProxyLens/Test/<UUID>` target，`MIHOMO_SECRET` 优先作为显式环境 override；
-- Runtime whole-process / child crash 时由当前 Supervisor 按 bounded backoff 重启整个 Runtime；Supervisor 自身退出后的无 UI 自动恢复属于 Phase 3E-2B2 installed autostart/ownership；Supervisor 不读取 Mihomo、不写 SQLite 业务数据，Runtime 仍是唯一 writer authority；
+- Runtime whole-process / child crash 时由当前 Supervisor 按 bounded backoff 重启整个 Runtime；Supervisor 自身退出后的无 UI 自动恢复在本阶段曾属于后续 installed ownership，现由 Phase 3E-2B2A 的 Task Scheduler 提供；Supervisor 不读取 Mihomo、不写 SQLite 业务数据，Runtime 仍是唯一 writer authority；
 - mock-only Windows lifecycle smoke 已验证 first launch、UI-close persistence、duplicate candidate、reopen reuse、different-DB concurrency 与 GET-only mock Controller。
 
 ### Phase 3E-2B1 Supervisor & Secure Runtime Configuration (Complete)
@@ -39,11 +39,20 @@
 - 已实现独立 `proxylens-supervisor` executable：per-authority-DB Supervisor single-instance、Runtime mutex presence probe、已有 Runtime observation、exact child monitoring 与 bounded crash restart；
 - Supervisor 取得 per-DB ownership 后先报告 `runtimeState=starting-retrying`；即使 Runtime 暂时启动失败，Tauri 也保留这个 exact Supervisor，并由同一 Supervisor 继续 bounded retry，已有 DB 仍可走 Query read-only fallback；
 - 已实现 `STOP\n` lifecycle contract：仅 exact `STOP` 取消，stdin EOF/其它行忽略；Supervisor graceful stop 只停止自己拥有的 Runtime，外部观察到的 Runtime 不被停止；
-- 已实现 `%LOCALAPPDATA%\ProxyLens\config\runtime.json` v1 non-secret config 与 `PROXYLENS_CONFIG_DIR` test/dev override，原子保存、schema/URL validation 与 DB path separation；
+- 已实现 `%LOCALAPPDATA%\ProxyLens\config\runtime.json` v2 non-secret config 与 `PROXYLENS_CONFIG_DIR` test/dev override，包含 v1 → v2 lossless migration、原子保存、schema/URL validation、autostart preference 与 DB path separation；
 - 已实现 Windows Credential Manager Generic Credential：固定 production target、`CRED_PERSIST_LOCAL_MACHINE`、random E2E test target isolation；Secret 不进入 JSON、argv、handshake 或日志；
 - Tauri 已从直接 Runtime ensure-start 切换为 detached Supervisor ensure-start；Query API 继续由 UI 独立持有，UI close 后 Supervisor/Runtime 保活，reopen 复用；build/bundle 同时包含 Query API、Runtime、Supervisor；
 - `node tools/runtime/run-phase3e2b1-supervisor.mjs`：PASS，覆盖 secure credential、Tauri A/B、UI-close survival、Runtime exact crash/restart、duplicate/different DB、existing Runtime observation/takeover 与 exact cleanup；
 - `go test ./test -run '^TestSupervisorSubprocessUsesMockControllerAndSecureCredential$' -count=1 -v`：PASS；Controller 为随机 `httptest` mock，DB/config 为临时目录，WinCred target 为随机 test target。
+
+### Phase 3E-2B2A Installed Runtime Lifecycle (Complete)
+
+- Windows V1 使用 current-user、interactive、limited-privilege Task Scheduler owner，固定生产任务为 `\ProxyLens\Background Supervisor`；测试任务只允许随机 `\ProxyLens-Test\<UUID>`，不枚举或触碰其他任务；
+- 已实现 exact-task `install status/register/unregister/ensure-owner/run` 与 per-authority-DB `control status/stop`；Supervisor stop 使用 `Local\ProxyLens.Supervisor.Stop.v1.<sha256(normalized-db-path)>`，沿既有 graceful path 收尾；
+- `runtime.json` v2 的 `autostartEnabled` 默认 true，v1 迁移 lossless；disabled preference 在 upgrade/reconcile 中保持 false，关闭偏好不停止当前 collection；
+- Windows Tauri installed mode 优先让 Go lifecycle CLI 复用/ensure Task Scheduler owner；无已注册 owner 的 developer checkout 保留 direct Supervisor fallback；Query API 仍是 UI-owned read-only sidecar；
+- canonical NSIS 配置为 `installMode=currentUser`。PREINSTALL/PREUNINSTALL 先 exact unregister + graceful stop，POSTINSTALL reconcile owner；upgrade 保留 DB、config、Controller URL、autostart preference 与 WinCred，uninstall 删除程序/task/process 但保留用户数据与 credential；
+- 已通过非 elevated feasibility gate（随机 `\ProxyLens-Test\<UUID>` + harmless temporary executable）及 isolated Package A → Package B → uninstall acceptance；未使用 Service、tray、MSI 或 updater。
 
 ### 已实现的正式 UI
 
@@ -101,6 +110,7 @@
 - Bundled font licensing：`LICENSES.md` 与完整 `OFL-1.1.txt` 已纳入源码；Tauri bundle 显式映射到应用 `licenses/` resources；
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 - Phase 3E-1 Go runtime/scheduler mock E2E、Tauri path unit tests、双 binary build 与 Tauri release build 均已完成本地验证；Phase 3E-2A 与 3E-2B1 的 Go ownership/config/protocol/Supervisor tests、Rust parser/path tests、UI tests、三 binary build、Tauri release build、Go subprocess acceptance 与 mock-only Supervisor lifecycle smoke 也已完成本地验证；这些结果不是 GitHub CI PASS。
+- Phase 3E-2B2A：`go test` affected packages、`go vet` affected packages、Rust `cargo fmt --check` / `cargo test`、UI/build 与 Windows NSIS build；`node tools/runtime/run-phase3e2b2a-task-owner.mjs` 与 `node tools/runtime/run-phase3e2b2a-installed-lifecycle.mjs` 均为 PASS，均使用随机 mock/temp identities；这些结果不是 GitHub CI PASS。
 - 本任务正式 runtime 测试使用 `httptest` / mock WebSocket 与隔离临时 SQLite DB；真实 FLClash/Mihomo lifecycle 与 real-data validation 未纳入本阶段正式验收。
 - `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
 - 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller；AST 守卫递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；lifecycle tooling 另有随机 mock URL、temp-dir、E2E-only status file 与 exact-PID cleanup guard。3E-2B1 验收未启动或修改真实 FLClash/Mihomo，未发生真实网络生命周期或 Mihomo 写操作。
@@ -157,7 +167,7 @@
 ## Open Questions
 
 - 最终视觉验收后，当前 Draft Design System v1 是否 Freeze；
-- Phase 3E-2B2 的 login/autostart、installer/upgrade ownership、uninstall/upgrade cleanup、Windows Service/托盘与最终 Settings UI；3E-2B1 的 secure Controller Secret、per-DB Supervisor、crash supervision 与 Tauri ensure Supervisor 已确认。
+- Phase 3E-2B2B 的 minimal Settings/autostart UI、installed startup/status polish 与最终 installed product acceptance；Windows Service、tray、MSI、updater 与真实 FLClash/Mihomo validation 仍不在当前范围。
 
 ---
 
@@ -165,12 +175,12 @@
 
 - 交互模型收口已完成：Overview / Coverage 使用动态推进的 Live Analysis Range，History 使用确定性冻结快照，已解决快照提前生成与展示范围语义漂移问题。
 - UI Design System 仍为 Draft，不应在最终视觉验收前标记 Frozen。
-- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；Phase 3E-2B1 由独立 Supervisor 在 Tauri UI 之外维持其进程连续性，安装版常驻、登录自启与升级托管仍延期到 3E-2B2。
+- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻、Supervisor crash recovery 与 upgrade/uninstall ownership 已由 Phase 3E-2B2A 的 current-user Task Scheduler + NSIS lifecycle 提供，后续只剩 2B2B 的 Settings/status polish。
 
 ---
 
 ## Next Step
 
-1. 进入 Phase 3E-2B2，处理 installed Runtime ownership、login/autostart、Windows Service/托盘、installer/upgrade lifecycle 与 user-facing config surface。
+1. 进入 Phase 3E-2B2B，处理 minimal Settings/autostart surface、installed startup/status polish 与最终 installed product acceptance。
 2. 待完整桌面 runtime 条件具备且用户明确安排真实环境后，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
 3. 在完整桌面视觉验收前，UI Design System 继续保持 Draft；之后再按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence。

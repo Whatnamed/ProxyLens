@@ -6,7 +6,8 @@
 - **Scope**: Phase 3E-1 Desktop Runtime Core
 
 This ADR records the Phase 3E-1 core boundary. The subsequent Windows
-ownership and Tauri ensure-start extension is recorded in ADR 0007.
+ownership, Supervisor, and installed-lifecycle extensions are recorded in ADR
+0007, ADR 0008, and ADR 0009.
 
 ---
 
@@ -42,7 +43,7 @@ Mihomo External Controller (read-only)
 
 `CollectorRunner` 只接受 caller-owned `context.Context`，不创建全局 signal handler、不读取 stdin、不调用 `os.Exit`。它保证 queue worker join、SQLite session end/close 顺序和 fatal error 返回。
 
-Reusable library boundary additionally requires an explicit, non-empty `ControllerURL`。`NewCollectorRunner` 对空或全空白的 `ControllerURL` 直接返回错误，不得静默从 `config.DefaultConfig()` 继承真实 Controller 默认值。正式 CLI 可以自行解析其兼容默认值，但必须将解析后的 URL 显式传入；测试和其他 library caller 必须提供自己的受控 URL，Runtime 集成测试使用 mock controller。
+最终 reusable-library 安全契约要求显式、非空的 `ControllerURL`。`NewCollectorRunner` 对空或全空白的 `ControllerURL` 直接返回错误；library 层不得静默从 `config.DefaultConfig()` 继承真实 Controller 默认值。正式 CLI 可以自行解析其兼容默认值，但必须将解析后的 URL 显式传入；测试和其他 library caller 必须提供自己的受控 URL，Runtime 集成测试使用 mock controller。
 
 Controller 侧只使用 `GET /version` 与 `GET/WS /connections`。Validation fault injection 仍是显式 options，不进入 Runtime 的默认路径；Secret 只来自内存/options 或 `MIHOMO_SECRET`，不写入日志。
 
@@ -89,7 +90,7 @@ Go 与 Rust 各自保留小型 resolver，并由 deterministic tests 锁定相�
 - 稳定运行时不会每个周期生成内容相同的 completed accounting run；
 - UI close 仍只影响 Query API，不能据此推断 Runtime 已停止；
 - 安装目录、Roaming Profile、TEMP 和源码目录都不再是正式长期 authority DB 位置；
-- Secure Controller Secret provisioning、single-instance、ensure-start、crash restart、login/autostart、Windows Service、tray、installer ownership 与 detached background lifecycle 留给 Phase 3E-2；
+- Secure Controller Secret provisioning、single-instance、ensure-start 与 crash restart 已在后续 ADR 0007/0008 固化；login/autostart、installer ownership 与 detached installed lifecycle 已在 ADR 0009 固化；Windows Service、tray、MSI、updater 与 Settings UI 仍属于后续范围；
 - 本阶段的正式验收路径不使用真实 FLClash/Mihomo lifecycle 或 real-data visual acceptance。
 
 ## 4. Verification

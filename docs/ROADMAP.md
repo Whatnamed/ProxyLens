@@ -25,7 +25,7 @@ Phase 2  持久化、核算与运行时验证                  [COMPLETED]
    ↓
 Phase 3  审计 UI                                  [IN PROGRESS — core UI implemented]
    ↓
-Phase 3E Desktop Runtime Integration              [IN PROGRESS — 3E-1/3E-2A/3E-2B1 complete; 3E-2B2 pending]
+Phase 3E Desktop Runtime Integration              [IN PROGRESS — 3E-1/3E-2A/3E-2B1/3E-2B2A complete; 3E-2B2B pending]
    ↓
 Phase 4  Audit Intelligence                       [PLANNED]
    ↓
@@ -162,7 +162,7 @@ Later    长期增强                                 [PLANNED]
   - [ ] 桌面应用图标、安装版生命周期与启动性能最终打磨；
   - [ ] 最终视觉 polish 与 Design System freeze。
 
-### Phase 3E — Desktop Runtime Integration [IN PROGRESS — Phase 3E-1, 3E-2A and 3E-2B1 complete / 3E-2B2 pending]
+### Phase 3E — Desktop Runtime Integration [IN PROGRESS — Phase 3E-1, 3E-2A, 3E-2B1 and 3E-2B2A complete / 3E-2B2B pending]
 
 已完成 Phase 3E-1：
 
@@ -192,13 +192,18 @@ Later    长期增强                                 [PLANNED]
 - [x] Tauri ensure Supervisor → Runtime，Query-only UI lifecycle，Supervisor/Runtime UI-close survival 与 reopen reuse；
 - [x] mock-only secure credential / crash-restart / Tauri lifecycle acceptance。
 
-#### Phase 3E-2B2 — Installed Runtime Lifecycle [PLANNED]
+#### Phase 3E-2B2A — Installed Runtime Lifecycle [COMPLETED]
 
-- [ ] login/autostart policy；
-- [ ] Windows Service / tray ownership decision；
-- [ ] installer lifecycle、upgrade ownership、uninstall cleanup 与 real installed-data-path validation；
-- [ ] minimal user-facing Settings/config surface；
-- [ ] real FLClash/Mihomo validation 与最终 real-data visual acceptance。
+- [x] current-user Windows Task Scheduler owner、login start 与 bounded Supervisor restart-on-failure；
+- [x] exact installed control/status、per-DB stop event 与 config v2 autostart preference；
+- [x] NSIS current-user fresh install、upgrade quiesce/reconcile、disabled preference preservation 与 uninstall cleanup；
+- [x] actual installed binary layout 与 isolated Package A → Package B → uninstall acceptance；
+
+#### Phase 3E-2B2B — Settings & Installed Product Polish [PLANNED]
+
+- [ ] minimal Settings/config UI 与 autostart UI；
+- [ ] installed startup/status polish 与 product-level acceptance；
+- [ ] real FLClash/Mihomo validation 与最终 real-data visual acceptance（Deferred）。
 
 ---
 
