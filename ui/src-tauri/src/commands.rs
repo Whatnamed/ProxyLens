@@ -1,3 +1,4 @@
+use crate::runtime_process::RuntimeBootstrapStatus;
 use crate::state::{AppState, QueryApiSession};
 use serde::Deserialize;
 use std::env;
@@ -9,7 +10,15 @@ pub fn get_query_api_session(state: State<'_, AppState>) -> Result<QueryApiSessi
     if let Some(session) = session_guard.as_ref() {
         return Ok(session.clone());
     }
-    Err("Query API session not initialized. Make sure DB is configured and sidecar is running.".to_string())
+    Err(
+        "Query API session not initialized. Make sure DB is configured and sidecar is running."
+            .to_string(),
+    )
+}
+
+#[tauri::command]
+pub fn get_runtime_bootstrap_status(state: State<'_, AppState>) -> RuntimeBootstrapStatus {
+    state.runtime_status.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -36,7 +45,9 @@ pub fn report_e2e_probe(report: E2EProbeReport) {
             eprintln!("[ProxyLens E2E Probe Error] {}", err);
         }
         // 打印纯安全无 Token 标记
-        println!("PROXYLENS_WEBVIEW_E2E_READY meta={} summary={} connections={}", meta_int, sum_int, conns_int);
+        eprintln!(
+            "PROXYLENS_WEBVIEW_E2E_READY meta={} summary={} connections={}",
+            meta_int, sum_int, conns_int
+        );
     }
 }
-

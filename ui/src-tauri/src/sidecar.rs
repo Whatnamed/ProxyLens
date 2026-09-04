@@ -3,7 +3,7 @@ use rand::RngCore;
 use serde::Deserialize;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -29,13 +29,43 @@ pub fn generate_high_entropy_token() -> String {
     s
 }
 
-pub fn resolve_db_path() -> Result<PathBuf, String> {
+pub fn resolve_runtime_db_path() -> Result<PathBuf, String> {
     resolve_db_path_from_values(
         env_value("PROXYLENS_DB_PATH"),
         env_value("PROXYLENS_DATA_DIR"),
         env_value("LOCALAPPDATA"),
+        false,
         |path| path.is_file(),
     )
+}
+
+pub fn resolve_query_db_path() -> Result<PathBuf, String> {
+    resolve_db_path_from_values(
+        env_value("PROXYLENS_DB_PATH"),
+        env_value("PROXYLENS_DATA_DIR"),
+        env_value("LOCALAPPDATA"),
+        true,
+        |path| path.is_file(),
+    )
+}
+
+pub fn resolve_db_path() -> Result<PathBuf, String> {
+    resolve_query_db_path()
+}
+
+pub async fn wait_for_query_db_path(timeout: Duration) -> Result<PathBuf, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match resolve_query_db_path() {
+            Ok(path) => return Ok(path),
+            Err(error) => {
+                if Instant::now() >= deadline {
+                    return Err(error);
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -46,11 +76,12 @@ fn resolve_db_path_from_values(
     explicit_db_path: Option<String>,
     data_dir: Option<String>,
     local_app_data: Option<String>,
+    require_existing: bool,
     path_exists: impl Fn(&Path) -> bool,
 ) -> Result<PathBuf, String> {
     if let Some(env_path) = explicit_db_path {
         let path = PathBuf::from(&env_path);
-        if path_exists(&path) {
+        if !require_existing || path_exists(&path) {
             return Ok(path);
         }
         return Err(format!(
@@ -61,7 +92,7 @@ fn resolve_db_path_from_values(
 
     if let Some(data_dir) = data_dir {
         let path = PathBuf::from(&data_dir).join("proxylens.db");
-        if path_exists(&path) {
+        if !require_existing || path_exists(&path) {
             return Ok(path);
         }
         return Err(format!(
@@ -80,7 +111,7 @@ fn resolve_db_path_from_values(
         .join("ProxyLens")
         .join("data")
         .join("proxylens.db");
-    if path_exists(&path) {
+    if !require_existing || path_exists(&path) {
         return Ok(path);
     }
     Err(format!(
@@ -121,7 +152,8 @@ pub async fn spawn_query_sidecar(
                     let line = String::from_utf8_lossy(&line_bytes);
                     for sub in line.lines() {
                         let trimmed = sub.trim();
-                        if trimmed.starts_with('{') && trimmed.contains("proxylens-query-api-ready") {
+                        if trimmed.starts_with('{') && trimmed.contains("proxylens-query-api-ready")
+                        {
                             if let Ok(sig) = serde_json::from_str::<ReadySignal>(trimmed) {
                                 if sig.signal_type == "proxylens-query-api-ready" {
                                     return Ok(sig);
@@ -187,6 +219,7 @@ mod tests {
             Some(r"C:\fixture\explicit.db".to_string()),
             Some(r"C:\fixture\data".to_string()),
             Some(r"C:\Users\tester\AppData\Local".to_string()),
+            true,
             |_| true,
         )
         .expect("explicit path should resolve");
@@ -199,6 +232,7 @@ mod tests {
             None,
             Some(r"C:\fixture\data".to_string()),
             Some(r"C:\Users\tester\AppData\Local".to_string()),
+            true,
             |_| true,
         )
         .expect("data dir path should resolve");
@@ -211,6 +245,7 @@ mod tests {
             None,
             None,
             Some(r"C:\Users\tester\AppData\Local".to_string()),
+            true,
             |_| true,
         )
         .expect("default path should resolve");
@@ -226,10 +261,14 @@ mod tests {
             None,
             None,
             Some(r"C:\Users\tester\AppData\Local".to_string()),
+            true,
             |_path: &Path| false,
         );
         let error = resolved.expect_err("missing database should be deferred to runtime");
-        assert!(error.starts_with("DB_NOT_READY:"), "unexpected error: {error}");
+        assert!(
+            error.starts_with("DB_NOT_READY:"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -238,10 +277,14 @@ mod tests {
             Some(r"C:\fixture\missing.db".to_string()),
             None,
             None,
+            true,
             |_path: &Path| false,
         )
         .expect_err("missing explicit database should fail closed");
-        assert!(error.contains("PROXYLENS_DB_PATH"), "unexpected error: {error}");
+        assert!(
+            error.contains("PROXYLENS_DB_PATH"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -250,9 +293,26 @@ mod tests {
             None,
             Some(r"C:\fixture\data".to_string()),
             None,
+            true,
             |_path: &Path| false,
         )
         .expect_err("missing data-dir database should fail closed");
-        assert!(error.contains("PROXYLENS_DATA_DIR"), "unexpected error: {error}");
+        assert!(
+            error.contains("PROXYLENS_DATA_DIR"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn writer_resolution_allows_missing_database_without_creating_it() {
+        let resolved = resolve_db_path_from_values(
+            Some(r"C:\fixture\missing.db".to_string()),
+            None,
+            None,
+            false,
+            |_path: &Path| false,
+        )
+        .expect("writer resolution should allow the first-run database");
+        assert_eq!(resolved, PathBuf::from(r"C:\fixture\missing.db"));
     }
 }

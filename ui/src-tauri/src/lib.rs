@@ -1,8 +1,11 @@
 pub mod commands;
+pub mod runtime_process;
 pub mod sidecar;
 pub mod state;
 
 use state::AppState;
+use std::env;
+use std::time::Duration;
 use tauri::{Manager, State};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -14,18 +17,76 @@ pub fn run() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_query_api_session,
+            commands::get_runtime_bootstrap_status,
             commands::get_e2e_mode,
             commands::report_e2e_probe
         ])
         .setup(|app| {
             let handle = app.handle().clone();
-            let db_res = sidecar::resolve_db_path();
+            let state: State<AppState> = app.state();
+
+            // Runtime owns the writable authority path first. The Query API
+            // remains a separate UI-owned, read-only sidecar below.
+            match sidecar::resolve_runtime_db_path() {
+                Ok(runtime_db_path) => {
+                    match tauri::async_runtime::block_on(runtime_process::ensure_runtime(
+                        &handle,
+                        &runtime_db_path,
+                    )) {
+                        Ok(bootstrap) => {
+                            eprintln!(
+                                "PROXYLENS_RUNTIME_BOOTSTRAP {}",
+                                serde_json::to_string(&bootstrap.status)
+                                    .unwrap_or_else(|_| "{}".to_string())
+                            );
+                            *state.runtime_status.lock().unwrap() = bootstrap.status;
+                            *state.runtime.lock().unwrap() = bootstrap.child;
+                        }
+                        Err(error) => {
+                            let status = runtime_process::RuntimeBootstrapStatus {
+                                state: runtime_process::RuntimeBootstrapState::Failed,
+                                pid: None,
+                                error: Some(error),
+                            };
+                            eprintln!(
+                                "PROXYLENS_RUNTIME_BOOTSTRAP {}",
+                                serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string())
+                            );
+                            *state.runtime_status.lock().unwrap() = status;
+                        }
+                    }
+                }
+                Err(error) => {
+                    let status = runtime_process::RuntimeBootstrapStatus {
+                        state: runtime_process::RuntimeBootstrapState::Failed,
+                        pid: None,
+                        error: Some(error),
+                    };
+                    eprintln!(
+                        "PROXYLENS_RUNTIME_BOOTSTRAP {}",
+                        serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string())
+                    );
+                    *state.runtime_status.lock().unwrap() = status;
+                }
+            }
+
+            let db_res = if runtime_bootstrap_succeeded(&state) {
+                tauri::async_runtime::block_on(sidecar::wait_for_query_db_path(
+                    Duration::from_secs(2),
+                ))
+            } else {
+                sidecar::resolve_query_db_path()
+            };
             if let Ok(db_path) = db_res {
-                println!("[ProxyLens Tauri] Resolved DB path: {:?}", db_path);
-                let state: State<AppState> = app.state();
-                match tauri::async_runtime::block_on(sidecar::spawn_query_sidecar(&handle, &db_path)) {
+                eprintln!("[ProxyLens Tauri] Resolved Query DB path: {:?}", db_path);
+                match tauri::async_runtime::block_on(sidecar::spawn_query_sidecar(
+                    &handle, &db_path,
+                )) {
                     Ok((session, child)) => {
-                        println!("[ProxyLens Tauri] Query sidecar ready at: {}", session.base_url);
+                        eprintln!(
+                            "[ProxyLens Tauri] Query sidecar ready at: {}",
+                            session.base_url
+                        );
                         *state.session.lock().unwrap() = Some(session);
                         *state.child.lock().unwrap() = Some(child);
                     }
@@ -34,8 +95,10 @@ pub fn run() {
                     }
                 }
             } else if let Err(e) = db_res {
-                println!("[ProxyLens Tauri] Notice: {}", e);
+                eprintln!("[ProxyLens Tauri] Notice: {}", e);
             }
+
+            schedule_e2e_auto_exit(&handle);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -50,11 +113,46 @@ pub fn run() {
                     }
                 };
                 if let Some(child) = child_opt {
-                    println!("[ProxyLens Tauri] Stopping query sidecar on window destroy...");
+                    eprintln!("[ProxyLens Tauri] Stopping query sidecar on window destroy...");
                     sidecar::stop_query_sidecar(child);
                 }
+                // The Runtime child intentionally outlives this UI window.
+                // It is held in the independent AppState.runtime slot and is
+                // never stopped by normal UI-close handling.
             }
         })
         .run(tauri::generate_context!())
         .expect("error while running proxylens desktop application");
+}
+
+fn schedule_e2e_auto_exit(app_handle: &tauri::AppHandle) {
+    if env::var("PROXYLENS_E2E_MODE").unwrap_or_default() != "1" {
+        return;
+    }
+    let Ok(delay_ms) = env::var("PROXYLENS_E2E_AUTO_EXIT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or(())
+    else {
+        return;
+    };
+    if delay_ms == 0 {
+        return;
+    }
+
+    let handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.close();
+        }
+    });
+}
+
+fn runtime_bootstrap_succeeded(state: &State<AppState>) -> bool {
+    matches!(
+        state.runtime_status.lock().unwrap().state.clone(),
+        runtime_process::RuntimeBootstrapState::Started
+            | runtime_process::RuntimeBootstrapState::AlreadyRunning
+    )
 }
