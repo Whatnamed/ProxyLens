@@ -75,8 +75,10 @@ func TestRuntimeCoreMockControllerAccountingAndReadonlyQuery(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if strings.Contains(server.URL, "127.0.0.1:9090") {
-		t.Fatalf("integration test unexpectedly targeted the real controller port: %s", server.URL)
+	for _, endpoint := range forbiddenControllerEndpoints() {
+		if strings.Contains(server.URL, endpoint) {
+			t.Fatalf("integration test unexpectedly targeted the real controller endpoint: %s", server.URL)
+		}
 	}
 	dbPath := t.TempDir() + string(os.PathSeparator) + "runtime.db"
 	rt, err := proxylensruntime.NewRuntime(proxylensruntime.RuntimeOptions{

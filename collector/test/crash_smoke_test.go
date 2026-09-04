@@ -25,8 +25,7 @@ func TestSubprocessCrashKillAndReopenSmoke(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "crash-test.db")
 
 	// This subprocess lifecycle regression uses an isolated mock controller.
-	// It must never use the user's real Mihomo controller, including the
-	// conventional 127.0.0.1:9090 endpoint.
+	// It must never use the user's real Mihomo controller.
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	mockController := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

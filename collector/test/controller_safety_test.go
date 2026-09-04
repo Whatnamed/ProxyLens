@@ -4,11 +4,21 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 )
+
+func forbiddenControllerEndpoints() []string {
+	return []string{
+		strings.Join([]string{"127.0.0.1", "9090"}, ":"),
+		strings.Join([]string{"localhost", "9090"}, ":"),
+		strings.Join([]string{"127.0.0.1", "7988"}, ":"),
+		strings.Join([]string{"localhost", "7988"}, ":"),
+	}
+}
 
 // Keep subprocess integration tests from accidentally regressing to the
 // user's conventional Mihomo Controller endpoint. Mock URLs must be passed
@@ -23,6 +33,15 @@ func TestSubprocessIntegrationCommandsDoNotUseRealControllerEndpoint(t *testing.
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
 			t.Fatalf("failed to parse %s: %v", path, err)
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("failed to read %s: %v", path, err)
+		}
+		for _, endpoint := range forbiddenControllerEndpoints() {
+			if strings.Contains(string(source), endpoint) {
+				t.Errorf("%s contains the real Controller endpoint %s; use an httptest mock", path, endpoint)
+			}
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
@@ -43,11 +62,20 @@ func TestSubprocessIntegrationCommandsDoNotUseRealControllerEndpoint(t *testing.
 					continue
 				}
 				value, err := strconv.Unquote(literal.Value)
-				if err == nil && strings.Contains(value, "127.0.0.1:9090") {
+				if err == nil && containsForbiddenControllerEndpoint(value) {
 					t.Errorf("%s passes the real Controller endpoint directly to exec.Command; use an httptest mock", path)
 				}
 			}
 			return true
 		})
 	}
+}
+
+func containsForbiddenControllerEndpoint(value string) bool {
+	for _, endpoint := range forbiddenControllerEndpoints() {
+		if strings.Contains(value, endpoint) {
+			return true
+		}
+	}
+	return false
 }
