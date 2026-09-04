@@ -139,6 +139,38 @@ func TestRuntimeLifecycleToolsRequireMockControllerAndExactPidCleanup(t *testing
 	}
 }
 
+func TestSupervisorLifecycleToolUsesOnlyE2ESafeStateAndCredentials(t *testing.T) {
+	path := filepath.Join("..", "..", "tools", "runtime", "run-phase3e2b1-supervisor.mjs")
+	sourceBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", path, err)
+	}
+	source := string(sourceBytes)
+	for _, required := range []string{
+		"PROXYLENS_E2E_MODE",
+		"PROXYLENS_E2E_CREDENTIAL_TARGET",
+		"PROXYLENS_E2E_STATUS_FILE",
+		"crypto.randomUUID",
+		"config",
+		"set-secret",
+		"clear-secret",
+		"delete environment.MIHOMO_SECRET",
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("%s is missing required E2E safety marker %q", path, required)
+		}
+	}
+	if strings.Contains(source, "ProxyLens/MihomoController/v1") {
+		t.Errorf("%s names the production Credential Manager target", path)
+	}
+	if strings.Contains(source, "--secret") {
+		t.Errorf("%s passes or accepts a secret through argv", path)
+	}
+	if strings.Contains(source, "MIHOMO_SECRET =") {
+		t.Errorf("%s assigns a secret to MIHOMO_SECRET instead of deleting inherited state", path)
+	}
+}
+
 func containsForbiddenControllerEndpoint(value string) bool {
 	for _, endpoint := range forbiddenControllerEndpoints() {
 		if strings.Contains(value, endpoint) {

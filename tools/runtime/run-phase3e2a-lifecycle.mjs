@@ -29,6 +29,7 @@ const forbiddenControllerPorts = new Set([9000 + 90, 7900 + 88]);
 const syntheticControllerSecret = 'phase3e2a-synthetic-secret';
 const trackedProcesses = new Set();
 const trackedRuntimePids = new Set();
+const trackedSupervisorPids = new Set();
 
 function requireFile(filePath, label) {
   if (!fs.statSync(filePath, { throwIfNoEntry: false })?.isFile()) {
@@ -357,12 +358,15 @@ function spawnTauri(tauriBinaryPath, controllerUrl, dataDir, label) {
 
 async function runTauriScenario(tauriBinaryPath, controllerUrl, dataDir, expectedState, label) {
   const capture = spawnTauri(tauriBinaryPath, controllerUrl, dataDir, label);
-  const bootstrapLine = await capture.waitFor((line) => line.startsWith('PROXYLENS_RUNTIME_BOOTSTRAP '));
-  const status = JSON.parse(bootstrapLine.slice('PROXYLENS_RUNTIME_BOOTSTRAP '.length));
+  const bootstrapLine = await capture.waitFor((line) => line.startsWith('PROXYLENS_SUPERVISOR_BOOTSTRAP '));
+  const status = JSON.parse(bootstrapLine.slice('PROXYLENS_SUPERVISOR_BOOTSTRAP '.length));
   if (status.state !== expectedState) {
-    throw new Error(`${label} Runtime state was ${status.state}, expected ${expectedState}`);
+    throw new Error(`${label} Supervisor state was ${status.state}, expected ${expectedState}`);
   }
-  if (status.state === 'Started' && status.pid) trackedRuntimePids.add(status.pid);
+  if (status.state === 'Started') {
+    if (status.pid) trackedSupervisorPids.add(status.pid);
+    if (status.runtimePid) trackedRuntimePids.add(status.runtimePid);
+  }
   const queryLine = await capture.waitFor((line) => line.includes('Query sidecar ready at:'));
   const queryMatch = queryLine.match(/Query sidecar ready at:\s*http:\/\/127\.0\.0\.1:(\d+)/);
   if (!queryMatch) throw new Error(`${label} did not report a loopback Query API URL`);
@@ -435,9 +439,9 @@ async function main() {
 
   try {
     console.log(`[mock] Controller=${controller.url}`);
-    console.log('[A] first Tauri launch starts Runtime and Query API');
+    console.log('[A] first Tauri launch starts Supervisor/Runtime and Query API');
     const first = await runTauriScenario(tauriBinary, controller.url, dataDir, 'Started', 'Tauri-A');
-    firstRuntimePid = first.status.pid;
+    firstRuntimePid = first.status.runtimePid;
     if (!isPidAlive(firstRuntimePid)) throw new Error(`Runtime PID ${firstRuntimePid} was not alive after Tauri-A exited`);
     if (!fs.statSync(firstDbPath, { throwIfNoEntry: false })?.isFile()) {
       throw new Error(`First-run Runtime did not create its authority DB: ${firstDbPath}`);
@@ -459,7 +463,7 @@ async function main() {
     if (!isPidAlive(firstRuntimePid)) throw new Error('Duplicate candidate affected the existing Runtime PID');
     console.log('    PASS: duplicate candidate exited cleanly without a second READY');
 
-    console.log('[C] reopening Tauri reuses the existing Runtime');
+    console.log('[C] reopening Tauri reuses the existing Supervisor/Runtime');
     const second = await runTauriScenario(tauriBinary, controller.url, dataDir, 'AlreadyRunning', 'Tauri-B');
     if (!isPidAlive(firstRuntimePid)) throw new Error('Reopening Tauri affected the existing Runtime PID');
     await assertPortClosed(second.queryPort);
@@ -489,6 +493,7 @@ async function main() {
     console.log('Phase 3E-2A lifecycle smoke PASS');
   } finally {
     await stopExactProcess(otherRuntime);
+    for (const pid of trackedSupervisorPids) await stopExactPid(pid);
     for (const pid of trackedRuntimePids) await stopExactPid(pid);
     for (const processCapture of trackedProcesses) await stopExactProcess(processCapture);
     await controller.close();
