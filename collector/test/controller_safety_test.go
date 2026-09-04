@@ -98,6 +98,47 @@ func TestSubprocessIntegrationCommandsDoNotUseRealControllerEndpoint(t *testing.
 	}
 }
 
+func TestRuntimeLifecycleToolsRequireMockControllerAndExactPidCleanup(t *testing.T) {
+	lifecycleDir := filepath.Join("..", "..", "tools", "runtime")
+	entries, err := os.ReadDir(lifecycleDir)
+	if err != nil {
+		t.Fatalf("failed to enumerate Runtime lifecycle tools: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".mjs") {
+			continue
+		}
+		path := filepath.Join(lifecycleDir, entry.Name())
+		sourceBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("failed to read %s: %v", path, err)
+		}
+		source := string(sourceBytes)
+		for _, endpoint := range forbiddenControllerEndpoints() {
+			if strings.Contains(source, endpoint) {
+				t.Errorf("%s contains forbidden Controller endpoint %s", path, endpoint)
+			}
+		}
+		lower := strings.ToLower(source)
+		for _, broadKill := range []string{"taskkill", "killall", "pkill"} {
+			if strings.Contains(lower, broadKill) {
+				t.Errorf("%s contains broad process cleanup command %q; use exact recorded test PIDs", path, broadKill)
+			}
+		}
+		for _, required := range []string{
+			"assertMockControllerUrl",
+			"PROXYLENS_CONTROLLER_URL",
+			"mkdtempSync",
+			"stopExactProcess",
+			"stopExactPid",
+		} {
+			if !strings.Contains(source, required) {
+				t.Errorf("%s is missing required lifecycle safety marker %q", path, required)
+			}
+		}
+	}
+}
+
 func containsForbiddenControllerEndpoint(value string) bool {
 	for _, endpoint := range forbiddenControllerEndpoints() {
 		if strings.Contains(value, endpoint) {

@@ -3,11 +3,13 @@ package test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,6 +83,7 @@ func TestRuntimeCoreMockControllerAccountingAndReadonlyQuery(t *testing.T) {
 		}
 	}
 	dbPath := t.TempDir() + string(os.PathSeparator) + "runtime.db"
+	var readyCount atomic.Int32
 	rt, err := proxylensruntime.NewRuntime(proxylensruntime.RuntimeOptions{
 		DBPath: dbPath,
 		Collector: proxylensruntime.CollectorOptions{
@@ -92,6 +95,12 @@ func TestRuntimeCoreMockControllerAccountingAndReadonlyQuery(t *testing.T) {
 			SessionID:           "sess-runtime-e2e",
 		},
 		AccountingInterval: 20 * time.Millisecond,
+		OnReady: func(info proxylensruntime.RuntimeReadyInfo) {
+			if info.RuntimeVersion != proxylensruntime.RuntimeVersion {
+				t.Errorf("unexpected runtime ready version %q", info.RuntimeVersion)
+			}
+			readyCount.Add(1)
+		},
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime failed: %v", err)
@@ -137,6 +146,19 @@ func TestRuntimeCoreMockControllerAccountingAndReadonlyQuery(t *testing.T) {
 		t.Fatalf("expected fresh accounting, got %+v", freshness)
 	}
 
+	duplicate, err := proxylensruntime.NewRuntime(proxylensruntime.RuntimeOptions{
+		DBPath: dbPath,
+		Collector: proxylensruntime.CollectorOptions{
+			ControllerURL: server.URL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("duplicate NewRuntime failed: %v", err)
+	}
+	if _, err := duplicate.Run(context.Background()); !errors.Is(err, proxylensruntime.ErrRuntimeAlreadyRunning) {
+		t.Fatalf("expected duplicate Runtime to return typed already-running error, got %v", err)
+	}
+
 	cancelRuntime()
 	var runtimeResult *proxylensruntime.RuntimeResult
 	select {
@@ -150,6 +172,9 @@ func TestRuntimeCoreMockControllerAccountingAndReadonlyQuery(t *testing.T) {
 	}
 	if runtimeResult == nil || runtimeResult.Collector == nil || !runtimeResult.Collector.CleanShutdown {
 		t.Fatalf("expected clean runtime result, got %+v", runtimeResult)
+	}
+	if readyCount.Load() != 1 {
+		t.Fatalf("expected exactly one Runtime READY callback, got %d", readyCount.Load())
 	}
 
 	reopened, err := storage.OpenReadOnlyDB(context.Background(), dbPath)
@@ -182,6 +207,13 @@ func TestRuntimeCoreMockControllerAccountingAndReadonlyQuery(t *testing.T) {
 	}
 	if session.SessionID != "sess-runtime-e2e" || session.Status != storage.SessionStatusClosedClean {
 		t.Fatalf("expected clean session closure, got %+v", session)
+	}
+	var sessionCount int
+	if err := reopened.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM collector_sessions").Scan(&sessionCount); err != nil {
+		t.Fatalf("count collector sessions failed: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("expected duplicate Runtime not to create a second collector session, got %d", sessionCount)
 	}
 
 	methods, paths := requests.snapshot()
