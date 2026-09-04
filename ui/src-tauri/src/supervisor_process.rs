@@ -19,6 +19,7 @@ pub enum SupervisorBootstrapState {
     Started,
     Starting,
     AlreadyRunning,
+    Installed,
     Failed,
 }
 
@@ -237,7 +238,7 @@ pub async fn ensure_supervisor(
     }
 }
 
-fn resolve_supervisor_executable(app_handle: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn resolve_supervisor_executable(app_handle: &AppHandle) -> Result<PathBuf, String> {
     let file_name = if cfg!(windows) {
         "proxylens-supervisor.exe"
     } else {
@@ -269,7 +270,7 @@ fn is_regular_file(path: &Path) -> bool {
 }
 
 #[cfg(windows)]
-fn configure_supervisor_process(command: &mut Command) {
+pub(crate) fn configure_supervisor_process(command: &mut Command) {
     use std::os::windows::process::CommandExt;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;

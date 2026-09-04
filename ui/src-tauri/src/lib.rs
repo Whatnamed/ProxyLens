@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod installed_owner;
 pub mod sidecar;
 pub mod state;
 pub mod supervisor_process;
@@ -25,15 +26,24 @@ pub fn run() {
             let handle = app.handle().clone();
             let state: State<AppState> = app.state();
 
-            // Supervisor owns process continuity for the writable authority
-            // path. It starts/observes Runtime; Query remains a separate
-            // UI-owned, read-only sidecar below.
+            // An installed current-user Task Scheduler task is the preferred
+            // owner. Developer checkouts without that exact owner retain the
+            // direct Supervisor bootstrap below. Query remains a separate,
+            // UI-owned, read-only sidecar.
             match sidecar::resolve_runtime_db_path() {
                 Ok(runtime_db_path) => {
-                    match tauri::async_runtime::block_on(supervisor_process::ensure_supervisor(
-                        &handle,
-                        &runtime_db_path,
-                    )) {
+                    let installed =
+                        installed_owner::ensure_installed_owner(&handle, &runtime_db_path);
+                    let bootstrap = match installed {
+                        Ok(Some((status, child))) => {
+                            Ok(supervisor_process::SupervisorBootstrap { status, child })
+                        }
+                        Ok(None) => tauri::async_runtime::block_on(
+                            supervisor_process::ensure_supervisor(&handle, &runtime_db_path),
+                        ),
+                        Err(error) => Err(error),
+                    };
+                    match bootstrap {
                         Ok(bootstrap) => {
                             eprintln!(
                                 "PROXYLENS_SUPERVISOR_BOOTSTRAP {}",
@@ -160,5 +170,6 @@ fn supervisor_bootstrap_succeeded(state: &State<AppState>) -> bool {
         supervisor_process::SupervisorBootstrapState::Started
             | supervisor_process::SupervisorBootstrapState::Starting
             | supervisor_process::SupervisorBootstrapState::AlreadyRunning
+            | supervisor_process::SupervisorBootstrapState::Installed
     )
 }
