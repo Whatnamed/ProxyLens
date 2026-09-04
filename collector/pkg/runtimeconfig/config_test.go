@@ -32,7 +32,7 @@ func TestResolveConfigPathSeparatesConfigAndDataDirectories(t *testing.T) {
 
 func TestConfigRoundTripIsNonSensitiveAndAtomicOverwrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", RuntimeConfigFileName)
-	cfg := RuntimeConfig{SchemaVersion: RuntimeConfigSchemaVersion, ControllerURL: testControllerURL(43127)}
+	cfg := RuntimeConfig{SchemaVersion: RuntimeConfigSchemaVersion, ControllerURL: testControllerURL(43127), AutostartEnabled: true}
 	if err := SaveConfig(path, cfg); err != nil {
 		t.Fatalf("SaveConfig failed: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestConfigRoundTripIsNonSensitiveAndAtomicOverwrite(t *testing.T) {
 	if loaded != cfg {
 		t.Fatalf("loaded config=%+v, want %+v", loaded, cfg)
 	}
-	overwrite := RuntimeConfig{SchemaVersion: RuntimeConfigSchemaVersion, ControllerURL: testControllerURL(43128)}
+	overwrite := RuntimeConfig{SchemaVersion: RuntimeConfigSchemaVersion, ControllerURL: testControllerURL(43128), AutostartEnabled: false}
 	if err := SaveConfig(path, overwrite); err != nil {
 		t.Fatalf("atomic overwrite failed: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestConfigRoundTripIsNonSensitiveAndAtomicOverwrite(t *testing.T) {
 func TestMissingMalformedAndFutureConfigBehavior(t *testing.T) {
 	missing, err := LoadConfig(filepath.Join(t.TempDir(), RuntimeConfigFileName))
 	if err != nil || missing != DefaultRuntimeConfig() {
-		t.Fatalf("missing config=%+v err=%v, want default v1", missing, err)
+		t.Fatalf("missing config=%+v err=%v, want default v2", missing, err)
 	}
 	path := filepath.Join(t.TempDir(), RuntimeConfigFileName)
 	if err := os.WriteFile(path, []byte(`{"schemaVersion":1,"controllerUrl":`), 0o600); err != nil {
@@ -72,13 +72,36 @@ func TestMissingMalformedAndFutureConfigBehavior(t *testing.T) {
 	if _, err := LoadConfig(path); err == nil {
 		t.Fatal("malformed config unexpectedly loaded")
 	}
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":1,"controllerUrl":"http://example.test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("v1 config migration failed: %v", err)
+	}
+	if migrated.SchemaVersion != RuntimeConfigSchemaVersion || migrated.ControllerURL != "http://example.test" || !migrated.AutostartEnabled {
+		t.Fatalf("migrated config=%+v, want v2 with preserved URL and enabled autostart", migrated)
+	}
+	if err := SaveConfig(path, migrated); err != nil {
+		t.Fatalf("saving migrated config failed: %v", err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(saved), `"autostartEnabled": true`) {
+		t.Fatalf("saved migrated config=%q err=%v, want v2 autostart field", saved, err)
+	}
 	if err := os.WriteFile(path, []byte(`{"schemaVersion":2,"controllerUrl":"http://example.test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "autostartEnabled is required") {
+		t.Fatalf("malformed v2 config error=%v, want required autostartEnabled", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":3,"controllerUrl":"http://example.test","autostartEnabled":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), ErrUnsupportedConfigSchema.Error()) {
 		t.Fatalf("future config error=%v, want unsupported schema", err)
 	}
-	if err := SaveConfig(path, RuntimeConfig{SchemaVersion: 2}); err == nil {
+	if err := SaveConfig(path, RuntimeConfig{SchemaVersion: 3}); err == nil {
 		t.Fatal("future config was accepted for write")
 	}
 }

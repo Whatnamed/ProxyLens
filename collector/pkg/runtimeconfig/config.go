@@ -14,14 +14,15 @@ import (
 )
 
 const (
-	ConfigDirEnv               = "PROXYLENS_CONFIG_DIR"
-	E2EModeEnv                 = "PROXYLENS_E2E_MODE"
-	E2ECredentialTargetEnv     = "PROXYLENS_E2E_CREDENTIAL_TARGET"
-	E2EStatusFileEnv           = "PROXYLENS_E2E_STATUS_FILE"
-	RuntimeConfigFileName      = "runtime.json"
-	ProductionCredentialTarget = "ProxyLens/MihomoController/v1"
-	TestCredentialTargetPrefix = "ProxyLens/Test/"
-	RuntimeConfigSchemaVersion = 1
+	ConfigDirEnv                 = "PROXYLENS_CONFIG_DIR"
+	E2EModeEnv                   = "PROXYLENS_E2E_MODE"
+	E2ECredentialTargetEnv       = "PROXYLENS_E2E_CREDENTIAL_TARGET"
+	E2EStatusFileEnv             = "PROXYLENS_E2E_STATUS_FILE"
+	RuntimeConfigFileName        = "runtime.json"
+	ProductionCredentialTarget   = "ProxyLens/MihomoController/v1"
+	TestCredentialTargetPrefix   = "ProxyLens/Test/"
+	RuntimeConfigSchemaVersion   = 2
+	RuntimeConfigSchemaVersionV1 = 1
 )
 
 var (
@@ -32,12 +33,16 @@ var (
 // RuntimeConfig contains only non-sensitive Runtime configuration. Secrets
 // must never be added to this structure or persisted beside it.
 type RuntimeConfig struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	ControllerURL string `json:"controllerUrl"`
+	SchemaVersion    int    `json:"schemaVersion"`
+	ControllerURL    string `json:"controllerUrl"`
+	AutostartEnabled bool   `json:"autostartEnabled"`
 }
 
 func DefaultRuntimeConfig() RuntimeConfig {
-	return RuntimeConfig{SchemaVersion: RuntimeConfigSchemaVersion}
+	return RuntimeConfig{
+		SchemaVersion:    RuntimeConfigSchemaVersion,
+		AutostartEnabled: true,
+	}
 }
 
 // ResolveConfigPath applies the config-specific path contract. It deliberately
@@ -56,7 +61,8 @@ func ResolveConfigPathFromEnvironment() (string, error) {
 	return ResolveConfigPath(os.Getenv(ConfigDirEnv), os.Getenv("LOCALAPPDATA"))
 }
 
-// LoadConfig treats a missing file as an unconfigured, valid v1 config. An
+// LoadConfig treats a missing file as an unconfigured, valid v2 config. A v1
+// file is losslessly migrated in memory; the next SaveConfig writes v2. An
 // existing malformed or future config fails closed and is never rewritten.
 func LoadConfig(path string) (RuntimeConfig, error) {
 	if strings.TrimSpace(path) == "" {
@@ -70,18 +76,47 @@ func LoadConfig(path string) (RuntimeConfig, error) {
 		return RuntimeConfig{}, fmt.Errorf("failed to read runtime config: %w", err)
 	}
 
-	var cfg RuntimeConfig
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&cfg); err != nil {
+	var version struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if err := decodeConfigJSON(data, &version, false); err != nil {
 		return RuntimeConfig{}, fmt.Errorf("malformed runtime config: %w", err)
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return RuntimeConfig{}, fmt.Errorf("malformed runtime config: trailing data")
+
+	var cfg RuntimeConfig
+	switch version.SchemaVersion {
+	case RuntimeConfigSchemaVersionV1:
+		var legacy struct {
+			SchemaVersion int    `json:"schemaVersion"`
+			ControllerURL string `json:"controllerUrl"`
 		}
-		return RuntimeConfig{}, fmt.Errorf("malformed runtime config: %w", err)
+		if err := decodeConfigJSON(data, &legacy, true); err != nil {
+			return RuntimeConfig{}, fmt.Errorf("malformed v1 runtime config: %w", err)
+		}
+		cfg = RuntimeConfig{
+			SchemaVersion:    RuntimeConfigSchemaVersion,
+			ControllerURL:    legacy.ControllerURL,
+			AutostartEnabled: true,
+		}
+	case RuntimeConfigSchemaVersion:
+		var current struct {
+			SchemaVersion    int    `json:"schemaVersion"`
+			ControllerURL    string `json:"controllerUrl"`
+			AutostartEnabled *bool  `json:"autostartEnabled"`
+		}
+		if err := decodeConfigJSON(data, &current, true); err != nil {
+			return RuntimeConfig{}, fmt.Errorf("malformed v2 runtime config: %w", err)
+		}
+		if current.AutostartEnabled == nil {
+			return RuntimeConfig{}, fmt.Errorf("malformed v2 runtime config: autostartEnabled is required")
+		}
+		cfg = RuntimeConfig{
+			SchemaVersion:    RuntimeConfigSchemaVersion,
+			ControllerURL:    current.ControllerURL,
+			AutostartEnabled: *current.AutostartEnabled,
+		}
+	default:
+		return RuntimeConfig{}, fmt.Errorf("%w: got %d, supported %d", ErrUnsupportedConfigSchema, version.SchemaVersion, RuntimeConfigSchemaVersion)
 	}
 	if err := validateConfig(cfg); err != nil {
 		return RuntimeConfig{}, err
@@ -90,7 +125,25 @@ func LoadConfig(path string) (RuntimeConfig, error) {
 	return cfg, nil
 }
 
-// SaveConfig writes a complete v1 config to a same-directory temporary file,
+func decodeConfigJSON(data []byte, target any, strict bool) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if strict {
+		decoder.DisallowUnknownFields()
+	}
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("trailing data")
+		}
+		return err
+	}
+	return nil
+}
+
+// SaveConfig writes a complete v2 config to a same-directory temporary file,
 // flushes it, and atomically replaces the destination. No secret can enter the
 // serialized representation because RuntimeConfig has no secret field.
 func SaveConfig(path string, cfg RuntimeConfig) error {
