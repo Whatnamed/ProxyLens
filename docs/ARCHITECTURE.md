@@ -1,6 +1,6 @@
 # ProxyLens 系统架构与技术认知
 
-> 本文记录当前已经确认的系统边界、首选技术方向和仍需通过 Phase 0 / Phase 1 实测验证的问题。未经验证的实现细节不得写成既定事实。
+> 本文记录当前已经确认的系统边界、技术架构和仍明确延期的实现问题。未经当前代码、正式文档或受控验证支持的细节不得写成既定事实。
 
 ---
 
@@ -51,7 +51,8 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 - Runtime 负责解析 DB path、初始化 writer DB、启动 Collector 与自动核算，并在 cancellation 时按 scheduler-first 顺序 graceful shutdown；
 - Accounting 默认每 30s 检查 Freshness，fresh 或无事件时 skip，落后时复用 `storage.RebuildAccounting`；单次核算失败不终止 Collector；
 - `collector run` 保留为薄 CLI wrapper，继续提供原有 flags、signal/stdin STOP、validation sink 与 summary；
-- 当前 Runtime 是前台可运行 core，不承担 Windows Service、开机/登录自启、托盘、single-instance、detached ownership 或安装器生命周期。
+- Phase 3E-1 只提供可独立前台运行的 Runtime Core；它不承担 Windows background residence、Windows Service、开机/登录自启、托盘、single-instance、detached ownership 或安装器生命周期；
+- 已经由外部启动的 Runtime/Collector 不依赖 UI 生命周期；真正的 Windows background residence、UI 关闭后持续运行的 supervisor/launcher、single-instance 与 ownership 仍属于 Phase 3E-2。
 
 ### Collector (已确立生产原型)
 
@@ -62,9 +63,9 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   - 分层流量归因（KnownApp、UnpairedMissingAttr、RelayCandidate、ConfirmedRelayDuplicate）与残差计算（初阶诊断视图，原始事实永久保留由 Phase 2 Storage 重算）；
   - 记录 Controller / Collector 监控缺口（Monitoring Gaps 与 Counter Epoch Breaks）；
   - 通过有界队列（Bounded Queue）背压机制输出确定性事件流（详见 `docs/collector-rfc.md` 与 `docs/phase2-storage-handoff.md`）。
-- **运行特征**:
-  - 轻量后台常驻（采用有界内存队列与活跃连接表回收机制）；
-  - UI 随开随用，关闭 UI 完全不影响后台采集；
+- **运行特征与生命周期边界**:
+  - Collector 作为 Runtime 的独立进程可在 UI 未运行时继续工作；Phase 3E-1 不提供 Windows background residence 或自动托管；
+  - UI 随开随用；关闭 UI 仅终止 Query API，不终止已经独立运行的 Runtime/Collector；
   - Controller 不可用时通过指数退避 + Jitter 自动恢复。
 
 ### Storage (已确认生产架构)
@@ -103,7 +104,7 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   - **Tauri / Rust**: 仅负责桌面原生窗口生命周期与 Go Query API Sidecar 启停，生成单次会话高熵 Bearer Token（>=256-bit），**严禁** 在 Rust 中实现 Analytics SQL、核算或存储业务逻辑；Phase 3E-1 不自动 spawn/stop `proxylens-runtime`；
   - **Go Local Query API (`proxylens-query-api`)**: 以只读模式（`query_only=ON`, `busy_timeout=10000`）打开数据库，严格绑定 `127.0.0.1` 随机端口，校验 Bearer Token 与 CORS，完全复用 `storage.AnalyticsService` 与 `storage.QueryService`；
   - **React / TypeScript**: 纯 Web 前端，通过 TanStack React Query 消费 HTTP JSON API，**严禁** 直接读取 SQLite 数据库；
-  - **零耦合生命周期**: UI 随开随用，UI 关闭时仅终止 Query API Sidecar，后台常驻 Collector 保持独立运行，完全不受影响。
+  - **零耦合生命周期**: UI 随开随用，UI 关闭时仅终止 Query API Sidecar；已经独立运行的 Runtime/Collector 保持运行，完全不受 UI 生命周期影响。这不等同于 Phase 3E-1 已提供自动启动或 Windows background residence。
 
 ### 2.1 Desktop data path contract (Phase 3E-1)
 
@@ -376,7 +377,7 @@ Phase 1 / Phase 2 应建立真实 benchmark，再根据实测结果确定：
 当前真正确定的只有：
 
 1. **旁路只读**：ProxyLens 不进入网络主路径。
-2. **Collector / UI 解耦**：为了历史连续性，接受一个轻量 Collector 后台运行；UI 随用随开。
+2. **Collector / UI 解耦**：为了历史连续性，Runtime/Collector 可以在 UI 未运行时独立工作；Phase 3E-2 才决定如何提供 Windows background residence、UI 关闭后持续运行、single-instance 与 ownership。
 3. **Mihomo First**：第一阶段只使用 Mihomo External Controller，除非实测证明不足，否则不引入第二套底层网络观测机制。
 4. **本地持久化**：历史必须保存在本机；具体存储实现仍需验证。
 5. **显式 Monitoring Gap**：采集中断必须独立表达，不能混入 Unknown。

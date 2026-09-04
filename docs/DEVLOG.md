@@ -16,7 +16,7 @@
 - **Runtime composition**：mock controller + temporary DB E2E 验证采集、Accounting freshness、read-only query、DB reopen 与 clean session closure；
 - **Desktop contract**：正式路径为 `%LOCALAPPDATA%\ProxyLens\data\proxylens.db`，env override precedence 固定；Tauri resolver 保持只读 `DB_NOT_READY` 语义，bundle 同时构建两个 Go binary；
 - **验证边界**：本阶段正式验收不使用真实 FLClash/Mihomo lifecycle、真实 Controller validation、Windows background supervisor 或 Phase 4。
-- **验证卫生记录**：初次全量测试发现旧 crash smoke 曾使用 `127.0.0.1:9090`，该次只读连接结果明确排除出验收；测试随后改用 mock controller，并加入 AST endpoint guard。无真实 FLClash/Mihomo 生命周期或配置写操作。
+- **验证卫生记录**：初次全量测试发现旧 crash smoke 曾使用 `127.0.0.1:9090`，该次只读连接结果明确排除出验收；测试随后改用 mock controller。最终 safety guard 递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；无真实 FLClash/Mihomo 生命周期或配置写操作。
 
 ---
 

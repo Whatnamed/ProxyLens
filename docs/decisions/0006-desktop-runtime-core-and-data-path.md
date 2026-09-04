@@ -39,6 +39,8 @@ Mihomo External Controller (read-only)
 
 `CollectorRunner` 只接受 caller-owned `context.Context`，不创建全局 signal handler、不读取 stdin、不调用 `os.Exit`。它保证 queue worker join、SQLite session end/close 顺序和 fatal error 返回。
 
+Reusable library boundary additionally requires an explicit, non-empty `ControllerURL`。`NewCollectorRunner` 对空或全空白的 `ControllerURL` 直接返回错误，不得静默从 `config.DefaultConfig()` 继承真实 Controller 默认值。正式 CLI 可以自行解析其兼容默认值，但必须将解析后的 URL 显式传入；测试和其他 library caller 必须提供自己的受控 URL，Runtime 集成测试使用 mock controller。
+
 Controller 侧只使用 `GET /version` 与 `GET/WS /connections`。Validation fault injection 仍是显式 options，不进入 Runtime 的默认路径；Secret 只来自内存/options 或 `MIHOMO_SECRET`，不写入日志。
 
 ### 2.3 Scheduled Accounting
@@ -90,6 +92,7 @@ Go 与 Rust 各自保留小型 resolver，并由 deterministic tests 锁定相�
 ## 4. Verification
 
 - `collector/pkg/runtime` unit tests cover cancellation, skip-if-fresh, no-events, retry, non-overlap and path precedence;
+- `NewCollectorRunner` unit tests reject empty/blank `ControllerURL`; the safety guard recursively scans the collector test tree and requires every subprocess `run` call to pass an explicit `--controller`;
 - `collector/test/runtime_core_test.go` uses only an `httptest.Server`, mock WebSocket and `t.TempDir()` SQLite DB to verify collection, scheduled accounting, freshness, read-only query and clean reopen;
 - subprocess crash regression also uses a mock controller rather than the conventional real Controller port;
 - UI tests cover the Tauri resolver path contract, and the binary build script produces both `proxylens-query-api-<target>` and `proxylens-runtime-<target>`;

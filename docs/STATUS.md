@@ -7,9 +7,8 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3E Desktop Runtime Integration — Runtime Core implemented / Windows lifecycle pending；Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
-- **活动分支**：`feat/desktop-runtime-core`
-- **当前代码线**：以当前 Git branch HEAD 与对应远端分支为准；本文件不固定容易漂移的 commit SHA。
+- **当前阶段**：Phase 3E Desktop Runtime Integration — Phase 3E-1 Runtime Core complete / Phase 3E-2 Windows lifecycle pending；Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
+- **代码线**：以当前 checkout 的 Git HEAD 及其相对 `origin/main` 的关系为准；活动分支名和短期 SHA 不在此处硬编码。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
 - **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 `main`；工程/语义 Gate 全部通过。
 - **当前状态与待办**：
@@ -17,7 +16,7 @@
   2. Final Full Tauri multi-fixture / real-data visual acceptance（Deferred：当前不以真实 FLClash/Mihomo lifecycle validation 作为验收路径）。
   3. UI Design System 继续保持 Draft。
 
-### Phase 3E-1 Runtime Core
+### Phase 3E-1 Runtime Core (Complete)
 
 - 已实现可复用 Go live Collector runner；`collector run` 保持为薄 CLI wrapper；
 - 已实现 standalone `proxylens-runtime` 与 30s configurable scheduled Accounting，包含 skip-if-fresh、no-events skip、non-reentrant、failure non-fatal 与 graceful cancellation；
@@ -83,7 +82,7 @@
 - Phase 3E-1 Go runtime/scheduler mock E2E、Tauri path unit tests、双 binary build 与 Tauri release build 均已完成本地验证；这些结果不是 GitHub CI PASS。
 - 本任务正式 runtime 测试使用 `httptest` / mock WebSocket 与隔离临时 SQLite DB；真实 FLClash/Mihomo lifecycle 与 real-data validation 未纳入本阶段正式验收。
 - `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
-- 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller，并增加 AST 守卫防止 subprocess 测试再次直接使用该 endpoint；未发生真实网络生命周期或 Mihomo 写操作。
+- 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller；最终 AST 守卫递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；未发生真实网络生命周期或 Mihomo 写操作。
 
 ### Rendered visual QA
 
