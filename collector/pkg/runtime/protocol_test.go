@@ -99,3 +99,21 @@ func TestSupervisorHandshakeValidation(t *testing.T) {
 		t.Fatal("invalid Runtime restart handshake unexpectedly succeeded")
 	}
 }
+
+func TestSupervisorStartingHandshakeConfirmsOwnershipWithoutRuntimePID(t *testing.T) {
+	var buffer bytes.Buffer
+	if err := EncodeSupervisorReady(&buffer, SupervisorVersion, 1, SupervisorReadyInfo{
+		RuntimeState: SupervisorRuntimeStateStarting,
+	}); err != nil {
+		t.Fatalf("starting Supervisor handshake failed: %v", err)
+	}
+	if strings.Contains(buffer.String(), "runtimePid") {
+		t.Fatalf("starting handshake unexpectedly included runtimePid: %s", buffer.String())
+	}
+	if err := EncodeSupervisorReady(&buffer, SupervisorVersion, 1, SupervisorReadyInfo{
+		RuntimeState: SupervisorRuntimeStateStarting,
+		RuntimePID:   34,
+	}); err == nil {
+		t.Fatal("starting Supervisor handshake with Runtime PID unexpectedly succeeded")
+	}
+}

@@ -47,6 +47,12 @@ restarts it after process exit using bounded backoff (1s initial, 2x, 30s
 maximum, reset after a stable run). It does not open SQLite, implement
 Collector/Accounting logic, or read Mihomo directly.
 
+After acquiring the per-DB Supervisor mutex, it first emits an ownership
+confirmation with `runtimeState: "starting-retrying"` and its exact Supervisor
+PID. Tauri may retain that exact candidate while Runtime startup is retrying;
+the later `started` or `already-running` state reports Runtime readiness without
+changing Supervisor ownership.
+
 An exact `STOP\n` on Supervisor stdin cancels the Supervisor. If it owns the
 Runtime child, it sends the same exact STOP, waits a bounded interval, and
 terminates only that recorded child if necessary. An externally observed
@@ -129,6 +135,8 @@ channel.
 This ADR does not implement login/autostart, Startup shortcuts, Scheduled
 Tasks, Windows Service, tray ownership, installer hooks, uninstall cleanup,
 upgrade replacement, final Settings UI, installed-path acceptance, or Phase 4.
+Automatic recovery after the Supervisor process itself exits without a UI
+restart remains part of the installed autostart/ownership work in Phase 3E-2B2.
 Real FLClash/Mihomo lifecycle and final real-data visual acceptance remain
 deferred.
 

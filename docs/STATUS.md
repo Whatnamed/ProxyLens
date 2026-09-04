@@ -28,15 +28,16 @@
 
 - Runtime 按归一化 authority DB path 使用 Windows crash-safe named-mutex ownership；同一 DB 的重复候选返回 `ALREADY_RUNNING`，不同 DB 可并行；
 - `proxylens-runtime` 输出无 secret/token 的 `READY` / `ALREADY_RUNNING` JSON handshake；`MIHOMO_SECRET` 仅从 inherited environment 传到 `CollectorOptions.Secret`，不进入 argv、日志或 SQLite；
-- Tauri 使用 bundled Supervisor ensure-start，Supervisor 使用同一 authority DB 的 Runtime mutex 观察/启动/重启 Runtime；先完成 Supervisor handshake/DB 就绪，再解析 existing-only Query path 并启动只读 Query API；
-- UI close 只清理 Query API；Supervisor 与其 Runtime/Collector 保持运行，重开 UI 通过 `AlreadyRunning` 复用既有 ownership；bootstrap status 对外仅报告 `Started`、`AlreadyRunning`、`Failed` 或 `NotAttempted` 事实；
+- Tauri 使用 bundled Supervisor ensure-start，Supervisor 使用同一 authority DB 的 Runtime mutex 观察/启动/重启 Runtime；先完成 Supervisor ownership handshake/DB 就绪，再解析 existing-only Query path 并启动只读 Query API；
+- UI close 只清理 Query API；Supervisor 与其 Runtime/Collector 保持运行，重开 UI 通过 `AlreadyRunning` 复用既有 ownership；bootstrap status 对外仅报告 `Started`、`Starting`、`AlreadyRunning`、`Failed` 或 `NotAttempted` 事实；
 - `proxylens-supervisor config` 提供 non-secret `runtime.json` 的 Controller URL 管理与 stdin-only Secret 管理；生产 Secret 仅写 Windows Credential Manager，E2E 只使用随机 `ProxyLens/Test/<UUID>` target，`MIHOMO_SECRET` 优先作为显式环境 override；
-- Supervisor 进程崩溃/Runtime child 退出时按 bounded backoff 重启整个 Runtime；Supervisor 不读取 Mihomo、不写 SQLite 业务数据，Runtime 仍是唯一 writer authority；
+- Runtime whole-process / child crash 时由当前 Supervisor 按 bounded backoff 重启整个 Runtime；Supervisor 自身退出后的无 UI 自动恢复属于 Phase 3E-2B2 installed autostart/ownership；Supervisor 不读取 Mihomo、不写 SQLite 业务数据，Runtime 仍是唯一 writer authority；
 - mock-only Windows lifecycle smoke 已验证 first launch、UI-close persistence、duplicate candidate、reopen reuse、different-DB concurrency 与 GET-only mock Controller。
 
 ### Phase 3E-2B1 Supervisor & Secure Runtime Configuration (Complete)
 
 - 已实现独立 `proxylens-supervisor` executable：per-authority-DB Supervisor single-instance、Runtime mutex presence probe、已有 Runtime observation、exact child monitoring 与 bounded crash restart；
+- Supervisor 取得 per-DB ownership 后先报告 `runtimeState=starting-retrying`；即使 Runtime 暂时启动失败，Tauri 也保留这个 exact Supervisor，并由同一 Supervisor 继续 bounded retry，已有 DB 仍可走 Query read-only fallback；
 - 已实现 `STOP\n` lifecycle contract：仅 exact `STOP` 取消，stdin EOF/其它行忽略；Supervisor graceful stop 只停止自己拥有的 Runtime，外部观察到的 Runtime 不被停止；
 - 已实现 `%LOCALAPPDATA%\ProxyLens\config\runtime.json` v1 non-secret config 与 `PROXYLENS_CONFIG_DIR` test/dev override，原子保存、schema/URL validation 与 DB path separation；
 - 已实现 Windows Credential Manager Generic Credential：固定 production target、`CRED_PERSIST_LOCAL_MACHINE`、random E2E test target isolation；Secret 不进入 JSON、argv、handshake 或日志；

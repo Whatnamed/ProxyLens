@@ -83,6 +83,7 @@ type SupervisorRuntimeState string
 const (
 	SupervisorRuntimeStateStarted        SupervisorRuntimeState = "started"
 	SupervisorRuntimeStateAlreadyRunning SupervisorRuntimeState = "already-running"
+	SupervisorRuntimeStateStarting       SupervisorRuntimeState = "starting-retrying"
 )
 
 type SupervisorReadyInfo struct {
@@ -120,11 +121,18 @@ func EncodeSupervisorReady(writer io.Writer, supervisorVersion string, pid int, 
 	if supervisorVersion == "" || pid <= 0 {
 		return fmt.Errorf("supervisor READY requires a non-empty version and positive PID")
 	}
-	if info.RuntimeState != SupervisorRuntimeStateStarted && info.RuntimeState != SupervisorRuntimeStateAlreadyRunning {
+	if info.RuntimeState != SupervisorRuntimeStateStarted && info.RuntimeState != SupervisorRuntimeStateAlreadyRunning && info.RuntimeState != SupervisorRuntimeStateStarting {
 		return fmt.Errorf("supervisor READY requires a supported Runtime state")
 	}
-	if info.RuntimeState == SupervisorRuntimeStateStarted && info.RuntimePID <= 0 {
-		return fmt.Errorf("supervisor READY with started Runtime requires a positive Runtime PID")
+	switch info.RuntimeState {
+	case SupervisorRuntimeStateStarted:
+		if info.RuntimePID <= 0 {
+			return fmt.Errorf("supervisor READY with started Runtime requires a positive Runtime PID")
+		}
+	case SupervisorRuntimeStateAlreadyRunning, SupervisorRuntimeStateStarting:
+		if info.RuntimePID != 0 {
+			return fmt.Errorf("supervisor READY with %s Runtime must not include a Runtime PID", info.RuntimeState)
+		}
 	}
 	return json.NewEncoder(writer).Encode(supervisorReadySignalWire{
 		Type:              SupervisorReadySignalType,

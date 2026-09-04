@@ -207,9 +207,12 @@ func waitForSupervisorJSON(t *testing.T, reader io.Reader, signalType string) st
 				t.Fatalf("Supervisor output closed before %s", signalType)
 			}
 			var payload struct {
-				Type string `json:"type"`
+				Type         string `json:"type"`
+				RuntimeState string `json:"runtimeState"`
 			}
-			if json.Unmarshal([]byte(line), &payload) == nil && payload.Type == signalType {
+			if json.Unmarshal([]byte(line), &payload) == nil &&
+				payload.Type == signalType &&
+				!(signalType == "proxylens-supervisor-ready" && payload.RuntimeState == "starting-retrying") {
 				return line
 			}
 		case <-deadline.C:

@@ -10,12 +10,14 @@ use tauri::{AppHandle, Manager};
 
 pub const SUPERVISOR_READY_TYPE: &str = "proxylens-supervisor-ready";
 pub const SUPERVISOR_ALREADY_RUNNING_TYPE: &str = "proxylens-supervisor-already-running";
+pub const SUPERVISOR_RUNTIME_STATE_STARTING: &str = "starting-retrying";
 pub const SUPERVISOR_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum SupervisorBootstrapState {
     NotAttempted,
     Started,
+    Starting,
     AlreadyRunning,
     Failed,
 }
@@ -83,7 +85,10 @@ pub fn parse_supervisor_signal(line: &str) -> Option<SupervisorSignal> {
                     runtime_state,
                     runtime_pid: Some(runtime_pid),
                 })
-            } else if runtime_state == "already-running" && wire.runtime_pid.is_none() {
+            } else if (runtime_state == "already-running"
+                || runtime_state == SUPERVISOR_RUNTIME_STATE_STARTING)
+                && wire.runtime_pid.is_none()
+            {
                 Some(SupervisorSignal::Ready {
                     supervisor_version: wire.supervisor_version,
                     pid,
@@ -151,6 +156,7 @@ pub async fn ensure_supervisor(
     drop(line_tx);
 
     let deadline = Instant::now() + SUPERVISOR_READY_TIMEOUT;
+    let mut ownership_confirmed = false;
     loop {
         match receive_supervisor_signal(&line_rx) {
             Some(SupervisorSignal::Ready {
@@ -159,19 +165,25 @@ pub async fn ensure_supervisor(
                 runtime_pid,
                 ..
             }) if pid == candidate_pid => {
-                return Ok(SupervisorBootstrap {
-                    status: SupervisorBootstrapStatus {
-                        state: SupervisorBootstrapState::Started,
-                        pid: Some(candidate_pid),
-                        error: None,
-                        runtime_state: Some(runtime_state),
-                        runtime_pid,
-                    },
-                    child: Some(SupervisorChild { child }),
-                });
+                if runtime_state == SUPERVISOR_RUNTIME_STATE_STARTING {
+                    ownership_confirmed = true;
+                } else {
+                    return Ok(SupervisorBootstrap {
+                        status: SupervisorBootstrapStatus {
+                            state: SupervisorBootstrapState::Started,
+                            pid: Some(candidate_pid),
+                            error: None,
+                            runtime_state: Some(runtime_state),
+                            runtime_pid,
+                        },
+                        child: Some(SupervisorChild { child }),
+                    });
+                }
             }
             Some(SupervisorSignal::Ready { .. }) => {
-                terminate_candidate(&mut child);
+                if !ownership_confirmed {
+                    terminate_candidate(&mut child);
+                }
                 return Err(
                     "Supervisor readiness signal PID did not match the spawned candidate"
                         .to_string(),
@@ -199,13 +211,27 @@ pub async fn ensure_supervisor(
             }
             Ok(None) => {}
             Err(error) => {
-                terminate_candidate(&mut child);
+                if !ownership_confirmed {
+                    terminate_candidate(&mut child);
+                }
                 return Err(format!("Failed to observe Supervisor candidate: {error}"));
             }
         }
         if Instant::now() >= deadline {
+            if ownership_confirmed {
+                return Ok(SupervisorBootstrap {
+                    status: SupervisorBootstrapStatus {
+                        state: SupervisorBootstrapState::Starting,
+                        pid: Some(candidate_pid),
+                        error: None,
+                        runtime_state: Some(SUPERVISOR_RUNTIME_STATE_STARTING.to_string()),
+                        runtime_pid: None,
+                    },
+                    child: Some(SupervisorChild { child }),
+                });
+            }
             terminate_candidate(&mut child);
-            return Err("Timed out waiting 5s for Supervisor readiness signal".to_string());
+            return Err("Timed out waiting 5s for Supervisor ownership signal".to_string());
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -321,6 +347,22 @@ mod tests {
                 supervisor_version: "v1".to_string(),
                 pid: 1234,
                 runtime_state: "already-running".to_string(),
+                runtime_pid: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_supervisor_ownership_before_runtime_ready() {
+        let signal = parse_supervisor_signal(
+            r#"{"type":"proxylens-supervisor-ready","supervisorVersion":"v1","pid":1234,"runtimeState":"starting-retrying"}"#,
+        );
+        assert_eq!(
+            signal,
+            Some(SupervisorSignal::Ready {
+                supervisor_version: "v1".to_string(),
+                pid: 1234,
+                runtime_state: "starting-retrying".to_string(),
                 runtime_pid: None,
             })
         );

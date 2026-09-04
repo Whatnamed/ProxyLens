@@ -158,6 +158,7 @@ fn supervisor_bootstrap_succeeded(state: &State<AppState>) -> bool {
     matches!(
         state.supervisor_status.lock().unwrap().state.clone(),
         supervisor_process::SupervisorBootstrapState::Started
+            | supervisor_process::SupervisorBootstrapState::Starting
             | supervisor_process::SupervisorBootstrapState::AlreadyRunning
     )
 }

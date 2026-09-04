@@ -164,14 +164,20 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 	defer func() { _ = ownership.Close() }()
 
+	// The Supervisor owns the per-DB process-continuity lease before it can
+	// probe or start Runtime. Publish that fact separately through the existing
+	// machine handshake, while the starting-retrying Runtime state makes clear
+	// that the child has not reached Runtime READY yet.
+	s.emitReady(SupervisorReadyInfo{RuntimeState: SupervisorRuntimeStateStarting})
+	runtimeReadyEmitted := false
+
 	presence, err := ProbeRuntimePresence(s.dbPath)
 	if err != nil {
 		return fmt.Errorf("failed to probe Runtime presence: %w", err)
 	}
-	readyEmitted := false
 	if presence == RuntimePresent {
 		s.emitReady(SupervisorReadyInfo{RuntimeState: SupervisorRuntimeStateAlreadyRunning})
-		readyEmitted = true
+		runtimeReadyEmitted = true
 	}
 
 	backoff := NewRestartBackoff(s.restartPolicy)
@@ -195,9 +201,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				continue
 			}
 			if presence == RuntimePresent {
-				if !readyEmitted {
+				if !runtimeReadyEmitted {
 					s.emitReady(SupervisorReadyInfo{RuntimeState: SupervisorRuntimeStateAlreadyRunning})
-					readyEmitted = true
+					runtimeReadyEmitted = true
 				}
 				if !waitContext(ctx, s.probeInterval) {
 					return nil
@@ -215,22 +221,22 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			}
 			if signal.Type == RuntimeAlreadyRunningSignalType {
 				_ = candidate.wait()
-				if !readyEmitted {
+				if !runtimeReadyEmitted {
 					if current, probeErr := ProbeRuntimePresence(s.dbPath); probeErr == nil && current == RuntimePresent {
 						s.emitReady(SupervisorReadyInfo{RuntimeState: SupervisorRuntimeStateAlreadyRunning})
-						readyEmitted = true
+						runtimeReadyEmitted = true
 					}
 				}
 				continue
 			}
 
 			owned = candidate
-			if !readyEmitted {
+			if !runtimeReadyEmitted {
 				s.emitReady(SupervisorReadyInfo{
 					RuntimeState: SupervisorRuntimeStateStarted,
 					RuntimePID:   signal.PID,
 				})
-				readyEmitted = true
+				runtimeReadyEmitted = true
 			} else {
 				restartCount++
 				if s.onRuntimeRestarted != nil {

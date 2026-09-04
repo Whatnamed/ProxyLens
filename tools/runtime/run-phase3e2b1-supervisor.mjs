@@ -47,6 +47,55 @@ function resolveBundledBinary(name) {
   return candidates[0];
 }
 
+function buildRetryRuntimeFixture(tempRoot) {
+  const sourcePath = path.join(tempRoot, 'retry-runtime-fixture.go');
+  const binaryPath = path.join(tempRoot, 'retry-runtime-fixture.exe');
+  fs.writeFileSync(sourcePath, String.raw`package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+)
+
+func main() {
+	countPath := os.Getenv("PROXYLENS_RETRY_COUNT_FILE")
+	count := 0
+	if data, err := os.ReadFile(countPath); err == nil {
+		count, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+	}
+	count++
+	if err := os.WriteFile(countPath, []byte(strconv.Itoa(count)), 0o600); err != nil {
+		os.Exit(24)
+	}
+	failUntil, _ := strconv.Atoi(os.Getenv("PROXYLENS_RETRY_FAIL_UNTIL"))
+	if count <= failUntil {
+		os.Exit(23)
+	}
+	fmt.Fprintf(os.Stdout, "{\"type\":\"proxylens-runtime-ready\",\"runtimeVersion\":\"0.7.0-phase3e2a\",\"pid\":%d}\n", os.Getpid())
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		if scanner.Text() == "STOP" {
+			return
+		}
+	}
+}`);
+  const result = spawnSync('go', ['build', '-o', binaryPath, sourcePath], {
+    cwd: path.join(rootDir, 'collector'),
+    env: { ...process.env, GO111MODULE: 'off' },
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`Failed to build retry Runtime fixture: ${result.stderr || result.stdout}`);
+  }
+  requireFile(binaryPath, 'retry Runtime fixture');
+  return binaryPath;
+}
+
 function assertMockControllerUrl(controllerUrl) {
   if (!controllerUrl) throw new Error('Mock Controller URL is required before any process launch.');
   const parsed = new URL(controllerUrl);
@@ -296,6 +345,16 @@ function jsonLineWithType(type) {
   };
 }
 
+function supervisorRuntimeReadyLine(line) {
+  try {
+    const value = JSON.parse(line);
+    return value?.type === 'proxylens-supervisor-ready'
+      && (value.runtimeState === 'started' || value.runtimeState === 'already-running');
+  } catch {
+    return false;
+  }
+}
+
 function testEnvironment(controllerUrl, dataDir, configDir, credentialTarget, statusFile) {
   assertMockControllerUrl(controllerUrl);
   const environment = { ...process.env };
@@ -394,6 +453,65 @@ async function runTauriScenario(tauriBinaryPath, environment, expectedState, lab
   return { status, queryPort: Number(queryMatch[1]), capture };
 }
 
+function readRetryCount(countPath) {
+  try {
+    return Number.parseInt(fs.readFileSync(countPath, 'utf8').trim(), 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function runTauriRetryScenario(tauriBinaryPath, environment, countPath, statusFile, failUntil, label) {
+  const capture = spawnTauri(tauriBinaryPath, environment, label);
+  const bootstrapLine = await capture.waitFor((line) => line.startsWith('PROXYLENS_SUPERVISOR_BOOTSTRAP '));
+  const status = JSON.parse(bootstrapLine.slice('PROXYLENS_SUPERVISOR_BOOTSTRAP '.length));
+  if (
+    status.state !== 'Starting'
+    || status.runtimeState !== 'starting-retrying'
+    || !status.pid
+    || status.runtimePid
+  ) {
+    throw new Error(`${label} did not report ownership-confirmed Runtime retry state: ${bootstrapLine}`);
+  }
+  trackedPids.add(status.pid);
+  await waitForPidState(status.pid, true);
+  const attemptsAtBootstrap = readRetryCount(countPath);
+  if (attemptsAtBootstrap < 2 || attemptsAtBootstrap >= failUntil) {
+    throw new Error(`${label} did not cross the ownership/retry boundary before recovery.`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  const attemptsAfterWait = readRetryCount(countPath);
+  if (attemptsAfterWait <= attemptsAtBootstrap) {
+    throw new Error(`${label} Supervisor did not continue Runtime retry after Tauri ownership confirmation.`);
+  }
+
+  const queryLine = await capture.waitFor((line) => line.includes('Query sidecar ready at:'));
+  const queryMatch = queryLine.match(/Query sidecar ready at:\s*http:\/\/127\.0\.0\.1:(\d+)/);
+  if (!queryMatch) throw new Error(`${label} did not report a loopback Query API URL`);
+  await capture.waitFor((line) => line.includes('PROXYLENS_WEBVIEW_E2E_READY meta=1 summary=1 connections=1'));
+
+  const started = await waitForStatusLine(
+    statusFile,
+    (value) => value.type === 'proxylens-supervisor-ready'
+      && value.runtimeState === 'started'
+      && value.pid === status.pid,
+    15000,
+  );
+  if (!started.runtimePid || started.pid !== status.pid) {
+    throw new Error(`${label} Supervisor did not report a recovered Runtime: ${JSON.stringify(started)}`);
+  }
+  if (readRetryCount(countPath) <= failUntil) {
+    throw new Error(`${label} Runtime fixture did not reach its recovery threshold.`);
+  }
+  trackedPids.add(started.runtimePid);
+
+  const closed = await capture.waitForClose(25000);
+  if (closed.code !== 0) throw new Error(`${label} exited unexpectedly: ${JSON.stringify(closed)}`);
+  await waitForPidState(status.pid, true);
+  await waitForPidState(started.runtimePid, true);
+  return { status, runtimePid: started.runtimePid, queryPort: Number(queryMatch[1]), capture };
+}
+
 function isPidAlive(pid) {
   if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -487,14 +605,21 @@ async function main() {
   const dataDir = path.join(tempRoot, 'data');
   const otherDataDir = path.join(tempRoot, 'other-data');
   const observedDataDir = path.join(tempRoot, 'observed-data');
+  const retryDataDir = path.join(tempRoot, 'retry-data');
+  const retryConfigDir = path.join(tempRoot, 'retry-config');
   const configDir = path.join(tempRoot, 'config');
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(otherDataDir, { recursive: true });
   fs.mkdirSync(observedDataDir, { recursive: true });
+  fs.mkdirSync(retryDataDir, { recursive: true });
+  fs.mkdirSync(retryConfigDir, { recursive: true });
   fs.mkdirSync(configDir, { recursive: true });
   const dbPath = path.join(dataDir, 'proxylens.db');
   const otherDbPath = path.join(otherDataDir, 'proxylens.db');
   const observedDbPath = path.join(observedDataDir, 'proxylens.db');
+  const retryDbPath = path.join(retryDataDir, 'proxylens.db');
+  const retryCountPath = path.join(tempRoot, 'retry-runtime-count.txt');
+  const retryStatusFile = path.join(tempRoot, 'retry-supervisor-status.jsonl');
   const statusFile = path.join(tempRoot, 'supervisor-status.jsonl');
   const credentialTarget = `ProxyLens/Test/${crypto.randomUUID()}`;
   const environment = testEnvironment(controller.url, dataDir, configDir, credentialTarget, statusFile);
@@ -507,6 +632,8 @@ async function main() {
   let observedRuntime = null;
   let observedRuntimePid = null;
   let observedRuntimeRestartPid = null;
+  let retrySupervisorPid = null;
+  let retryRuntimePid = null;
   let credentialCleared = false;
 
   try {
@@ -528,6 +655,50 @@ async function main() {
       throw new Error(`unexpected secure config status: ${JSON.stringify(afterSecret)}`);
     }
     console.log('    PASS: config URL persisted, secret stored out-of-band, status exposed presence only');
+
+    console.log('[R] Tauri retains an ownership-confirmed Supervisor while a fake Runtime retries beyond 5s');
+    const retrySeed = spawnRuntime(runtimeBinary, retryDbPath, controller.url, environment, 'Retry-seed-runtime');
+    const retrySeedReadyLine = await retrySeed.waitFor(jsonLineWithType('proxylens-runtime-ready'), 10000);
+    const retrySeedReady = JSON.parse(retrySeedReadyLine);
+    await waitForPidState(retrySeedReady.pid, true);
+    const retrySeedRequestStart = controller.requests.length;
+    const retrySeedRequestDeadline = Date.now() + 5000;
+    while (
+      !controller.requests.slice(retrySeedRequestStart).some((request) => request.path === '/connections')
+      && Date.now() < retrySeedRequestDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!controller.requests.slice(retrySeedRequestStart).some((request) => request.path === '/connections')) {
+      throw new Error('Retry seed Runtime did not connect to the mock Controller.');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await stopExactProcess(retrySeed);
+    const retryFailUntil = 16;
+    const retryRuntimeFixture = buildRetryRuntimeFixture(tempRoot);
+    const retryEnvironment = { ...environment };
+    delete retryEnvironment.PROXYLENS_CONTROLLER_URL;
+    retryEnvironment.PROXYLENS_DATA_DIR = retryDataDir;
+    retryEnvironment.PROXYLENS_CONFIG_DIR = retryConfigDir;
+    retryEnvironment.PROXYLENS_E2E_STATUS_FILE = retryStatusFile;
+    retryEnvironment.PROXYLENS_RUNTIME_EXE = retryRuntimeFixture;
+    retryEnvironment.PROXYLENS_RETRY_COUNT_FILE = retryCountPath;
+    retryEnvironment.PROXYLENS_RETRY_FAIL_UNTIL = String(retryFailUntil);
+    const retry = await runTauriRetryScenario(
+      tauriBinary,
+      retryEnvironment,
+      retryCountPath,
+      retryStatusFile,
+      retryFailUntil,
+      'Tauri-retry',
+    );
+    retrySupervisorPid = retry.status.pid;
+    retryRuntimePid = retry.runtimePid;
+    await stopExactPid(retrySupervisorPid);
+    await stopExactPid(retryRuntimePid);
+    retrySupervisorPid = null;
+    retryRuntimePid = null;
+    console.log('    PASS: fake Runtime failed beyond the old 5s Tauri threshold; exact Supervisor ownership survived, retry continued, and the same Supervisor accepted later Runtime recovery');
 
     console.log('[A] Tauri starts Supervisor, Supervisor starts Runtime, Query/frontend become ready');
     const first = await runTauriScenario(tauriBinary, environment, 'Started', 'Tauri-A');
@@ -585,7 +756,7 @@ async function main() {
 
     console.log('[E] different authority DB can run a second Supervisor/Runtime pair');
     otherSupervisor = spawnSupervisor(supervisorBinary, otherDbPath, environment, 'Supervisor-other-db');
-    const otherReadyLine = await otherSupervisor.waitFor(jsonLineWithType('proxylens-supervisor-ready'), 10000);
+    const otherReadyLine = await otherSupervisor.waitFor(supervisorRuntimeReadyLine, 10000);
     const otherReady = JSON.parse(otherReadyLine);
     otherRuntimePid = otherReady.runtimePid;
     trackedPids.add(otherRuntimePid);
@@ -607,7 +778,7 @@ async function main() {
       throw new Error(`External Runtime did not become alive: ${externalReadyLine}`);
     }
     observedSupervisor = spawnSupervisor(supervisorBinary, observedDbPath, environment, 'Supervisor-observer');
-    const observerReadyLine = await observedSupervisor.waitFor(jsonLineWithType('proxylens-supervisor-ready'), 10000);
+    const observerReadyLine = await observedSupervisor.waitFor(supervisorRuntimeReadyLine, 10000);
     const observerReady = JSON.parse(observerReadyLine);
     trackedPids.add(observerReady.pid);
     if (observerReady.runtimeState !== 'already-running' || observerReady.runtimePid || observerReady.pid !== observedSupervisor.child.pid) {
@@ -657,6 +828,12 @@ async function main() {
     }
     if (supervisorPid && isPidAlive(supervisorPid)) {
       try { await stopExactPid(supervisorPid); } catch (error) { console.error(`[cleanup] ${error.message}`); }
+    }
+    if (retrySupervisorPid && isPidAlive(retrySupervisorPid)) {
+      try { await stopExactPid(retrySupervisorPid); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); }
+    }
+    if (retryRuntimePid && isPidAlive(retryRuntimePid)) {
+      try { await stopExactPid(retryRuntimePid); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); }
     }
     for (const supervisor of trackedSupervisors) {
       if (!supervisor.closed) {
