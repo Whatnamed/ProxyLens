@@ -33,10 +33,11 @@ func main() {
 		return
 	}
 
-	resolvedControllerURL, controllerSource, err := proxylensruntime.ResolveControllerURL(
+	resolvedControllerURL, controllerSource, err := proxylensruntime.ResolveControllerURLForMode(
 		*controllerURL,
 		os.Getenv(proxylensruntime.ControllerURLEnv),
 		defaults.ControllerURL,
+		os.Getenv(proxylensruntime.E2EModeEnv) == "1",
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to resolve controller URL: %v\n", err)

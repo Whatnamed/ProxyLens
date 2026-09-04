@@ -13,6 +13,7 @@ const (
 	DataDirEnv       = "PROXYLENS_DATA_DIR"
 	LocalAppDataEnv  = "LOCALAPPDATA"
 	ControllerURLEnv = "PROXYLENS_CONTROLLER_URL"
+	E2EModeEnv       = "PROXYLENS_E2E_MODE"
 	DatabaseFileName = "proxylens.db"
 )
 
