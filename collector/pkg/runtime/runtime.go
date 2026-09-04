@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/storage"
@@ -10,12 +11,19 @@ import (
 
 type LogFunc func(format string, args ...any)
 
+type RuntimeReadyInfo struct {
+	RuntimeVersion string
+}
+
+type RuntimeReadyCallback func(RuntimeReadyInfo)
+
 type RuntimeOptions struct {
 	DBPath             string
 	Collector          CollectorOptions
 	AccountingInterval time.Duration
 	AccountingNotes    string
 	Logger             LogFunc
+	OnReady            RuntimeReadyCallback
 }
 
 type Runtime struct {
@@ -24,6 +32,8 @@ type Runtime struct {
 	accountingInterval time.Duration
 	accountingNotes    string
 	logger             LogFunc
+	onReady            RuntimeReadyCallback
+	readyOnce          sync.Once
 }
 
 type RuntimeResult struct {
@@ -83,6 +93,7 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 		accountingInterval: interval,
 		accountingNotes:    notes,
 		logger:             logger,
+		onReady:            opts.OnReady,
 	}, nil
 }
 
@@ -96,10 +107,20 @@ func (r *Runtime) CollectorSessionID() string {
 
 // Run initializes the writer DB, starts collector and scheduler independently,
 // and enforces scheduler-first shutdown when the caller cancels the runtime.
-func (r *Runtime) Run(ctx context.Context) (*RuntimeResult, error) {
+func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ownership, err := AcquireRuntimeOwnership(r.dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := ownership.Close(); closeErr != nil && runErr == nil {
+			runErr = fmt.Errorf("failed to release runtime ownership: %w", closeErr)
+		}
+	}()
+
 	db, err := storage.OpenDB(ctx, r.dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize runtime database at %s: %w", r.dbPath, err)
@@ -159,6 +180,15 @@ func (r *Runtime) Run(ctx context.Context) (*RuntimeResult, error) {
 	go func() {
 		schedulerDone <- scheduler.Run(schedulerCtx)
 	}()
+
+	// The local writer DB, scheduler, and collector goroutine have all crossed
+	// their startup boundary. Controller reachability is deliberately not part
+	// of this readiness contract because the collector owns retry semantics.
+	r.readyOnce.Do(func() {
+		if r.onReady != nil {
+			r.onReady(RuntimeReadyInfo{RuntimeVersion: RuntimeVersion})
+		}
+	})
 
 	var outcome collectorOutcome
 	select {

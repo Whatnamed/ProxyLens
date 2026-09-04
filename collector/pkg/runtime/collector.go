@@ -22,7 +22,7 @@ const (
 	// collector_sessions. Keep the legacy collector CLI version stable while the
 	// runtime executable evolves independently.
 	DefaultCollectorVersion = "0.6.0-phase2b2-runtime"
-	RuntimeVersion          = "0.7.0-phase3e1"
+	RuntimeVersion          = "0.7.0-phase3e2a"
 )
 
 // CollectorOptions contains only collector configuration. CLI parsing,

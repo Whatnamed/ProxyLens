@@ -12,6 +12,7 @@ const (
 	DBPathEnv        = "PROXYLENS_DB_PATH"
 	DataDirEnv       = "PROXYLENS_DATA_DIR"
 	LocalAppDataEnv  = "LOCALAPPDATA"
+	ControllerURLEnv = "PROXYLENS_CONTROLLER_URL"
 	DatabaseFileName = "proxylens.db"
 )
 
