@@ -90,7 +90,7 @@ type StateEngine struct {
 	sessionState                            types.SessionState
 	activeMap                               map[string]*ActiveConnectionState
 	disappearedTombstones                   map[string]*disappearedTombstone
-	tombstoneFIFO                           []string
+	tombstoneFIFO                           []tombstoneFIFOEntry
 	prevUploadTotal                         int64
 	prevDownloadTotal                       int64
 	hasEverBeenHealthy                      bool
@@ -136,20 +136,27 @@ func (e *StateEngine) resetTombstones() {
 	e.disappearedTombstones = make(map[string]*disappearedTombstone)
 	e.tombstoneFIFO = nil
 }
+type tombstoneFIFOEntry struct {
+	id   string
+	tomb *disappearedTombstone
+}
 
 // recordDisappearedTombstone preserves a connection's observation state at
 // disappearance so a same-ID + same-Start reappearance can resume the
-// lifecycle with counter-continuation semantics.
+// lifecycle with counter-continuation semantics. A versioned/pointer-aware
+// FIFO queue bounds memory without allowing stale FIFO entries to evict newer
+// tombstones for the same ID.
 func (e *StateEngine) recordDisappearedTombstone(id string, st *ActiveConnectionState, at time.Time) {
-	if _, exists := e.disappearedTombstones[id]; !exists {
-		e.tombstoneFIFO = append(e.tombstoneFIFO, id)
-		for len(e.tombstoneFIFO) > maxDisappearedTombstones {
-			oldest := e.tombstoneFIFO[0]
-			e.tombstoneFIFO = e.tombstoneFIFO[1:]
-			delete(e.disappearedTombstones, oldest)
+	tomb := &disappearedTombstone{state: st, disappearedAt: at}
+	e.disappearedTombstones[id] = tomb
+	e.tombstoneFIFO = append(e.tombstoneFIFO, tombstoneFIFOEntry{id: id, tomb: tomb})
+	for len(e.tombstoneFIFO) > maxDisappearedTombstones {
+		oldest := e.tombstoneFIFO[0]
+		e.tombstoneFIFO = e.tombstoneFIFO[1:]
+		if current, ok := e.disappearedTombstones[oldest.id]; ok && current == oldest.tomb {
+			delete(e.disappearedTombstones, oldest.id)
 		}
 	}
-	e.disappearedTombstones[id] = &disappearedTombstone{state: st, disappearedAt: at}
 }
 
 // takeDisappearedTombstone consumes the tombstone of a re-observed connection.
@@ -174,6 +181,24 @@ func (e *StateEngine) emitEvent(event *types.CollectorEvent) error {
 		return fmt.Errorf("sink emit failure on event %s (%s): %w", event.EventID, event.Type, err)
 	}
 	return nil
+}
+
+// EmitSessionHealth outputs a CollectorHealth event associated with the session,
+// inheriting the engine's current frame and monotonic event sequence.
+func (e *StateEngine) EmitSessionHealth(timestamp time.Time, issue, description string, details map[string]any) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	evDetails := make(map[string]any)
+	for k, v := range details {
+		evDetails[k] = v
+	}
+	evDetails["issue"] = issue
+	evDetails["description"] = description
+	return e.emitEvent(&types.CollectorEvent{
+		Type:      types.EventCollectorHealth,
+		Timestamp: timestamp,
+		Details:   evDetails,
+	})
 }
 
 // controllerUnreachableGapMinDuration bounds the controller-unreachable gap
@@ -646,6 +671,23 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			e.lastSuccessfullyProcessedHealthyStr = frameTsStr
 			e.gapIsOpen = false
 			e.sessionState = types.SessionHealthy
+
+			// Output SamplingResidual to complete the recovery snapshot frame.
+			if err := e.emitEvent(&types.CollectorEvent{
+				Type:      types.EventSamplingResidual,
+				Timestamp: frameTs,
+				Details: map[string]any{
+					"globalUploadDelta":      globalGapUp,
+					"globalDownloadDelta":    globalGapDown,
+					"uniqueObservedUpload":   int64(0),
+					"uniqueObservedDownload": int64(0),
+					"residualUpload":         int64(0),
+					"residualDownload":       int64(0),
+					"frameType":              "recovery",
+				},
+			}); err != nil {
+				return err
+			}
 			return nil
 		}
 	}
@@ -750,6 +792,23 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		e.hasEverBeenHealthy = true
 		e.isBootstrapFrame = false
 		e.sessionState = types.SessionHealthy
+
+		// Output SamplingResidual to complete the bootstrap snapshot frame.
+		if err := e.emitEvent(&types.CollectorEvent{
+			Type:      types.EventSamplingResidual,
+			Timestamp: frameTs,
+			Details: map[string]any{
+				"globalUploadDelta":      int64(0),
+				"globalDownloadDelta":    int64(0),
+				"uniqueObservedUpload":   int64(0),
+				"uniqueObservedDownload": int64(0),
+				"residualUpload":         int64(0),
+				"residualDownload":       int64(0),
+				"frameType":              "bootstrap",
+			},
+		}); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -1040,6 +1099,9 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				return err
 			}
 		} else {
+			// Any prior tombstone for this ID is now replaced/consumed by the new
+			// connection (e.g. different Start or first appearance).
+			e.takeDisappearedTombstone(id)
 			route := attribution.ClassifyRoute(c.Chains)
 			initialClass := attribution.ClassifyInitialAttribution(&c)
 			var relayEvidence map[string]any

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -635,5 +636,234 @@ func TestEmitUnobservedSessionGap(t *testing.T) {
 		if ev.Type == types.EventMonitoringGapOpened {
 			t.Fatalf("healthy session must not record unobserved gap")
 		}
+	}
+}
+
+// TestTombstoneFIFOChurnDoesNotEvictNewestTombstone verifies the versioned
+// FIFO eviction contract: when a connection flaps multiple times, older FIFO
+// entries for that ID being evicted by intervening churn (>4096 other
+// tombstones) MUST NOT delete the latest tombstone for that ID. The final
+// reappearance must resume with counter continuation (counter-diff), not
+// full-count.
+func TestTombstoneFIFOChurnDoesNotEvictNewestTombstone(t *testing.T) {
+	memSink := sink.NewMemorySink()
+	engine := NewStateEngine(EngineOptions{Sink: memSink})
+
+	const mihomoStart = "2026-09-06T10:00:00.000Z"
+	baseTs := time.Date(2026, 9, 6, 10, 0, 0, 0, time.UTC)
+
+	// Frame 1: Bootstrap empty session.
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: baseTs.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1000,
+			DownloadTotal: 2000,
+			Connections:   []types.ConnectionSnapshot{},
+		},
+	}); err != nil {
+		t.Fatalf("bootstrap failed: %v", err)
+	}
+
+	// Frame 2: target-conn appears for the first time (300 / 600).
+	ts2 := baseTs.Add(time.Second)
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: ts2.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1300,
+			DownloadTotal: 2600,
+			Connections: []types.ConnectionSnapshot{
+				{
+					ID:       "target-conn",
+					Start:    mihomoStart,
+					Upload:   300,
+					Download: 600,
+					Metadata: types.RawMetadata{Process: "app.exe", Host: "example.com"},
+					Chains:   []string{"NodeA", "GroupX"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("frame 2 failed: %v", err)
+	}
+
+	// Frame 3: target-conn disappears (first flap -> tombstone 1 created, FIFO has target-conn).
+	ts3 := baseTs.Add(2 * time.Second)
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: ts3.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1300,
+			DownloadTotal: 2600,
+			Connections:   []types.ConnectionSnapshot{},
+		},
+	}); err != nil {
+		t.Fatalf("frame 3 failed: %v", err)
+	}
+
+	// Frame 4: target-conn reappears (350 / 650, same Start). Consumes tombstone 1 from map.
+	// But the old FIFO entry pointing to tombstone 1 remains queued in the FIFO.
+	ts4 := baseTs.Add(3 * time.Second)
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: ts4.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1350,
+			DownloadTotal: 2650,
+			Connections: []types.ConnectionSnapshot{
+				{
+					ID:       "target-conn",
+					Start:    mihomoStart,
+					Upload:   350,
+					Download: 650,
+					Metadata: types.RawMetadata{Process: "app.exe", Host: "example.com"},
+					Chains:   []string{"NodeA", "GroupX"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("frame 4 failed: %v", err)
+	}
+
+	// Frame 5: Batch A of 4000 churn connections appears, while target-conn stays active.
+	const churnA = 4000
+	churnConnsA := make([]types.ConnectionSnapshot, churnA+1)
+	churnConnsA[0] = types.ConnectionSnapshot{
+		ID:       "target-conn",
+		Start:    mihomoStart,
+		Upload:   350,
+		Download: 650,
+		Metadata: types.RawMetadata{Process: "app.exe", Host: "example.com"},
+		Chains:   []string{"NodeA", "GroupX"},
+	}
+	for i := range churnA {
+		churnConnsA[i+1] = types.ConnectionSnapshot{
+			ID:       fmt.Sprintf("churnA-%05d", i),
+			Start:    mihomoStart,
+			Upload:   10,
+			Download: 20,
+			Metadata: types.RawMetadata{Process: "churn.exe"},
+			Chains:   []string{"DIRECT"},
+		}
+	}
+	ts5 := baseTs.Add(4 * time.Second)
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: ts5.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1350 + int64(churnA*10),
+			DownloadTotal: 2650 + int64(churnA*20),
+			Connections:   churnConnsA,
+		},
+	}); err != nil {
+		t.Fatalf("frame 5 failed: %v", err)
+	}
+
+	// Frame 6: target-conn AND all 4000 churn connections disappear!
+	// target-conn produces tombstone 2.
+	// FIFO now contains: [target-conn(tombstone 1), 4000 churn entries, target-conn(tombstone 2)].
+	// Total FIFO length = 4002 <= 4096 (no eviction of tombstone 1 yet; tombstone 1 is at index 0).
+	ts6 := baseTs.Add(5 * time.Second)
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: ts6.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1350 + int64(churnA*10),
+			DownloadTotal: 2650 + int64(churnA*20),
+			Connections:   []types.ConnectionSnapshot{},
+		},
+	}); err != nil {
+		t.Fatalf("frame 6 failed: %v", err)
+	}
+
+	// Frame 7: Generate 200 more churn connections and disappear them.
+	// Total churn in FIFO exceeds 4096, forcing eviction of the queue head.
+	// The queue head is target-conn's stale tombstone 1!
+	// In unversioned code, popping index 0 calls delete(map, "target-conn"), which erroneously
+	// destroys tombstone 2. In versioned code, tombstone 1 does not match the map's current
+	// tombstone 2, so tombstone 2 is preserved!
+	const churnB = 200
+	churnConnsB := make([]types.ConnectionSnapshot, churnB)
+	for i := range churnB {
+		churnConnsB[i] = types.ConnectionSnapshot{
+			ID:       fmt.Sprintf("churnB-%05d", i),
+			Start:    mihomoStart,
+			Upload:   10,
+			Download: 20,
+			Metadata: types.RawMetadata{Process: "churn.exe"},
+			Chains:   []string{"DIRECT"},
+		}
+	}
+	ts7a := baseTs.Add(6 * time.Second)
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: ts7a.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1350 + int64((churnA+churnB)*10),
+			DownloadTotal: 2650 + int64((churnA+churnB)*20),
+			Connections:   churnConnsB,
+		},
+	}); err != nil {
+		t.Fatalf("frame 7a failed: %v", err)
+	}
+	ts7b := baseTs.Add(7 * time.Second)
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: ts7b.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1350 + int64((churnA+churnB)*10),
+			DownloadTotal: 2650 + int64((churnA+churnB)*20),
+			Connections:   []types.ConnectionSnapshot{},
+		},
+	}); err != nil {
+		t.Fatalf("frame 7b failed: %v", err)
+	}
+
+	// Check: target-conn's tombstone 2 MUST still exist in engine memory!
+	engine.mu.Lock()
+	tomb, exists := engine.disappearedTombstones["target-conn"]
+	engine.mu.Unlock()
+	if !exists || tomb == nil {
+		t.Fatalf("target-conn newest tombstone was erroneously evicted by stale FIFO entry!")
+	}
+
+	// Frame 8: target-conn reappears (400 / 700, same Start).
+	// It MUST be treated as counter continuation (+50 / +50), NEVER as full count (400 / 700)!
+	ts8 := baseTs.Add(8 * time.Second)
+	eventsBefore := len(memSink.GetEvents())
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: ts8.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1400 + int64((churnA+churnB)*10),
+			DownloadTotal: 2700 + int64((churnA+churnB)*20),
+			Connections: []types.ConnectionSnapshot{
+				{
+					ID:       "target-conn",
+					Start:    mihomoStart,
+					Upload:   400,
+					Download: 700,
+					Metadata: types.RawMetadata{Process: "app.exe", Host: "example.com"},
+					Chains:   []string{"NodeA", "GroupX"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("final reappearance frame failed: %v", err)
+	}
+
+	// Find the ConnectionNew event for target-conn.
+	var reobsEv *types.CollectorEvent
+	for _, ev := range memSink.GetEvents()[eventsBefore:] {
+		if ev.ConnectionID == "target-conn" && ev.Type == types.EventConnectionNew {
+			reobsEv = ev
+			break
+		}
+	}
+	if reobsEv == nil {
+		t.Fatalf("expected ConnectionNew reobservation event for target-conn")
+	}
+
+	// Delta MUST be counter-diff (400 - 350 = 50, 700 - 650 = 50).
+	if reobsEv.DeltaUpload != 50 || reobsEv.DeltaDownload != 50 {
+		t.Fatalf("expected counter-diff delta 50/50, got deltaUp=%d deltaDown=%d (full-count regression!)",
+			reobsEv.DeltaUpload, reobsEv.DeltaDownload)
+	}
+	// Cumulative monitored totals must be 400 / 700.
+	if reobsEv.MonitoredCumulativeUpload != 400 || reobsEv.MonitoredCumulativeDownload != 700 {
+		t.Fatalf("expected cumulative totals 400/700, got up=%d down=%d",
+			reobsEv.MonitoredCumulativeUpload, reobsEv.MonitoredCumulativeDownload)
 	}
 }
