@@ -524,24 +524,19 @@ func TestRuntimeLowDiskMidRunBreachSuppressesShutdownAccounting(t *testing.T) {
 		t.Fatal("runtime did not become ready")
 	}
 
-	// Trigger mid-run breach!
+	// Deterministically trigger mid-run breach via injected TriggerCheck!
 	mockGuard.SetFloorFn(func(dbSize uint64) uint64 { return math.MaxUint64 })
-	_ = mockGuard.Check()
+	mockGuard.TriggerCheck()
 
-	// Wait for runtime to complete due to mid-run stop or shutdown
+	// Wait for runtime to complete cleanly via the mid-run trip callback.
 	select {
 	case rerr := <-runDone:
 		if rerr != nil {
 			t.Fatalf("Run returned error: %v", rerr)
 		}
 	case <-time.After(5 * time.Second):
-		// If still shutting down, cancel context to finish.
 		cancel()
-		select {
-		case <-runDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("runtime did not shut down after mid-run breach")
-		}
+		t.Fatal("runtime did not shut down after deterministic mid-run breach trigger")
 	}
 
 	logsMu.Lock()

@@ -52,9 +52,10 @@ type DiskGuard struct {
 	dbPath  string
 	floorFn func(dbSize uint64) uint64
 
-	mu      sync.Mutex
-	last    DiskGuardStatus
-	tripped bool
+	mu        sync.Mutex
+	last      DiskGuardStatus
+	tripped   bool
+	triggerCh chan struct{}
 }
 
 // NewDiskGuard watches the volume holding dbPath. The stop floor is
@@ -73,6 +74,7 @@ func NewDiskGuard(dbPath string) *DiskGuard {
 			}
 			return floor
 		},
+		triggerCh: make(chan struct{}, 1),
 	}
 }
 
@@ -90,9 +92,14 @@ func (g *DiskGuard) Check() DiskGuardStatus {
 		dbSize = uint64(fi.Size())
 	}
 	free, ok := freeDiskBytes(filepath.Dir(g.dbPath))
+
+	g.mu.Lock()
+	floor := g.floorFn(dbSize)
+	g.mu.Unlock()
+
 	status := DiskGuardStatus{
 		FreeBytes:   free,
-		FloorBytes:  g.floorFn(dbSize),
+		FloorBytes:  floor,
 		DBSizeBytes: dbSize,
 		CheckedAt:   time.Now().UTC(),
 	}
@@ -107,6 +114,15 @@ func (g *DiskGuard) Check() DiskGuardStatus {
 	}
 	g.mu.Unlock()
 	return status
+}
+
+// TriggerCheck signals TripLoop to execute an immediate check without waiting
+// for the next ticker tick. Non-blocking.
+func (g *DiskGuard) TriggerCheck() {
+	select {
+	case g.triggerCh <- struct{}{}:
+	default:
+	}
 }
 
 // Status returns the most recent measurement. Zero value means no check ran
@@ -140,10 +156,11 @@ func (g *DiskGuard) TripLoop(ctx context.Context, interval time.Duration, onTrip
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if g.Check().Tripped && onTrip != nil {
-				onTrip(g.Status())
-				return
-			}
+		case <-g.triggerCh:
+		}
+		if g.Check().Tripped && onTrip != nil {
+			onTrip(g.Status())
+			return
 		}
 	}
 }
