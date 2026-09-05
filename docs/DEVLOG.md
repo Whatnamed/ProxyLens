@@ -25,8 +25,8 @@ publish boundary 安全拦截未完成帧。
   保持 READY 提供只读 Query 服务）；`seedPreflight` 与 `advanceIncrementalChunk` 统一使用
   `DiskGuardStopFloorBytes`（1GiB）和 15% 比率下限；
 - `SQLiteEventSink.Emit` 更新 session 进度使用 `MAX(COALESCE(last_frame_sequence, 0), ?)`，
-  `StateEngine` 增加 `EmitSessionHealth`，`IngestJournalRecord` 自动继承游标序列；
-  新增先高 frame sequence 后零 frame health 不下降回归；
+  `StateEngine` 增加 `EmitSessionHealth` 统一有序发布，移除 Storage 自动发明顺序的游标继承黑魔法与无序 fallback；
+  断言 journal columns、`event_json`、EventID 与 SHA256 四者完全一致；新增单调性与无 collision 回归；
 - 提取 `runShutdownAccountingFlush`，严格在 `lagEvents == 0` 时报告 fresh，cap 超限或超时且 lag > 0
   如实报告 `incomplete (lag=N)`；新增针对性单测；
 - `extendCutToFrameEnd` 引入 `isFrameComplete` 校验，未完成最新帧安全回退到该帧之前，
