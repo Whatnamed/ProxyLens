@@ -182,6 +182,15 @@ func (r *CollectorRunner) Run(ctx context.Context) (*CollectorResult, error) {
 		return nil, err
 	}
 
+	// Fail-safe capacity boundary: when free space on the DB volume falls
+	// below the stop floor the session stops cleanly with explicit journal
+	// evidence instead of running into disk-full. The guard never deletes
+	// anything; recovery is a later runtime start with more free space.
+	var diskGuard *storage.DiskGuard
+	if r.options.DBPath != "" && sqliteSink != nil {
+		diskGuard = storage.NewDiskGuard(r.options.DBPath)
+	}
+
 	engine := state.NewStateEngine(state.EngineOptions{
 		Sink:      eventSink,
 		SessionID: r.sessionID,
@@ -202,6 +211,33 @@ func (r *CollectorRunner) Run(ctx context.Context) (*CollectorResult, error) {
 		}
 	}
 	workerDone := make(chan struct{})
+
+	// The guard loop emits its trip evidence through the sink directly (Emit
+	// is mutex-guarded), then cancels the private run context: the stream
+	// loop returns, the worker drains, and the session ends through the
+	// normal clean-shutdown path. The evidence event uses frame 0 / sequence
+	// 0, which the engine (sequences >= 1) never produces, so its
+	// deterministic event ID cannot collide with a traffic event. The stop
+	// decision never depends on the evidence write succeeding.
+	if diskGuard != nil {
+		go diskGuard.TripLoop(runCtx, storage.DiskGuardInterval, func(status storage.DiskGuardStatus) {
+			ev := &types.CollectorEvent{
+				SessionID: r.sessionID,
+				Timestamp: status.CheckedAt,
+				Details: map[string]any{
+					"issue":       "disk_guard_floor_breached",
+					"description": "free space on the DB volume fell below the stop floor; ingestion stopped cleanly",
+					"freeBytes":   int64(status.FreeBytes),
+					"floorBytes":  int64(status.FloorBytes),
+					"dbSizeBytes": int64(status.DBSizeBytes),
+				},
+			}
+			ev.Type = types.EventCollectorHealth
+			ev.GenerateDeterministicEventID()
+			_ = sqliteSink.Emit(ev)
+			cancel()
+		})
+	}
 
 	// A single worker preserves frame/event ordering and joins before the
 	// session is ended. A sink failure is collector-fatal and cancels the
@@ -275,6 +311,14 @@ func (r *CollectorRunner) Run(ctx context.Context) (*CollectorResult, error) {
 		summary = make(map[string]any)
 	}
 	summary["queueMetrics"] = metrics
+	if diskGuard != nil {
+		if st := diskGuard.Status(); !st.CheckedAt.IsZero() {
+			summary["diskGuard"] = st.Describe()
+			if diskGuard.Tripped() {
+				summary["diskGuardTripped"] = true
+			}
+		}
+	}
 
 	result := &CollectorResult{
 		SessionID:         r.sessionID,

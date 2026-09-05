@@ -179,48 +179,77 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 		return &RuntimeResult{DBPath: r.dbPath}, nil
 	}
 
-	collectorCtx, cancelCollector := context.WithCancel(context.Background())
-	schedulerCtx, cancelScheduler := context.WithCancel(context.Background())
-	defer cancelCollector()
-	defer cancelScheduler()
-
-	collectorDone := make(chan collectorOutcome, 1)
-	go func() {
-		result, err := r.collector.Run(collectorCtx)
-		collectorDone <- collectorOutcome{result: result, err: err}
-	}()
-
-	schedulerDone := make(chan error, 1)
-	go func() {
-		schedulerDone <- scheduler.Run(schedulerCtx)
-	}()
-
-	// The local writer DB, scheduler, and collector goroutine have all crossed
-	// their startup boundary. Controller reachability is deliberately not part
-	// of this readiness contract because the collector owns retry semantics.
-	r.readyOnce.Do(func() {
-		if r.onReady != nil {
-			r.onReady(RuntimeReadyInfo{RuntimeVersion: RuntimeVersion})
-		}
-	})
+	// Pre-start capacity check: refuse to launch a collector session onto a
+	// volume already below the disk-guard floor. The scheduler still runs so
+	// accounting catch-up continues; ingestion stays off until space
+	// recovers. A fresh measurement (not a sticky guard) is used here — each
+	// runtime start re-evaluates current reality.
+	collectorStarted := true
+	if status := storage.NewDiskGuard(r.dbPath).Check(); status.Tripped {
+		collectorStarted = false
+		r.logger("[runtime] disk guard floor breached before collector start (%s) - collector not started, scheduler only",
+			status.Describe())
+	}
 
 	var outcome collectorOutcome
-	select {
-	case <-ctx.Done():
+	schedulerCtx, cancelScheduler := context.WithCancel(context.Background())
+	defer cancelScheduler()
+
+	if collectorStarted {
+		collectorCtx, cancelCollector := context.WithCancel(context.Background())
+		defer cancelCollector()
+
+		collectorDone := make(chan collectorOutcome, 1)
+		go func() {
+			result, err := r.collector.Run(collectorCtx)
+			collectorDone <- collectorOutcome{result: result, err: err}
+		}()
+
+		schedulerDone := make(chan error, 1)
+		go func() {
+			schedulerDone <- scheduler.Run(schedulerCtx)
+		}()
+
+		// The local writer DB, scheduler, and collector goroutine have all crossed
+		// their startup boundary. Controller reachability is deliberately not part
+		// of this readiness contract because the collector owns retry semantics.
+		r.readyOnce.Do(func() {
+			if r.onReady != nil {
+				r.onReady(RuntimeReadyInfo{RuntimeVersion: RuntimeVersion})
+			}
+		})
+
+		select {
+		case <-ctx.Done():
+			r.logger("[runtime] graceful shutdown requested")
+			cancelScheduler()
+			<-schedulerDone
+			cancelCollector()
+			outcome = <-collectorDone
+		case outcome = <-collectorDone:
+			if outcome.err != nil {
+				r.logger("[runtime] collector fatal exit: %v", outcome.err)
+			} else {
+				r.logger("[runtime] collector stopped cleanly")
+			}
+			cancelScheduler()
+			<-schedulerDone
+			cancelCollector()
+		}
+	} else {
+		r.readyOnce.Do(func() {
+			if r.onReady != nil {
+				r.onReady(RuntimeReadyInfo{RuntimeVersion: RuntimeVersion})
+			}
+		})
+		schedulerDone := make(chan error, 1)
+		go func() {
+			schedulerDone <- scheduler.Run(schedulerCtx)
+		}()
+		<-ctx.Done()
 		r.logger("[runtime] graceful shutdown requested")
 		cancelScheduler()
 		<-schedulerDone
-		cancelCollector()
-		outcome = <-collectorDone
-	case outcome = <-collectorDone:
-		if outcome.err != nil {
-			r.logger("[runtime] collector fatal exit: %v", outcome.err)
-		} else {
-			r.logger("[runtime] collector stopped cleanly")
-		}
-		cancelScheduler()
-		<-schedulerDone
-		cancelCollector()
 	}
 
 	// Final accounting flush: the collector writer has stopped, so the
