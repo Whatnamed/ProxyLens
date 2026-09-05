@@ -16,6 +16,7 @@ import (
 	"time"
 
 	proxylensruntime "github.com/Whatnamed/ProxyLens/collector/pkg/runtime"
+	"github.com/Whatnamed/ProxyLens/collector/pkg/installedlifecycle"
 	"github.com/Whatnamed/ProxyLens/collector/pkg/runtimeconfig"
 	"golang.org/x/term"
 )
@@ -46,6 +47,10 @@ func main() {
 			os.Exit(runInstallCommand(os.Args[2:]))
 		}
 	}
+	// The installed Task Scheduler owner launches this console executable in the
+	// interactive session; hide the dedicated console it allocates so the
+	// background owner stays invisible. Shared developer shells are untouched.
+	installedlifecycle.HideOwnedConsoleWindow()
 	os.Exit(runSupervisor(os.Args[1:]))
 }
 
