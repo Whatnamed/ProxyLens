@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-09-06 — Phase 3S Correctness Closure (post-review targeted fixes)
+
+**Scope:** 独立 review 新发现的 7 项深层缺陷修复：`loadConnStateClosure` key 缺陷与
+RowsAffected 校验、stale `relay_relations_v2` 显式 bounded 清理、tombstone FIFO
+实例感知淘汰、write-quiescent low-disk 模式与 preflight 对齐、DiskGuard health
+event session progress 单调性保证、shutdown flush 真实 lag 报告，以及 frame-complete
+publish boundary 安全拦截未完成帧。
+
+**Completed:**
+
+- 修复 `loadConnStateClosure` SQL 遗漏 `session_id, epoch_id` 问题，根除 `:0` fake group，
+  `applyClassChanges` 增加 RowsAffected 断言；新增 silent active A 与 dirty B 配对回归；
+- 建立显式 bounded `relationRefreshKeys` 集合，先清理旧 relation 再写入新决策；
+  新增 candidate X 变 unique 后旧 relation 彻底清除且历史 accounted bytes 恢复回归；
+- `StateEngine` tombstone FIFO 绑定实例指针，eviction 时精确匹配实例，清除 new/re-open 旧 tomb；
+  新增多次 flap + 4200 次 churn 淘汰旧 entry 保护最新 tombstone 针对性单测；
+- low-disk mode 实现严格 write-quiescent（停用 collector、停用 scheduler、跳过 shutdown flush/truncate，
+  保持 READY 提供只读 Query 服务）；`seedPreflight` 与 `advanceIncrementalChunk` 统一使用
+  `DiskGuardStopFloorBytes`（1GiB）和 15% 比率下限；
+- `SQLiteEventSink.Emit` 更新 session 进度使用 `MAX(COALESCE(last_frame_sequence, 0), ?)`，
+  `StateEngine` 增加 `EmitSessionHealth`，`IngestJournalRecord` 自动继承游标序列；
+  新增先高 frame sequence 后零 frame health 不下降回归；
+- 提取 `runShutdownAccountingFlush`，严格在 `lagEvents == 0` 时报告 fresh，cap 超限或超时且 lag > 0
+  如实报告 `incomplete (lag=N)`；新增针对性单测；
+- `extendCutToFrameEnd` 引入 `isFrameComplete` 校验，未完成最新帧安全回退到该帧之前，
+  StateEngine 确保所有 snapshot frame 结尾具备完成证据；新增并发边界未完成帧拒绝切入回归；
+- `docs/ARCHITECTURE.md` 全面同步 v2 生产存储与增量核算架构，澄清不同 Mihomo Start 为同一
+  durable connection key 下的新 byte-accounting incarnation。
+
+**Validation state:**
+
+- `go vet ./...` + `go test ./pkg/... ./test/...` 全部 PASS；
+- E: cardinality gate 在修正 closure key 后重新实测通过：
+  1k（1000 历史连接，1007 closure conns，writer-hold 3.1ms）与
+  10k（10000 历史连接，10007 closure conns，writer-hold 8.0ms），lag=0；
+  证明写锁持锁耗时极短且随历史基数有界；
+- 前端 90 项 UI 测试（19 suites）与 Rust 19 项 cargo 测试全部 PASS；非 GitHub CI PASS。
+
+---
+
 ## 2026-09-05 — Phase 3S Correctness Closure (11-blocker review closure)
 
 **Scope:** 独立 review 提出的 11 项 Phase 3S 正确性 blocker 收口：重观测续算、

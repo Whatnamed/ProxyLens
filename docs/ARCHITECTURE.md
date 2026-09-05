@@ -71,7 +71,7 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 
 - `proxylens-runtime` 是 Go Runtime executable，组合可复用的 `CollectorRunner` 与周期性 `AccountingScheduler`；它保持前台进程语义，不自行 daemonize；
 - Runtime 负责解析 DB path、初始化 writer DB、启动 Collector 与自动核算，并在 cancellation 时按 scheduler-first 顺序 graceful shutdown；
-- Accounting 默认每 30s 检查 Freshness，fresh 或无事件时 skip，落后时复用 `storage.RebuildAccounting`；单次核算失败不终止 Collector；
+- Accounting 默认每 30s 检查 Freshness，fresh 或无事件时 skip，落后时由 generation-based 增量核算 v2 处理 `(publishedBoundary, newBoundary]` 的有界区间并原子发布；首次运行自动执行后台 seed，Query API 全程支持 legacy fallback；`storage.RebuildAccounting` 仅作为显式 repair / migration 路径，不再是正常 runtime scheduler；单次核算失败不终止 Collector；
 - `collector run` 保留为薄 CLI wrapper，继续提供原有 flags、signal/stdin STOP、validation sink 与 summary；
 - Phase 3E-2A 增加按 authority DB path 归一化后的 Windows named-mutex ownership、`READY` / `ALREADY_RUNNING` 启动握手，以及 Tauri 对 bundled Runtime 的 ensure-start；同一 DB 只允许一个 Runtime writer，不同 DB 可以并行；
 - Phase 3E-2B1 新增独立 `proxylens-supervisor`：Supervisor mutex 与 Runtime writer mutex 分离，但均按同一 authority DB identity；它能观察已有 Runtime、避免重复 writer，并在自己拥有的 Runtime 进程退出后按有界 backoff 重启；
@@ -111,11 +111,12 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   - **网络观测事实权威 (Network Observation Authority)**: `event_journal`（包含所有 CollectorEvent 原始 JSON 与 SHA256 签名）；
   - **采集器生命周期权威 (Collector Lifecycle Authority)**: `collector_sessions`（记录启停、状态与崩溃边界）；
   - **派生查询/核算/聚合视图 (Derived Views)**: 由 `event_journal` 与 `collector_sessions` 100% 确定性可重建；
-- **三层数据结构**:
-  1. **原始事实层 (Immutable Raw Evidence)**: `event_journal`, `connection_traffic`；
-  2. **版本化核算层 (Versioned Reconciled Accounting)**: `accounting_runs`, `relay_relations`, `accounted_traffic`；
-  3. **分时聚合层 (Materialized Hourly Aggregates)**: `usage_hourly_dimensions`。
-
+- **分层数据与核算架构 (Production v2, ADR 0010)**:
+  1. **原始事实层 (Immutable Raw Evidence)**: `event_journal`（S1 抑制零字节增量行，改为 30s 稀疏在场证据 `ConnectionPresenceCheckpoint`；非零 delta 全量持久化），`connection_traffic`；
+  2. **增量核算层 (Generation-Based Incremental Accounting v2, migration 008/009)**: `accounting_generations`（partial unique index 严格保证全局至多一个 active/seeding/materializing generation）、`accounting_conn_state_v2`、`relay_relations_v2`、`accounted_traffic_v2`；
+  3. **分时聚合层 (Materialized Hourly Aggregates)**: `usage_hourly_dimensions`；
+  4. **并发与持锁契约**: 两阶段 chunk 推进 —— 不可变 journal 区间读取、dirty closure 构建与 relay 分类全部在 off-lock prep 阶段完成；writer transaction 仅重检 published boundary 并执行有界 mutation 与原子发布；
+  5. **WAL 与容量防线**: 稳态运行采用 PASSIVE checkpoint；TRUNCATE 仅在 shutdown / maintenance 阶段以独立 context 安全执行，不干扰只读 reader；Runtime 具备 fail-safe DiskGuard（floor = max(1GiB, 15% DB size)），破底时处于严格 write-quiescent 模式（停用 collector 与 scheduler 写操作，跳过 shutdown flush 与 truncate，保持只读 Query 可用，绝不删除历史 raw authority）。
 ### UI Platform & Local Query API (已确认生产架构，ADR 0005)
 
 - **实现技术**: **Tauri v2 + React 19 + TypeScript + Vite**；
@@ -297,6 +298,10 @@ Collector/Storage 实现与对应验证记录为准；未验证的 RAM、CPU 或
 4. **Counter Reset / Epoch Break 信号检测**:
    - 逐帧扫描检测相邻帧：当检测到 $\text{current}.\text{uploadTotal} < \text{previous}.\text{uploadTotal}$ 时，触发 `counter_epoch_break` 信号，指示可能发生了内核重启或数据源重置，状态机重置并重新执行 Session Bootstrap。
 
+5. **连接重观测与 Incarnation 语义 (Re-observation & Incarnation Semantics)**:
+   - 当已移出快照的 connection ID 再次出现在快照中时：
+     - **相同 Mihomo Start**: 判定为同一连接短暂漏帧（flap），通过 bounded disappeared-tombstone 进行 counter-diff 续算，当期仅计入计数器差值，杜绝重复计费；
+     - **不同 Mihomo Start**: 当前实现将其视为**在同一 durable connection key 下的新 byte-accounting incarnation**（而不是独立的 storage identity），基线重置为 0，累计生命周期流量；raw journal 如实记录 disappearance 与新 New 事件，不篡改历史事实。
 ---
 
 ## 5. 监控缺口模型
