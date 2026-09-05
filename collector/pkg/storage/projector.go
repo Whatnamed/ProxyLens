@@ -159,6 +159,7 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 			observation_ended_at = NULL,
 			observation_end_reason = NULL,
 			observation_end_event_id = NULL,
+			mihomo_start = excluded.mihomo_start,
 			last_observed_at = excluded.last_observed_at,
 			last_observed_upload_counter = excluded.last_observed_upload_counter,
 			last_observed_download_counter = excluded.last_observed_download_counter,
@@ -215,20 +216,27 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 			return fmt.Errorf("failed to project ConnectionNew: %w", err)
 		}
 
-		// 插入 connection_traffic
+		// 插入 connection_traffic。同一 epoch 内 Disappeared 后重现的连接
+		// (same ID + same Mihomo start) 以 interval_only 携带 [lastObservedAt,
+		// frameTs] 的观察区间，因此 New 事件同样需要区间列。
 		precision := ev.Precision
 		if precision == "" {
 			precision = "exact_snapshot"
 		}
+		var intervalStart, intervalEnd sql.NullString
+		if len(ev.AttributionInterval) >= 2 {
+			intervalStart = sql.NullString{String: ev.AttributionInterval[0], Valid: true}
+			intervalEnd = sql.NullString{String: ev.AttributionInterval[1], Valid: true}
+		}
 		trafficSQL := `
 		INSERT INTO connection_traffic (
-			event_id, session_id, epoch_id, frame_sequence, event_sequence, connection_id, observed_at, precision,
+			event_id, session_id, epoch_id, frame_sequence, event_sequence, connection_id, observed_at, interval_start, interval_end, precision,
 			delta_upload, delta_download, observed_upload_counter, observed_download_counter,
 			monitored_upload_total, monitored_download_total, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 		`
 		if _, err := tx.ExecContext(ctx, trafficSQL,
-			ev.EventID, ev.SessionID, ev.EpochID, ev.FrameSequence, ev.EventSequence, ev.ConnectionID, obsAtStr, precision,
+			ev.EventID, ev.SessionID, ev.EpochID, ev.FrameSequence, ev.EventSequence, ev.ConnectionID, obsAtStr, intervalStart, intervalEnd, precision,
 			ev.DeltaUpload, ev.DeltaDownload, ev.ObservedUploadCounter, ev.ObservedDownloadCounter,
 			ev.MonitoredCumulativeUpload, ev.MonitoredCumulativeDownload, nowStr,
 		); err != nil {

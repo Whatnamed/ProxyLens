@@ -35,6 +35,44 @@ type ActiveConnectionState struct {
 	QualityFlags           types.QualityFlags
 }
 
+// disappearedTombstone 保留一条刚从快照中消失的连接的完整观测状态，用于区分
+// "同一个 Mihomo connection 短暂漏帧后重现" 与 "真正的新 incarnation"：
+// 重现时以 connection ID + Mihomo Start 作为同一实际 connection 的证据。
+type disappearedTombstone struct {
+	state         *ActiveConnectionState
+	disappearedAt time.Time
+}
+
+// reobservationContinuation is the per-frame continuation decision for a
+// connection that reappeared with the same ID and the same Mihomo start.
+type reobservationContinuation struct {
+	tomb      *disappearedTombstone
+	deltaUp   int64
+	deltaDown int64
+	regressed bool
+}
+
+// reobservationDetails builds the re-observation New event's evidence: the
+// lifecycle continuation facts plus any frame relay-dedup evidence, flattened
+// to match the New event evidence convention.
+func reobservationDetails(tomb *disappearedTombstone, st *ActiveConnectionState, relayEvidence map[string]any) map[string]any {
+	details := map[string]any{
+		"reobservedAfterDisappearance": true,
+		"sameMihomoStart":              true,
+		"disappearedAt":                tomb.disappearedAt.UTC().Format(time.RFC3339Nano),
+		"lastObservedAt":               st.LastObservedAt.UTC().Format(time.RFC3339Nano),
+	}
+	for k, v := range relayEvidence {
+		details[k] = v
+	}
+	return details
+}
+
+// maxDisappearedTombstones bounds tombstone memory. Normal disappearance
+// bursts are a fraction of the live set per frame; the cap only protects
+// against pathological churn and evicts oldest-first (FIFO).
+const maxDisappearedTombstones = 4096
+
 // EngineOptions 配置状态机参数
 type EngineOptions struct {
 	Sink      sink.EventSink
@@ -51,6 +89,8 @@ type StateEngine struct {
 	eventSequence                           int64
 	sessionState                            types.SessionState
 	activeMap                               map[string]*ActiveConnectionState
+	disappearedTombstones                   map[string]*disappearedTombstone
+	tombstoneFIFO                           []string
 	prevUploadTotal                         int64
 	prevDownloadTotal                       int64
 	hasEverBeenHealthy                      bool
@@ -78,14 +118,47 @@ func NewStateEngine(opts EngineOptions) *StateEngine {
 		sessID = fmt.Sprintf("sess-%d", time.Now().UnixNano())
 	}
 	return &StateEngine{
-		sink:             s,
-		sessionID:        sessID,
-		epochID:          1,
-		sessionState:     types.SessionStarting,
-		activeMap:        make(map[string]*ActiveConnectionState),
-		isBootstrapFrame: true,
-		createdAt:        time.Now(),
+		sink:                  s,
+		sessionID:             sessID,
+		epochID:               1,
+		sessionState:          types.SessionStarting,
+		activeMap:             make(map[string]*ActiveConnectionState),
+		disappearedTombstones: make(map[string]*disappearedTombstone),
+		isBootstrapFrame:      true,
+		createdAt:             time.Now(),
 	}
+}
+
+// resetTombstones clears disappeared-connection tracking. It must run on every
+// counter epoch break: after a Mihomo counter reset the old epoch's
+// connection history (including lifetimes) is a different observation keyspace.
+func (e *StateEngine) resetTombstones() {
+	e.disappearedTombstones = make(map[string]*disappearedTombstone)
+	e.tombstoneFIFO = nil
+}
+
+// recordDisappearedTombstone preserves a connection's observation state at
+// disappearance so a same-ID + same-Start reappearance can resume the
+// lifecycle with counter-continuation semantics.
+func (e *StateEngine) recordDisappearedTombstone(id string, st *ActiveConnectionState, at time.Time) {
+	if _, exists := e.disappearedTombstones[id]; !exists {
+		e.tombstoneFIFO = append(e.tombstoneFIFO, id)
+		for len(e.tombstoneFIFO) > maxDisappearedTombstones {
+			oldest := e.tombstoneFIFO[0]
+			e.tombstoneFIFO = e.tombstoneFIFO[1:]
+			delete(e.disappearedTombstones, oldest)
+		}
+	}
+	e.disappearedTombstones[id] = &disappearedTombstone{state: st, disappearedAt: at}
+}
+
+// takeDisappearedTombstone consumes the tombstone of a re-observed connection.
+func (e *StateEngine) takeDisappearedTombstone(id string) (*disappearedTombstone, bool) {
+	t, ok := e.disappearedTombstones[id]
+	if ok {
+		delete(e.disappearedTombstones, id)
+	}
+	return t, ok
 }
 
 // emitEvent 统一通过 Sink 输出事件并生成唯一序列和确定性 ID，任何错误必须向上返回
@@ -379,6 +452,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 
 			e.epochID++
 			e.activeMap = make(map[string]*ActiveConnectionState)
+			e.resetTombstones()
 			e.gapIsOpen = false
 			e.isBootstrapFrame = true
 		} else {
@@ -552,17 +626,18 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 					Metadata:               prev.Snapshot.Metadata,
 					QualityFlags:           prev.QualityFlags,
 					PossibleUnobservedTail: true,
-					Details: map[string]any{
-						"disappearedDuringGap":        true,
-						"lastObservedAt":              prev.LastObservedAt.UTC().Format(time.RFC3339Nano),
-						"lastObservedUploadCounter":   prev.LastUploadCounter,
-						"lastObservedDownloadCounter": prev.LastDownloadCounter,
-					},
-				}); err != nil {
-					return err
-				}
-				delete(e.activeMap, id)
+				Details: map[string]any{
+					"disappearedDuringGap":        true,
+					"lastObservedAt":              prev.LastObservedAt.UTC().Format(time.RFC3339Nano),
+					"lastObservedUploadCounter":   prev.LastUploadCounter,
+					"lastObservedDownloadCounter": prev.LastDownloadCounter,
+				},
+			}); err != nil {
+				return err
 			}
+			e.recordDisappearedTombstone(id, prev, frameTs)
+			delete(e.activeMap, id)
+		}
 
 			e.prevUploadTotal = payload.UploadTotal
 			e.prevDownloadTotal = payload.DownloadTotal
@@ -595,6 +670,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			}
 			e.epochID++
 			e.activeMap = make(map[string]*ActiveConnectionState)
+			e.resetTombstones()
 			e.isBootstrapFrame = true
 		}
 	}
@@ -605,6 +681,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 	if e.isBootstrapFrame {
 		e.sessionState = types.SessionBootstrap
 		e.activeMap = make(map[string]*ActiveConnectionState, len(payload.Connections))
+		e.resetTombstones()
 
 		for _, c := range payload.Connections {
 			route := attribution.ClassifyRoute(c.Chains)
@@ -681,6 +758,11 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 	// -------------------------------------------------------------
 	currMap := make(map[string]types.ConnectionSnapshot, len(payload.Connections))
 	deltas := make(map[string][2]int64, len(payload.Connections))
+	// reobservations holds same-ID + same-Start reappearance continuations:
+	// their delta is the counter difference since the last durable observation,
+	// never the full lifetime counters (which would double count the bytes
+	// already monitored before the disappearance).
+	reobservations := make(map[string]*reobservationContinuation)
 
 	for _, c := range payload.Connections {
 		currMap[c.ID] = c
@@ -694,6 +776,28 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				dDown = 0
 			}
 			deltas[c.ID] = [2]int64{dUp, dDown}
+		} else if tomb, isReobservation := e.disappearedTombstones[c.ID]; isReobservation && c.Start == tomb.state.Snapshot.Start {
+			// Same Mihomo connection (same ID + same Mihomo start) reappearing
+			// after a snapshot flap: continue the previous lifecycle. A counter
+			// regression against the tombstone is anomalous evidence and is
+			// clamped to zero with a health event, mirroring the connected-path
+			// regression contract.
+			cont := &reobservationContinuation{tomb: tomb}
+			dUp := c.Upload - tomb.state.LastUploadCounter
+			dDown := c.Download - tomb.state.LastDownloadCounter
+			if dUp < 0 || dDown < 0 {
+				cont.regressed = true
+				if dUp < 0 {
+					dUp = 0
+				}
+				if dDown < 0 {
+					dDown = 0
+				}
+			}
+			cont.deltaUp = dUp
+			cont.deltaDown = dDown
+			deltas[c.ID] = [2]int64{dUp, dDown}
+			reobservations[c.ID] = cont
 		} else {
 			deltas[c.ID] = [2]int64{c.Upload, c.Download}
 		}
@@ -839,6 +943,102 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			}); err != nil {
 				return err
 			}
+		} else if cont, isReobservation := reobservations[id]; isReobservation {
+			// Same-ID + same-Start reappearance: reopen the previous lifecycle
+			// instead of counting it as a new connection. Monitored totals and
+			// the baseline carry over from the tombstone; only the counter
+			// difference is new observed traffic. The journal keeps both the
+			// Disappeared and this re-observation New event verbatim.
+			tomb := cont.tomb
+			prevTombState := tomb.state
+			route := attribution.ClassifyRoute(c.Chains)
+			initialClass := attribution.ClassifyInitialAttribution(&c)
+			var relayEvidence map[string]any
+			if ev, isConfirmed := confirmedRelays[id]; isConfirmed {
+				initialClass = types.ClassConfirmedRelayDuplicate
+				relayEvidence = ev
+			}
+
+			if cont.regressed {
+				if err := e.emitEvent(&types.CollectorEvent{
+					Type:         types.EventCollectorHealth,
+					Timestamp:    frameTs,
+					ConnectionID: id,
+					Details: map[string]any{
+						"issue":            "connection_counter_regression_on_reobservation",
+						"prevUpload":       prevTombState.LastUploadCounter,
+						"currUpload":       c.Upload,
+						"prevDownload":     prevTombState.LastDownloadCounter,
+						"currDownload":     c.Download,
+						"sameMihomoStart":  true,
+						"disappearedAt":    tomb.disappearedAt.UTC().Format(time.RFC3339Nano),
+						"lastObservedAt":   prevTombState.LastObservedAt.UTC().Format(time.RFC3339Nano),
+					},
+				}); err != nil {
+					return err
+				}
+			}
+
+			state := &ActiveConnectionState{
+				Snapshot:                    c,
+				FirstObservedAt:             prevTombState.FirstObservedAt,
+				LastObservedAt:              frameTs,
+				LastUploadCounter:           c.Upload,
+				LastDownloadCounter:         c.Download,
+				MonitoredCumulativeUpload:   prevTombState.MonitoredCumulativeUpload + cont.deltaUp,
+				MonitoredCumulativeDownload: prevTombState.MonitoredCumulativeDownload + cont.deltaDown,
+				BaselineUploadCounter:       prevTombState.BaselineUploadCounter,
+				BaselineDownloadCounter:     prevTombState.BaselineDownloadCounter,
+				LastDurableEvidenceAt:       frameTs,
+				PreexistingAtStart:          prevTombState.PreexistingAtStart,
+				Route:                       route,
+				AttributionClass:            initialClass,
+				QualityFlags:                quality,
+			}
+			e.activeMap[id] = state
+			e.takeDisappearedTombstone(id)
+
+			if initialClass != types.ClassConfirmedRelayDuplicate {
+				uniqueObservedUpload += cont.deltaUp
+				uniqueObservedDownload += cont.deltaDown
+			}
+
+			reobsEv := &types.CollectorEvent{
+				Type:                        types.EventConnectionNew,
+				Timestamp:                   frameTs,
+				ConnectionID:                id,
+				Metadata:                    c.Metadata,
+				QualityFlags:                quality,
+				MihomoStart:                 c.Start,
+				Rule:                        c.Rule,
+				RulePayload:                 c.RulePayload,
+				Chains:                      c.Chains,
+				ProviderChains:              c.ProviderChains,
+				Route:                       route,
+				AttributionClass:            initialClass,
+				ObservedUploadCounter:       c.Upload,
+				ObservedDownloadCounter:     c.Download,
+				DeltaUpload:                 cont.deltaUp,
+				DeltaDownload:               cont.deltaDown,
+				MonitoredCumulativeUpload:   state.MonitoredCumulativeUpload,
+				MonitoredCumulativeDownload: state.MonitoredCumulativeDownload,
+				BaselineUploadCounter:       state.BaselineUploadCounter,
+				BaselineDownloadCounter:     state.BaselineDownloadCounter,
+				Details:                     reobservationDetails(tomb, prevTombState, relayEvidence),
+			}
+			// The continuation delta covers the whole flap window rather than a
+			// single sample interval, so it is interval-attributed evidence from
+			// the last durable observation to the reappearance frame.
+			if cont.deltaUp > 0 || cont.deltaDown > 0 {
+				reobsEv.Precision = "interval_only"
+				reobsEv.AttributionInterval = []string{
+					prevTombState.LastObservedAt.UTC().Format(time.RFC3339Nano),
+					frameTs.UTC().Format(time.RFC3339Nano),
+				}
+			}
+			if err := e.emitEvent(reobsEv); err != nil {
+				return err
+			}
 		} else {
 			route := attribution.ClassifyRoute(c.Chains)
 			initialClass := attribution.ClassifyInitialAttribution(&c)
@@ -924,6 +1124,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		}); err != nil {
 			return err
 		}
+		e.recordDisappearedTombstone(id, prev, frameTs)
 		delete(e.activeMap, id)
 	}
 
