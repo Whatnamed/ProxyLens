@@ -68,6 +68,9 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 	if collectorOpts.CollectorVersion == "" {
 		collectorOpts.CollectorVersion = RuntimeVersion
 	}
+	if collectorOpts.Logger == nil {
+		collectorOpts.Logger = logger
+	}
 	priorStatusCallback := collectorOpts.OnControllerStatus
 	collectorOpts.OnControllerStatus = func(status string) {
 		if priorStatusCallback != nil {
@@ -123,6 +126,28 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 			runErr = fmt.Errorf("failed to release runtime ownership: %w", closeErr)
 		}
 	}()
+
+	// Pre-start capacity check: execute BEFORE opening the writer DB, running
+	// WAL pragma, or executing migrations! If the volume is below the stop floor,
+	// entering write-quiescent low-disk mode immediately prevents any DB writes.
+	var status storage.DiskGuardStatus
+	if r.diskGuardCheck != nil {
+		status = r.diskGuardCheck(r.dbPath)
+	} else {
+		status = storage.NewDiskGuard(r.dbPath).Check()
+	}
+	if status.Tripped {
+		r.logger("[runtime] disk guard floor breached before DB init (%s) - low-disk mode: writer DB, migrations, collector, and scheduler disabled; write-quiescent (degraded)",
+			status.Describe())
+		r.readyOnce.Do(func() {
+			if r.onReady != nil {
+				r.onReady(RuntimeReadyInfo{RuntimeVersion: RuntimeVersion})
+			}
+		})
+		<-ctx.Done()
+		r.logger("[runtime] low-disk mode: graceful shutdown requested")
+		return &RuntimeResult{DBPath: r.dbPath}, nil
+	}
 
 	db, err := storage.OpenDB(ctx, r.dbPath)
 	if err != nil {
@@ -182,82 +207,54 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 		return &RuntimeResult{DBPath: r.dbPath}, nil
 	}
 
-	// Pre-start capacity check: refuse to launch a collector session onto a
-	// volume already below the disk-guard floor. When tripped, low-disk mode is
-	// strictly write-quiescent: neither collector nor scheduler are started,
-	// and shutdown flush is omitted. Runtime availability (READY) is preserved
-	// so read-only queries continue to serve existing data.
-	collectorStarted := true
 	diskTripped := false
-	var status storage.DiskGuardStatus
-	if r.diskGuardCheck != nil {
-		status = r.diskGuardCheck(r.dbPath)
-	} else {
-		status = storage.NewDiskGuard(r.dbPath).Check()
-	}
-	if status.Tripped {
-		collectorStarted = false
-		diskTripped = true
-		r.logger("[runtime] disk guard floor breached before collector start (%s) - low-disk mode: collector and scheduler disabled, write-quiescent (degraded)",
-			status.Describe())
-	}
-
 	var outcome collectorOutcome
 	schedulerCtx, cancelScheduler := context.WithCancel(context.Background())
 	defer cancelScheduler()
 
-	if collectorStarted {
-		collectorCtx, cancelCollector := context.WithCancel(context.Background())
-		defer cancelCollector()
+	collectorCtx, cancelCollector := context.WithCancel(context.Background())
+	defer cancelCollector()
 
-		collectorDone := make(chan collectorOutcome, 1)
-		go func() {
-			result, err := r.collector.Run(collectorCtx)
-			collectorDone <- collectorOutcome{result: result, err: err}
-		}()
+	collectorDone := make(chan collectorOutcome, 1)
+	go func() {
+		result, err := r.collector.Run(collectorCtx)
+		collectorDone <- collectorOutcome{result: result, err: err}
+	}()
 
-		schedulerDone := make(chan error, 1)
-		go func() {
-			schedulerDone <- scheduler.Run(schedulerCtx)
-		}()
+	schedulerDone := make(chan error, 1)
+	go func() {
+		schedulerDone <- scheduler.Run(schedulerCtx)
+	}()
 
-		// The local writer DB, scheduler, and collector goroutine have all crossed
-		// their startup boundary. Controller reachability is deliberately not part
-		// of this readiness contract because the collector owns retry semantics.
-		r.readyOnce.Do(func() {
-			if r.onReady != nil {
-				r.onReady(RuntimeReadyInfo{RuntimeVersion: RuntimeVersion})
-			}
-		})
-
-		select {
-		case <-ctx.Done():
-			r.logger("[runtime] graceful shutdown requested")
-			cancelScheduler()
-			<-schedulerDone
-			cancelCollector()
-			outcome = <-collectorDone
-		case outcome = <-collectorDone:
-			if outcome.err != nil {
-				r.logger("[runtime] collector fatal exit: %v", outcome.err)
-			} else {
-				r.logger("[runtime] collector stopped cleanly")
-			}
-			cancelScheduler()
-			<-schedulerDone
-			cancelCollector()
+	// The local writer DB, scheduler, and collector goroutine have all crossed
+	// their startup boundary. Controller reachability is deliberately not part
+	// of this readiness contract because the collector owns retry semantics.
+	r.readyOnce.Do(func() {
+		if r.onReady != nil {
+			r.onReady(RuntimeReadyInfo{RuntimeVersion: RuntimeVersion})
 		}
-	} else {
-		// Low-disk mode: strictly write-quiescent.
-		// Neither collector nor scheduler run, preserving disk space.
-		// Runtime reports READY so read-only queries can still inspect existing data.
-		r.readyOnce.Do(func() {
-			if r.onReady != nil {
-				r.onReady(RuntimeReadyInfo{RuntimeVersion: RuntimeVersion})
-			}
-		})
-		<-ctx.Done()
-		r.logger("[runtime] low-disk mode: graceful shutdown requested")
+	})
+
+	select {
+	case <-ctx.Done():
+		r.logger("[runtime] graceful shutdown requested")
+		cancelScheduler()
+		<-schedulerDone
+		cancelCollector()
+		outcome = <-collectorDone
+	case outcome = <-collectorDone:
+		if outcome.result != nil && outcome.result.DiskGuardTripped {
+			diskTripped = true
+			r.logger("[runtime] collector stopped due to disk guard trip (mid-run breach) - write-quiescent shutdown engaged")
+		}
+		if outcome.err != nil {
+			r.logger("[runtime] collector fatal exit: %v", outcome.err)
+		} else {
+			r.logger("[runtime] collector stopped cleanly")
+		}
+		cancelScheduler()
+		<-schedulerDone
+		cancelCollector()
 	}
 
 	// Final accounting flush: the collector writer has stopped, so the

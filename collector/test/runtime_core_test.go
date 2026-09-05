@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -327,23 +329,237 @@ func TestRuntimeLowDiskModeIsWriteQuiescent(t *testing.T) {
 		t.Fatal("runtime did not shut down cleanly")
 	}
 
-	// 4. Verify log statements confirming write-quiescence.
+	// 4. Verify log statements confirming pre-start write-quiescence (no DB init).
 	logsMu.Lock()
 	defer logsMu.Unlock()
 	hasTrippedLog := false
-	hasSkippedFlushLog := false
+	hasShutdownLog := false
 	for _, l := range logs {
-		if strings.Contains(l, "low-disk mode: collector and scheduler disabled, write-quiescent") {
+		if strings.Contains(l, "disk guard floor breached before DB init") {
 			hasTrippedLog = true
 		}
-		if strings.Contains(l, "low-disk mode: skipped shutdown accounting flush and truncate") {
-			hasSkippedFlushLog = true
+		if strings.Contains(l, "low-disk mode: graceful shutdown requested") {
+			hasShutdownLog = true
 		}
 	}
 	if !hasTrippedLog {
-		t.Errorf("missing degraded start log in logs: %v", logs)
+		t.Errorf("missing degraded pre-start log in logs: %v", logs)
 	}
-	if !hasSkippedFlushLog {
-		t.Errorf("missing skipped flush log in logs: %v", logs)
+	if !hasShutdownLog {
+		t.Errorf("missing graceful shutdown log in logs: %v", logs)
+	}
+}
+
+// TestRuntimeLowDiskPreStartBlocksPendingMigrationsAndWrites proves that when
+// free space is below the floor prior to startup, the runtime DOES NOT open the
+// writer DB, DOES NOT execute pending schema migrations, and DOES NOT write to disk,
+// while still becoming READY for read-only query access.
+func TestRuntimeLowDiskPreStartBlocksPendingMigrationsAndWrites(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/pending-migrations.db"
+
+	// 1. Manually initialize a database that only has migration 1 recorded
+	// (so migrations 2 through 9 are pending).
+	rawDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open raw sqlite: %v", err)
+	}
+	if _, err := rawDB.Exec(`
+		CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT);
+		INSERT INTO schema_migrations VALUES (1, '001_initial.sql', '2026-08-25T00:00:00Z');
+	`); err != nil {
+		t.Fatalf("failed to insert migration 1: %v", err)
+	}
+	_ = rawDB.Close()
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"version":"mock"}`))
+		}
+	}))
+	defer mockServer.Close()
+
+	readyCh := make(chan struct{})
+	rt, err := proxylensruntime.NewRuntime(proxylensruntime.RuntimeOptions{
+		DBPath: dbPath,
+		Collector: proxylensruntime.CollectorOptions{
+			ControllerURL: mockServer.URL,
+			SessionID:     "sess-low-disk-precheck",
+		},
+		OnReady: func(info proxylensruntime.RuntimeReadyInfo) {
+			close(readyCh)
+		},
+		DiskGuardCheck: func(dbPath string) storage.DiskGuardStatus {
+			return storage.DiskGuardStatus{
+				Tripped:     true,
+				FreeBytes:   50 << 20,
+				FloorBytes:  1 << 30,
+				DBSizeBytes: 1 << 20,
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		_, rerr := rt.Run(ctx)
+		runDone <- rerr
+	}()
+
+	// Runtime must still report ready (for read-only queries).
+	select {
+	case <-readyCh:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("runtime did not become ready in pre-start low disk mode")
+	}
+
+	cancel()
+	select {
+	case rerr := <-runDone:
+		if rerr != nil {
+			t.Fatalf("Run returned error on shutdown: %v", rerr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runtime did not shut down cleanly")
+	}
+
+	// Verify that pending migrations were NOT executed. Max version must still be 1!
+	checkDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer checkDB.Close()
+	var maxVer int
+	if err := checkDB.QueryRowContext(context.Background(), "SELECT MAX(version) FROM schema_migrations;").Scan(&maxVer); err != nil {
+		t.Fatalf("failed to query max migration version: %v", err)
+	}
+	if maxVer != 1 {
+		t.Fatalf("pre-start low-disk mode executed migrations! maxVer=%d, want 1", maxVer)
+	}
+}
+
+// TestRuntimeLowDiskMidRunBreachSuppressesShutdownAccounting proves that when a disk
+// breach trips during collector execution, the collector stops with DiskGuardTripped,
+// the runtime engages write-quiescence, and shutdown flush and truncate are skipped.
+func TestRuntimeLowDiskMidRunBreachSuppressesShutdownAccounting(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/mid-run-disk.db"
+
+	initSink, err := storage.OpenSQLiteSink(context.Background(), dbPath, "sess-mid-init", "v-init")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = initSink.EndSession(context.Background(), "sess-mid-init", storage.SessionStatusClosedClean)
+	_ = initSink.Close()
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/version":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"version":"mock"}`))
+		case "/connections":
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"uploadTotal":0,"downloadTotal":0,"connections":[]}`))
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockServer.Close()
+
+	var logs []string
+	var logsMu sync.Mutex
+	logger := func(format string, args ...any) {
+		logsMu.Lock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+		logsMu.Unlock()
+	}
+
+	// Start with a guard that is NOT tripped.
+	mockGuard := storage.NewDiskGuard(dbPath)
+	mockGuard.SetFloorFn(func(dbSize uint64) uint64 { return 1 })
+
+	readyCh := make(chan struct{})
+	rt, err := proxylensruntime.NewRuntime(proxylensruntime.RuntimeOptions{
+		DBPath: dbPath,
+		Collector: proxylensruntime.CollectorOptions{
+			ControllerURL: mockServer.URL,
+			SessionID:     "sess-mid-run-trip",
+			DiskGuard:     mockGuard,
+		},
+		Logger: logger,
+		OnReady: func(info proxylensruntime.RuntimeReadyInfo) {
+			close(readyCh)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		_, rerr := rt.Run(ctx)
+		runDone <- rerr
+	}()
+
+	select {
+	case <-readyCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runtime did not become ready")
+	}
+
+	// Trigger mid-run breach!
+	mockGuard.SetFloorFn(func(dbSize uint64) uint64 { return math.MaxUint64 })
+	_ = mockGuard.Check()
+
+	// Wait for runtime to complete due to mid-run stop or shutdown
+	select {
+	case rerr := <-runDone:
+		if rerr != nil {
+			t.Fatalf("Run returned error: %v", rerr)
+		}
+	case <-time.After(5 * time.Second):
+		// If still shutting down, cancel context to finish.
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("runtime did not shut down after mid-run breach")
+		}
+	}
+
+	logsMu.Lock()
+	defer logsMu.Unlock()
+	hasMidRunLog := false
+	hasSkippedLog := false
+	for _, l := range logs {
+		if strings.Contains(l, "collector stopped due to disk guard trip (mid-run breach)") {
+			hasMidRunLog = true
+		}
+		if strings.Contains(l, "low-disk mode: skipped shutdown accounting flush and truncate (write-quiescent)") {
+			hasSkippedLog = true
+		}
+	}
+	if !hasMidRunLog {
+		t.Errorf("missing mid-run breach log: %v", logs)
+	}
+	if !hasSkippedLog {
+		t.Errorf("missing skipped flush/truncate log: %v", logs)
 	}
 }

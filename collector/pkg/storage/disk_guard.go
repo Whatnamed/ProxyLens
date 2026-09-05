@@ -76,6 +76,13 @@ func NewDiskGuard(dbPath string) *DiskGuard {
 	}
 }
 
+// SetFloorFn overrides the floor computation function. Intended for tests.
+func (g *DiskGuard) SetFloorFn(fn func(dbSize uint64) uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.floorFn = fn
+}
+
 // Check measures free space once and updates the tripped state.
 func (g *DiskGuard) Check() DiskGuardStatus {
 	var dbSize uint64
