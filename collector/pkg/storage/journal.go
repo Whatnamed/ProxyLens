@@ -53,23 +53,32 @@ func IngestJournalRecord(ctx context.Context, tx *sql.Tx, ev *types.CollectorEve
 	var lastEpoch, lastFrame, lastSeq int64
 	err = tx.QueryRowContext(ctx, "SELECT last_epoch_id, last_frame_sequence, last_event_sequence FROM storage_cursors WHERE session_id = ?", ev.SessionID).Scan(&lastEpoch, &lastFrame, &lastSeq)
 	if err == nil {
-		// 比较权威顺序
-		isForward := false
-		if int64(ev.EpochID) > lastEpoch {
-			isForward = true
-		} else if int64(ev.EpochID) == lastEpoch {
-			if ev.FrameSequence > lastFrame {
+		if ev.FrameSequence == 0 && ev.EventSequence == 0 {
+			// Out-of-band session-scoped evidence (such as direct disk guard trip
+			// health events emitted without an active engine): inherit the cursor
+			// position and advance event_sequence monotonically instead of failing.
+			ev.EpochID = int(lastEpoch)
+			ev.FrameSequence = lastFrame
+			ev.EventSequence = lastSeq + 1
+		} else {
+			// 比较权威顺序
+			isForward := false
+			if int64(ev.EpochID) > lastEpoch {
 				isForward = true
-			} else if ev.FrameSequence == lastFrame {
-				if ev.EventSequence > lastSeq {
+			} else if int64(ev.EpochID) == lastEpoch {
+				if ev.FrameSequence > lastFrame {
 					isForward = true
+				} else if ev.FrameSequence == lastFrame {
+					if ev.EventSequence > lastSeq {
+						isForward = true
+					}
 				}
 			}
-		}
 
-		if !isForward {
-			return false, fmt.Errorf("%w: session %s received backwards event (epoch=%d, frame=%d, seq=%d) while cursor is at (epoch=%d, frame=%d, seq=%d)",
-				ErrOrderingViolation, ev.SessionID, ev.EpochID, ev.FrameSequence, ev.EventSequence, lastEpoch, lastFrame, lastSeq)
+			if !isForward {
+				return false, fmt.Errorf("%w: session %s received backwards event (epoch=%d, frame=%d, seq=%d) while cursor is at (epoch=%d, frame=%d, seq=%d)",
+					ErrOrderingViolation, ev.SessionID, ev.EpochID, ev.FrameSequence, ev.EventSequence, lastEpoch, lastFrame, lastSeq)
+			}
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return false, fmt.Errorf("failed to query cursor: %w", err)

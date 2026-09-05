@@ -221,20 +221,28 @@ func (r *CollectorRunner) Run(ctx context.Context) (*CollectorResult, error) {
 	// decision never depends on the evidence write succeeding.
 	if diskGuard != nil {
 		go diskGuard.TripLoop(runCtx, storage.DiskGuardInterval, func(status storage.DiskGuardStatus) {
-			ev := &types.CollectorEvent{
-				SessionID: r.sessionID,
-				Timestamp: status.CheckedAt,
-				Details: map[string]any{
-					"issue":       "disk_guard_floor_breached",
-					"description": "free space on the DB volume fell below the stop floor; ingestion stopped cleanly",
-					"freeBytes":   int64(status.FreeBytes),
-					"floorBytes":  int64(status.FloorBytes),
-					"dbSizeBytes": int64(status.DBSizeBytes),
-				},
+			details := map[string]any{
+				"freeBytes":   int64(status.FreeBytes),
+				"floorBytes":  int64(status.FloorBytes),
+				"dbSizeBytes": int64(status.DBSizeBytes),
 			}
-			ev.Type = types.EventCollectorHealth
-			ev.GenerateDeterministicEventID()
-			_ = sqliteSink.Emit(ev)
+			desc := "free space on the DB volume fell below the stop floor; ingestion stopped cleanly"
+			if err := engine.EmitSessionHealth(status.CheckedAt, "disk_guard_floor_breached", desc, details); err != nil {
+				ev := &types.CollectorEvent{
+					SessionID: r.sessionID,
+					Timestamp: status.CheckedAt,
+					Type:      types.EventCollectorHealth,
+					Details: map[string]any{
+						"issue":       "disk_guard_floor_breached",
+						"description": desc,
+						"freeBytes":   int64(status.FreeBytes),
+						"floorBytes":  int64(status.FloorBytes),
+						"dbSizeBytes": int64(status.DBSizeBytes),
+					},
+				}
+				ev.GenerateDeterministicEventID()
+				_ = sqliteSink.Emit(ev)
+			}
 			cancel()
 		})
 	}

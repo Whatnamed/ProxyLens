@@ -268,7 +268,7 @@ func (s *SQLiteEventSink) Emit(ev *types.CollectorEvent) error {
 		UPDATE collector_sessions SET
 			last_event_at = ?,
 			last_heartbeat_at = ?,
-			last_frame_sequence = ?,
+			last_frame_sequence = MAX(COALESCE(last_frame_sequence, 0), ?),
 			updated_at = ?
 		WHERE session_id = ?;
 		`

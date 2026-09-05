@@ -804,3 +804,75 @@ func TestStorageStateEngineIntegration(t *testing.T) {
 		t.Errorf("Monitored delta mismatch: Up %d, Down %d", conns[0].MonitoredUploadTotal, conns[0].MonitoredDownloadTotal)
 	}
 }
+
+// TestSessionProgressMonotonicOnHealthEvent verifies that emitting a health event
+// with a zero or lower FrameSequence DOES NOT regress collector_sessions.last_frame_sequence.
+func TestSessionProgressMonotonicOnHealthEvent(t *testing.T) {
+	ctx := context.Background()
+	dbPath, cleanup := createTestDB(t)
+	defer cleanup()
+
+	const sess = "sess-monotonic-progress"
+	sink, err := OpenSQLiteSink(ctx, dbPath, sess, "v1.0.0-test")
+	if err != nil {
+		t.Fatalf("OpenSQLiteSink failed: %v", err)
+	}
+	defer sink.Close()
+
+	// 1. Emit an event with a high FrameSequence (e.g. 100).
+	ev1 := &types.CollectorEvent{
+		EventID:       "ev-high-frame",
+		SessionID:     sess,
+		EpochID:       1,
+		FrameSequence: 100,
+		EventSequence: 1,
+		Type:          types.EventConnectionBootstrap,
+		Timestamp:     time.Now().UTC(),
+		ConnectionID:  "conn-1",
+		Metadata: types.RawMetadata{
+			Process: "curl.exe",
+			Network: "tcp",
+		},
+	}
+	if err := sink.Emit(ev1); err != nil {
+		t.Fatalf("Emit ev1 failed: %v", err)
+	}
+
+	// Verify last_frame_sequence is 100.
+	var seq int64
+	if err := sink.db.QueryRowContext(ctx, `
+		SELECT last_frame_sequence FROM collector_sessions WHERE session_id = ?;
+	`, sess).Scan(&seq); err != nil {
+		t.Fatalf("failed to query last_frame_sequence: %v", err)
+	}
+	if seq != 100 {
+		t.Fatalf("expected last_frame_sequence=100, got %d", seq)
+	}
+
+	// 2. Emit a CollectorHealth event with FrameSequence = 0 (e.g. out-of-band disk guard trip).
+	healthEv := &types.CollectorEvent{
+		EventID:       "ev-health-zero-frame",
+		SessionID:     sess,
+		EpochID:       1,
+		FrameSequence: 0,
+		EventSequence: 0,
+		Type:          types.EventCollectorHealth,
+		Timestamp:     time.Now().UTC(),
+		Details: map[string]any{
+			"issue": "disk_guard_floor_breached",
+		},
+	}
+	if err := sink.Emit(healthEv); err != nil {
+		t.Fatalf("Emit healthEv failed: %v", err)
+	}
+
+	// 3. Verify last_frame_sequence DID NOT regress to 0, but remained 100!
+	if err := sink.db.QueryRowContext(ctx, `
+		SELECT last_frame_sequence FROM collector_sessions WHERE session_id = ?;
+	`, sess).Scan(&seq); err != nil {
+		t.Fatalf("failed to query last_frame_sequence after health: %v", err)
+	}
+	if seq != 100 {
+		t.Fatalf("last_frame_sequence regressed to %d, want 100 (monotonic progress broken!)", seq)
+	}
+}
