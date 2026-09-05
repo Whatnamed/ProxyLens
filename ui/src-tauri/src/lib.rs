@@ -1,11 +1,13 @@
 pub mod commands;
 pub mod installed_owner;
+pub mod runtime_settings;
 pub mod sidecar;
 pub mod state;
 pub mod supervisor_process;
 
 use state::AppState;
 use std::env;
+use std::path::Path;
 use std::time::Duration;
 use tauri::{Manager, State};
 
@@ -20,7 +22,11 @@ pub fn run() {
             commands::get_query_api_session,
             commands::get_supervisor_bootstrap_status,
             commands::get_e2e_mode,
-            commands::report_e2e_probe
+            commands::get_settings_e2e_mode,
+            commands::report_e2e_probe,
+            commands::report_settings_e2e_probe,
+            runtime_settings::get_runtime_settings,
+            runtime_settings::apply_runtime_settings
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -32,17 +38,10 @@ pub fn run() {
             // UI-owned, read-only sidecar.
             match sidecar::resolve_runtime_db_path() {
                 Ok(runtime_db_path) => {
-                    let installed =
-                        installed_owner::ensure_installed_owner(&handle, &runtime_db_path);
-                    let bootstrap = match installed {
-                        Ok(Some((status, child))) => {
-                            Ok(supervisor_process::SupervisorBootstrap { status, child })
-                        }
-                        Ok(None) => tauri::async_runtime::block_on(
-                            supervisor_process::ensure_supervisor(&handle, &runtime_db_path),
-                        ),
-                        Err(error) => Err(error),
-                    };
+                    let bootstrap = tauri::async_runtime::block_on(bootstrap_supervisor(
+                        &handle,
+                        &runtime_db_path,
+                    ));
                     match bootstrap {
                         Ok(bootstrap) => {
                             eprintln!(
@@ -50,8 +49,7 @@ pub fn run() {
                                 serde_json::to_string(&bootstrap.status)
                                     .unwrap_or_else(|_| "{}".to_string())
                             );
-                            *state.supervisor_status.lock().unwrap() = bootstrap.status;
-                            *state.supervisor.lock().unwrap() = bootstrap.child;
+                            store_supervisor_bootstrap(&state, bootstrap);
                         }
                         Err(error) => {
                             let status = supervisor_process::SupervisorBootstrapStatus {
@@ -138,6 +136,24 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running proxylens desktop application");
+}
+
+pub(crate) async fn bootstrap_supervisor(
+    app_handle: &tauri::AppHandle,
+    db_path: &Path,
+) -> Result<supervisor_process::SupervisorBootstrap, String> {
+    match installed_owner::ensure_installed_owner(app_handle, db_path)? {
+        Some((status, child)) => Ok(supervisor_process::SupervisorBootstrap { status, child }),
+        None => supervisor_process::ensure_supervisor(app_handle, db_path).await,
+    }
+}
+
+pub(crate) fn store_supervisor_bootstrap(
+    state: &State<'_, AppState>,
+    bootstrap: supervisor_process::SupervisorBootstrap,
+) {
+    *state.supervisor_status.lock().unwrap() = bootstrap.status;
+    *state.supervisor.lock().unwrap() = bootstrap.child;
 }
 
 fn schedule_e2e_auto_exit(app_handle: &tauri::AppHandle) {

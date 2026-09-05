@@ -84,7 +84,26 @@ Tauri continues to own only the Query API sidecar. Closing the UI does not stop
 the installed Supervisor, Runtime, or Collector, and reopening the UI reuses
 the same authority DB ownership.
 
-### 2.4 Configuration and upgrade/uninstall policy
+### 2.4 Settings and installed-layout gate
+
+Phase 3E-2B2B adds a sidebar utility Settings surface without changing the
+outer-owner contract. The React dialog calls Tauri commands; Tauri calls the
+bundled Supervisor CLI; Go remains the authority for runtime.json, secure
+Secret storage, exact Task Scheduler identity, and lifecycle activation.
+
+Only an evidence-based installed binary layout may mutate the production
+Task Scheduler owner. A developer checkout may persist non-secret preferences
+and report owner facts, but Settings must not register, unregister, or
+reconcile the production task from that checkout. E2E task mutation remains
+limited to one random ProxyLens-Test UUID identity.
+
+Controller/Secret changes persist first and then use exact graceful stop and
+owner rebootstrap. Autostart-only changes reconcile the exact task and do not
+stop current collection. The UI reports saved-pending-restart when persistence
+succeeds but activation cannot be completed. Secret values never enter task
+arguments, JSON, logs, SQLite, browser storage, or URL state.
+
+### 2.5 Configuration and upgrade/uninstall policy
 
 `runtime.json` is schema v2 with `autostartEnabled`, defaulting to true.
 Schema v1 loads losslessly with autostart enabled and is written as v2 on the
@@ -118,8 +137,9 @@ ADR.
 - Task registration is a durable OS owner configuration, not a Secret or Query
   token transport; credentials never enter task arguments, JSON, logs, or
   handshake output.
-- Settings/autostart UI, tray integration, Service/MSI/updater lifecycle, and
-  final visual or real-data acceptance remain Phase 3E-2B2B/Deferred.
+- Tray integration, Service/MSI/updater lifecycle, and final visual or
+  real-data acceptance remain Deferred; the Phase 3E-2B2B Settings/autostart
+  utility and mock-only installed product acceptance are complete.
 
 ## 4. Verification
 
@@ -143,6 +163,11 @@ ADR.
 - The E2E TimeTrigger is only an activation substitute for the current session;
   it shares the production LogonTrigger repetition helper and does not add a
   separate recovery policy. Production registration contains no E2E TimeTrigger.
+- The Settings installed-product harness uses one temporary authority DB,
+  one random loopback mock Controller, one random WinCred target, and one
+  random test task. It verifies Secret replacement, autostart reconciliation,
+  UI-close owner survival, and same-DB preservation without real Mihomo
+  lifecycle.
 
 ## 5. Safety boundary
 

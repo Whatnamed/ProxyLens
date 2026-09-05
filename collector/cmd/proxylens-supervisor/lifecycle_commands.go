@@ -22,6 +22,7 @@ type controlStatus struct {
 type installedOwnerStatus struct {
 	Mode              string `json:"mode"`
 	TaskName          string `json:"taskName"`
+	InstalledLayout   bool   `json:"installedLayout"`
 	TaskRegistered    bool   `json:"taskRegistered"`
 	TaskEnabled       bool   `json:"taskEnabled"`
 	SupervisorRunning bool   `json:"supervisorRunning"`
@@ -141,6 +142,18 @@ func installStatusCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "Failed to resolve installed owner identity: %v\n", err)
 		return 1
 	}
+	installedLayout, err := currentInstalledLayout()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to resolve installed Supervisor layout: %v\n", err)
+		return 1
+	}
+	if !installedLayout && !allowE2ETaskIdentity() {
+		return encodeLifecycleStatus(installedOwnerStatus{
+			Mode:            installedlifecycle.TaskOwnerModeUnavailable,
+			TaskName:        name,
+			InstalledLayout: false,
+		})
+	}
 	task, err := installedlifecycle.Status(name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to inspect installed owner: %v\n", err)
@@ -159,6 +172,7 @@ func installStatusCommand(args []string) int {
 	return encodeLifecycleStatus(installedOwnerStatus{
 		Mode:              installedlifecycle.TaskOwnerModeInstalled,
 		TaskName:          task.TaskName,
+		InstalledLayout:   installedLayout,
 		TaskRegistered:    task.Registered,
 		TaskEnabled:       task.Enabled,
 		SupervisorRunning: presence == proxylensruntime.SupervisorPresent,
@@ -171,6 +185,10 @@ func installRegisterCommand(args []string) int {
 	if _, err := parseOptionalDB(args, "install register"); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
+	}
+	if err := requireTaskOwnerMutationAllowed(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	name, err := installedlifecycle.ResolveTaskName()
 	if err != nil {
@@ -194,6 +212,10 @@ func installUnregisterCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
 	}
+	if err := requireTaskOwnerMutationAllowed(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	name, err := installedlifecycle.ResolveTaskName()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to resolve installed owner identity: %v\n", err)
@@ -210,6 +232,10 @@ func installRunCommand(args []string) int {
 	if _, err := parseOptionalDB(args, "install run"); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
+	}
+	if err := requireTaskOwnerMutationAllowed(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	name, err := installedlifecycle.ResolveTaskName()
 	if err != nil {
@@ -233,6 +259,13 @@ func installEnsureOwnerCommand(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to resolve installed owner identity: %v\n", err)
 		return 1
+	}
+	if !taskOwnerMutationAllowed() {
+		return encodeLifecycleStatus(installedOwnerStatus{
+			Mode:            installedlifecycle.TaskOwnerModeUnavailable,
+			TaskName:        name,
+			InstalledLayout: false,
+		})
 	}
 	cfg, err := loadRuntimeConfig()
 	if err != nil {
@@ -299,6 +332,11 @@ func configSetAutostartCommand(args []string) int {
 }
 
 func reconcileExistingInstalledOwner(enabled bool) error {
+	if !taskOwnerMutationAllowed() {
+		// A developer checkout may persist the preference, but it must never
+		// register or unregister the production Task Scheduler owner.
+		return nil
+	}
 	name, err := installedlifecycle.ResolveTaskName()
 	if err != nil {
 		return err
@@ -314,6 +352,18 @@ func reconcileExistingInstalledOwner(enabled bool) error {
 }
 
 func emitInstalledOwnerStatus(name, dbPath string) int {
+	installedLayout, err := currentInstalledLayout()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to resolve installed Supervisor layout: %v\n", err)
+		return 1
+	}
+	if !installedLayout && !allowE2ETaskIdentity() {
+		return encodeLifecycleStatus(installedOwnerStatus{
+			Mode:            installedlifecycle.TaskOwnerModeUnavailable,
+			TaskName:        name,
+			InstalledLayout: false,
+		})
+	}
 	task, err := installedlifecycle.Status(name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to inspect installed owner after reconcile: %v\n", err)
@@ -332,6 +382,7 @@ func emitInstalledOwnerStatus(name, dbPath string) int {
 	return encodeLifecycleStatus(installedOwnerStatus{
 		Mode:              installedlifecycle.TaskOwnerModeInstalled,
 		TaskName:          task.TaskName,
+		InstalledLayout:   installedLayout,
 		TaskRegistered:    task.Registered,
 		TaskEnabled:       task.Enabled,
 		SupervisorRunning: presence == proxylensruntime.SupervisorPresent,
@@ -346,6 +397,34 @@ func currentSupervisorTaskExecutable() (string, error) {
 		return "", err
 	}
 	return installedlifecycle.ResolveTaskExecutable(executable)
+}
+
+func currentInstalledLayout() (bool, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return false, err
+	}
+	return installedlifecycle.IsInstalledLayout(executable), nil
+}
+
+func allowE2ETaskIdentity() bool {
+	return os.Getenv(installedlifecycle.E2EModeEnv) == "1" &&
+		os.Getenv(installedlifecycle.E2ETaskNameEnv) != ""
+}
+
+func taskOwnerMutationAllowed() bool {
+	installed, err := currentInstalledLayout()
+	if err != nil {
+		return false
+	}
+	return installed || allowE2ETaskIdentity()
+}
+
+func requireTaskOwnerMutationAllowed() error {
+	if taskOwnerMutationAllowed() {
+		return nil
+	}
+	return fmt.Errorf("installed ProxyLens layout is required before changing the production Task Scheduler owner")
 }
 
 func startDirectSupervisor(dbPath string) error {

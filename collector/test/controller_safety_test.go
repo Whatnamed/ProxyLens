@@ -171,6 +171,38 @@ func TestSupervisorLifecycleToolUsesOnlyE2ESafeStateAndCredentials(t *testing.T)
 	}
 }
 
+func TestSettingsProductHarnessReestablishesOnlyIsolatedRuntimeState(t *testing.T) {
+	path := filepath.Join("..", "..", "tools", "runtime", "run-phase3e2b2b-settings-product.mjs")
+	sourceBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", path, err)
+	}
+	source := string(sourceBytes)
+	for _, required := range []string{
+		"PROXYLENS_DB_PATH",
+		"PROXYLENS_CONFIG_DIR",
+		"PROXYLENS_E2E_CREDENTIAL_TARGET",
+		"PROXYLENS_E2E_TASK_NAME",
+		"PROXYLENS_E2E_TASK_ARGS",
+		"task-owner-wrapper.cmd",
+		"config', 'apply",
+		"autostart=false->true",
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("%s is missing isolated Settings acceptance marker %q", path, required)
+		}
+	}
+	for _, forbidden := range []string{
+		"delete baseEnvironment.PROXYLENS_DB_PATH",
+		"ProxyLens/MihomoController/v1",
+		"PROXYLENS_E2E_TASK_SCHEDULE",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("%s contains unsafe or obsolete marker %q", path, forbidden)
+		}
+	}
+}
+
 func containsForbiddenControllerEndpoint(value string) bool {
 	for _, endpoint := range forbiddenControllerEndpoints() {
 		if strings.Contains(value, endpoint) {

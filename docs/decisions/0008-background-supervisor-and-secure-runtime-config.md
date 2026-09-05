@@ -130,14 +130,42 @@ status file may mirror these safe PID/status records so a harness can observe
 restart after the Tauri process has exited; it is not a production control
 channel.
 
-### 7. Deferred 2B2 scope
+### 7. Settings bridge extension (Phase 3E-2B2B)
 
-This ADR does not implement login/autostart, Startup shortcuts, Scheduled
-Tasks, Windows Service, tray ownership, installer hooks, uninstall cleanup,
-upgrade replacement, final Settings UI, installed-path acceptance, or Phase 4.
-Automatic recovery after the Supervisor process itself exits without a UI
-restart remains part of the installed autostart/ownership work in Phase 3E-2B2.
-Real FLClash/Mihomo lifecycle and final real-data visual acceptance remain
+The durable configuration boundary from this ADR is extended by a small
+installed-product Settings utility. React remains a presentation layer and
+invokes Tauri commands; Tauri invokes the bundled Supervisor CLI and does not
+read the filesystem, Credential Manager, Task Scheduler, or SQLite directly.
+
+The Supervisor config apply command accepts one bounded, strict stdin JSON
+request. It supports Secret actions keep, replace, and clear; replacement
+Secret is transient and is written only through the secure store. The
+non-secret runtime.json remains atomic and schema-validated. Apply performs
+safe rollback across config, credential, and exact owner-task reconciliation
+when a later persistence step fails.
+
+The status response exposes only safe metadata: persisted Controller URL,
+effective Controller URL, effective source, autostart preference, credential
+presence, Secret source, installed-layout evidence, and owner facts. The
+existing precedence remains authoritative, including MIHOMO_SECRET over
+Credential Manager; an environment/process override is never represented as a
+persisted setting. In E2E mode the existing fail-closed mock Controller
+contract remains unchanged.
+
+Controller/Secret changes use the existing exact graceful stop and owner
+rebootstrap path. Autostart-only changes reconcile the exact Task Scheduler
+owner without stopping current collection. Persistence success with activation
+failure is reported as saved-pending-restart, while an existing database keeps
+the read-only Query fallback.
+
+### 8. Deferred 2B2 scope at ADR issuance
+
+At the time of this ADR's 2026-09-04 decision, login/autostart, Scheduled
+Tasks, installer hooks, final Settings UI, and installed-path acceptance were
+deferred. Phase 3E-2B2A subsequently implemented the installed ownership
+layer, and Phase 3E-2B2B implemented the Settings bridge described above.
+Startup shortcuts, Windows Service, tray ownership, MSI/updater, Phase 4,
+real FLClash/Mihomo lifecycle, and final real-data visual acceptance remain
 deferred.
 
 ## Consequences
@@ -150,8 +178,8 @@ deferred.
   storage, accounting, or Controller semantics.
 - Secure configuration is durable without placing Controller Secret in a
   plaintext file, process arguments, or logs.
-- Login/autostart and installed lifecycle remain intentionally unclaimed until
-  a separately scoped 3E-2B2 decision.
+- The installed lifecycle and Settings bridge add no new network control plane
+  and preserve the same Go ownership and secure configuration authority.
 
 ## Evidence
 

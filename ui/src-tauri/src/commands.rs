@@ -26,6 +26,11 @@ pub fn get_e2e_mode() -> bool {
     env::var("PROXYLENS_E2E_MODE").unwrap_or_default() == "1"
 }
 
+#[tauri::command]
+pub fn get_settings_e2e_mode() -> bool {
+    env::var("PROXYLENS_SETTINGS_E2E").unwrap_or_default() == "1"
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct E2EProbeReport {
@@ -48,6 +53,27 @@ pub fn report_e2e_probe(report: E2EProbeReport) {
         eprintln!(
             "PROXYLENS_WEBVIEW_E2E_READY meta={} summary={} connections={}",
             meta_int, sum_int, conns_int
+        );
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsE2EProbeReport {
+    pub settings_ok: bool,
+    pub owner_ok: bool,
+    pub runtime_ok: bool,
+}
+
+#[tauri::command]
+pub fn report_settings_e2e_probe(report: SettingsE2EProbeReport) {
+    if env::var("PROXYLENS_E2E_MODE").unwrap_or_default() == "1" {
+        let settings = if report.settings_ok { 1 } else { 0 };
+        let owner = if report.owner_ok { 1 } else { 0 };
+        let runtime = if report.runtime_ok { 1 } else { 0 };
+        eprintln!(
+            "PROXYLENS_SETTINGS_E2E_READY settings={} owner={} runtime={}",
+            settings, owner, runtime
         );
     }
 }

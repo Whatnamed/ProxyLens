@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -13,7 +14,7 @@ const (
 	ProductionTaskName            = `\ProxyLens\Background Supervisor`
 	E2ETaskNameEnv                = "PROXYLENS_E2E_TASK_NAME"
 	E2ETaskExecutableEnv          = "PROXYLENS_E2E_TASK_EXE"
-	E2ETaskScheduleEnv            = "PROXYLENS_E2E_TASK_SCHEDULE"
+	E2ETaskArgumentsEnv           = "PROXYLENS_E2E_TASK_ARGS"
 	E2EDirectOwnerEnv             = "PROXYLENS_E2E_DIRECT_OWNER"
 	E2EModeEnv                    = "PROXYLENS_E2E_MODE"
 	DefaultTaskRepetitionInterval = "PT1M"
@@ -82,16 +83,63 @@ func ResolveTaskExecutable(defaultPath string) (string, error) {
 	return absolute, nil
 }
 
+// ResolveTaskArguments is deliberately test-only. Production Task Scheduler
+// actions have no arguments; isolated E2E actions may use a harmless wrapper
+// command to re-establish the temporary test environment because Task
+// Scheduler does not inherit the harness process environment.
+func ResolveTaskArguments() (string, error) {
+	value := strings.TrimSpace(os.Getenv(E2ETaskArgumentsEnv))
+	if !isE2E() {
+		if value != "" {
+			return "", fmt.Errorf("%w: test task argument override requires %s=1", ErrInvalidTaskIdentity, E2EModeEnv)
+		}
+		return "", nil
+	}
+	if len(value) > 8192 || strings.IndexByte(value, 0) >= 0 {
+		return "", fmt.Errorf("%w: E2E task arguments are too long or contain NUL", ErrInvalidTaskIdentity)
+	}
+	return value, nil
+}
+
 func IsE2EDirectOwner() bool {
 	return isE2E() && strings.TrimSpace(os.Getenv(E2EDirectOwnerEnv)) == "1"
 }
 
-func isE2E() bool {
-	return strings.TrimSpace(os.Getenv(E2EModeEnv)) == "1"
+// IsInstalledLayout is an evidence-based product-layout check. It deliberately
+// requires the complete sibling set produced by the accepted NSIS layout and
+// the uninstaller marker; a checkout or a copied development binary must not
+// be able to mutate the production Task Scheduler owner through Settings.
+func IsInstalledLayout(supervisorExecutable string) bool {
+	value := strings.TrimSpace(supervisorExecutable)
+	if value == "" {
+		return false
+	}
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return false
+	}
+	directory := filepath.Dir(abs)
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
+	for _, name := range []string{
+		"proxylens-supervisor" + ext,
+		"proxylens-runtime" + ext,
+		"proxylens-query-api" + ext,
+		"proxylens-desktop" + ext,
+		"uninstall" + ext,
+	} {
+		info, statErr := os.Stat(filepath.Join(directory, name))
+		if statErr != nil || !info.Mode().IsRegular() {
+			return false
+		}
+	}
+	return true
 }
 
-func isE2ETaskScheduleEnabled() bool {
-	return isE2E() && strings.TrimSpace(os.Getenv(E2ETaskScheduleEnv)) == "1"
+func isE2E() bool {
+	return strings.TrimSpace(os.Getenv(E2EModeEnv)) == "1"
 }
 
 func validateTaskName(name string) error {

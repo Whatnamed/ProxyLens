@@ -5,6 +5,39 @@
 
 ---
 
+## 2026-09-05 — Phase 3E-2B2B Settings & Installed Product Polish
+
+**Scope:** 在 3E-2B2A installed ownership 基线上完成最小 Settings utility、
+secure runtime config apply、installed owner facts 与 mock-only product acceptance；
+不引入 Test Connection、Mihomo 自动配置、tray、Service、MSI/updater 或 Phase 4。
+
+**Completed:**
+
+- 新增 sidebar secondary utility Settings dialog，支持 Controller URL、secure
+  Controller Secret、Windows login autostart 与 Supervisor/Runtime/Task Scheduler
+  事实状态；保持现有 Design System、Light/Dark 与 English / 中文 1:1 契约；
+- 新增严格 bounded stdin config apply，支持 Secret keep / replace / clear、验证、
+  atomic non-secret config、secure-store/task rollback 与 saved-pending-restart；
+- 保持 Controller/Secret effective-source precedence 可见且诚实；environment/process
+  override 不伪装成 persisted setting；developer checkout 不得修改 production task；
+- Controller/Secret 变化走 exact stop → owner rebootstrap，autostart-only 变化不停止
+  当前采集；Query API 与历史 authority DB 在重启过程中保持 read-only 可读；
+- 加固 E2E Task Scheduler wrapper，使随机 task action 重新建立临时 DB/config、
+  random WinCred target 与 mock Controller 环境，不继承产品默认 DB/Controller。
+
+**Validation state:**
+
+- 90 UI tests / 19 suites、affected Go tests 与 go vet、Rust cargo fmt/test、
+  TypeScript/Vite build、Windows NSIS build：PASS；
+- mock-only installed product acceptance：PASS；随机 loopback mock、随机
+  ProxyLens/Test UUID credential、随机 ProxyLens-Test UUID task、temporary DB；
+  Secret A → Secret B、new Secret Runtime authentication、autostart false → true、
+  UI-close owner survival 与 same-DB preservation 均通过，默认 exact cleanup 完成；
+- 本阶段未启动、停止、重启或修改真实 FLClash/Mihomo/TUN/系统代理，也未连接
+  真实 9090/7988；本地 PASS 不表述为 GitHub CI PASS。
+
+---
+
 ## 2026-09-04 — Phase 3E-2B2A Installed Runtime Ownership & NSIS Lifecycle
 
 **Scope:** 在 3E-2B1 Supervisor / secure config 基线上完成 Windows V1 安装版运行时

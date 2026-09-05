@@ -25,7 +25,7 @@ Phase 2  持久化、核算与运行时验证                  [COMPLETED]
    ↓
 Phase 3  审计 UI                                  [IN PROGRESS — core UI implemented]
    ↓
-Phase 3E Desktop Runtime Integration              [IN PROGRESS — 3E-1/3E-2A/3E-2B1/3E-2B2A complete; 3E-2B2B pending]
+Phase 3E Desktop Runtime Integration              [IN PROGRESS — runtime implementation complete; final visual/real-environment validation deferred]
    ↓
 Phase 4  Audit Intelligence                       [PLANNED]
    ↓
@@ -162,7 +162,7 @@ Later    长期增强                                 [PLANNED]
   - [ ] 桌面应用图标、安装版生命周期与启动性能最终打磨；
   - [ ] 最终视觉 polish 与 Design System freeze。
 
-### Phase 3E — Desktop Runtime Integration [IN PROGRESS — Phase 3E-1, 3E-2A, 3E-2B1 and 3E-2B2A complete / 3E-2B2B pending]
+### Phase 3E — Desktop Runtime Integration [IN PROGRESS — runtime implementation complete; final visual/real-environment validation deferred]
 
 已完成 Phase 3E-1：
 
@@ -199,10 +199,12 @@ Later    长期增强                                 [PLANNED]
 - [x] NSIS current-user fresh install、upgrade quiesce/reconcile、disabled preference preservation 与 uninstall cleanup；
 - [x] actual installed binary layout 与 isolated Package A → Package B → uninstall acceptance；
 
-#### Phase 3E-2B2B — Settings & Installed Product Polish [PLANNED]
+#### Phase 3E-2B2B — Settings & Installed Product Polish [COMPLETED]
 
-- [ ] minimal Settings/config UI 与 autostart UI；
-- [ ] installed startup/status polish 与 product-level acceptance；
+- [x] sidebar secondary utility Settings dialog、Controller URL / secure Secret / Windows login autostart 与 installed owner facts；
+- [x] effective-source metadata、strict bounded stdin config apply、keep / replace / clear Secret contract、safe rollback 与 saved-pending-restart state；
+- [x] developer checkout installed-layout gate、exact lifecycle rebootstrap、autostart-only non-disruption 与 EN / 中文、Light / Dark utility-dialog states；
+- [x] mock-only installed product acceptance：random mock Controller、random WinCred/task identities、Secret replacement、autostart false → true、UI-close survival 与 same-DB preservation；
 - [ ] real FLClash/Mihomo validation 与最终 real-data visual acceptance（Deferred）。
 
 ---

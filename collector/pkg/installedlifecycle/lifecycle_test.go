@@ -3,6 +3,7 @@ package installedlifecycle
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -56,20 +57,54 @@ func TestResolveTaskExecutableOverrideIsE2EOnly(t *testing.T) {
 	}
 }
 
-func TestTaskScheduleOverrideIsE2EOnly(t *testing.T) {
-	t.Setenv(E2EModeEnv, "")
-	t.Setenv(E2ETaskScheduleEnv, "1")
-	if isE2ETaskScheduleEnabled() {
-		t.Fatal("E2E task activation trigger was enabled outside E2E mode")
+func TestResolveTaskArgumentsOverrideIsE2EOnly(t *testing.T) {
+	t.Setenv(E2ETaskArgumentsEnv, `/D /S /C "wrapper.cmd"`)
+	if _, err := ResolveTaskArguments(); err == nil {
+		t.Fatal("non-E2E task argument override was accepted")
 	}
-
 	t.Setenv(E2EModeEnv, "1")
-	t.Setenv(E2ETaskScheduleEnv, "")
-	if isE2ETaskScheduleEnabled() {
-		t.Fatal("E2E task activation trigger was enabled without its explicit opt-in")
+	arguments, err := ResolveTaskArguments()
+	if err != nil || arguments == "" {
+		t.Fatalf("E2E task arguments were rejected: %q, %v", arguments, err)
 	}
-	t.Setenv(E2ETaskScheduleEnv, "1")
-	if !isE2ETaskScheduleEnabled() {
-		t.Fatal("explicit E2E task activation trigger was not enabled")
+}
+
+func TestInstalledLayoutRequiresAcceptedSiblingSetAndUninstaller(t *testing.T) {
+	dir := t.TempDir()
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
+	for _, name := range []string{
+		"proxylens-supervisor" + ext,
+		"proxylens-runtime" + ext,
+		"proxylens-query-api" + ext,
+		"proxylens-desktop" + ext,
+		"uninstall" + ext,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	supervisor := filepath.Join(dir, "proxylens-supervisor"+ext)
+	if !IsInstalledLayout(supervisor) {
+		t.Fatal("accepted isolated installed layout was not detected")
+	}
+	if err := os.Remove(filepath.Join(dir, "uninstall"+ext)); err != nil {
+		t.Fatal(err)
+	}
+	if IsInstalledLayout(supervisor) {
+		t.Fatal("layout without uninstall marker was accepted")
+	}
+}
+
+func TestDeveloperDirectoryIsNotInstalledLayout(t *testing.T) {
+	dir := t.TempDir()
+	supervisor := filepath.Join(dir, "proxylens-supervisor.exe")
+	if err := os.WriteFile(supervisor, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if IsInstalledLayout(supervisor) {
+		t.Fatal("random developer directory was accepted as installed")
 	}
 }

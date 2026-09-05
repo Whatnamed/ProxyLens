@@ -34,6 +34,10 @@ func registerTask(name, executable string) error {
 	if err != nil {
 		return err
 	}
+	arguments, err := ResolveTaskArguments()
+	if err != nil {
+		return err
+	}
 	userID, err := currentUserID()
 	if err != nil {
 		return err
@@ -51,7 +55,7 @@ func registerTask(name, executable string) error {
 		}
 		defer definition.Release()
 
-		if err := configureTaskDefinition(definition, executable, userID); err != nil {
+		if err := configureTaskDefinition(definition, executable, arguments, userID); err != nil {
 			return err
 		}
 		result, err := oleutil.CallMethod(
@@ -173,7 +177,7 @@ func runTask(name string) error {
 	})
 }
 
-func configureTaskDefinition(definition *ole.IDispatch, executable, userID string) error {
+func configureTaskDefinition(definition *ole.IDispatch, executable, arguments, userID string) error {
 	registrationInfo, err := getPropertyDispatch(definition, "RegistrationInfo")
 	if err != nil {
 		return fmt.Errorf("failed to access Task Scheduler registration info: %w", err)
@@ -242,7 +246,7 @@ func configureTaskDefinition(definition *ole.IDispatch, executable, userID strin
 		return err
 	}
 	trigger.Release()
-	if isE2ETaskScheduleEnabled() {
+	if isE2E() {
 		if err := addE2EActivationTrigger(definition); err != nil {
 			return err
 		}
@@ -259,7 +263,7 @@ func configureTaskDefinition(definition *ole.IDispatch, executable, userID strin
 	}
 	for property, value := range map[string]interface{}{
 		"Path":             executable,
-		"Arguments":        "",
+		"Arguments":        arguments,
 		"WorkingDirectory": filepath.Dir(executable),
 	} {
 		if err := putProperty(action, property, value); err != nil {
@@ -289,6 +293,11 @@ func configureTaskTriggerRepetition(trigger *ole.IDispatch) error {
 	return nil
 }
 
+// addE2EActivationTrigger is only a session-local activation substitute. It
+// uses the exact same indefinite PT1M repetition helper as the production
+// LogonTrigger; it does not add a second recovery policy. Production task
+// registration never reaches this branch because its identity is rejected in
+// E2E mode and normal registration has no time trigger.
 func addE2EActivationTrigger(definition *ole.IDispatch) error {
 	triggers, err := getPropertyDispatch(definition, "Triggers")
 	if err != nil {
@@ -305,13 +314,10 @@ func addE2EActivationTrigger(definition *ole.IDispatch) error {
 		"StartBoundary": time.Now().Add(2 * time.Second).Format("2006-01-02T15:04:05"),
 	} {
 		if err := putProperty(timeTrigger, property, value); err != nil {
-			return fmt.Errorf("failed to configure isolated E2E activation trigger %s: %w", property, err)
+			return fmt.Errorf("failed to configure Task Scheduler E2E activation trigger %s: %w", property, err)
 		}
 	}
-	if err := configureTaskTriggerRepetition(timeTrigger); err != nil {
-		return err
-	}
-	return nil
+	return configureTaskTriggerRepetition(timeTrigger)
 }
 
 func firstAction(task *ole.IDispatch) (*ole.IDispatch, error) {

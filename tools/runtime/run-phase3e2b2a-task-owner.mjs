@@ -20,7 +20,6 @@ const environment = {
   PROXYLENS_E2E_MODE: '1',
   PROXYLENS_E2E_TASK_NAME: taskName,
   PROXYLENS_E2E_TASK_EXE: path.join(tempRoot, 'task-owner-fixture.exe'),
-  PROXYLENS_E2E_TASK_SCHEDULE: '1',
 };
 const supervisorBin = path.join(tempRoot, 'proxylens-supervisor.exe');
 const fixtureSource = path.join(repoRoot, 'tools', 'runtime', 'fixtures', 'task-owner-fixture.go');

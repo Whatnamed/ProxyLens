@@ -7,14 +7,13 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3E Desktop Runtime Integration — Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration 与 Phase 3E-2B2A installed lifecycle complete；Phase 3E-2B2B pending。Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
+- **当前阶段**：Phase 3E Desktop Runtime Integration — Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
 - **代码线**：以当前 checkout 的 Git HEAD 及其相对 `origin/main` 的关系为准；活动分支名和短期 SHA 不在此处硬编码。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
 - **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 `main`；工程/语义 Gate 全部通过。
 - **当前状态与待办**：
-  1. Phase 3E-2B2B minimal Settings/autostart surface、installed startup/status polish 与 product acceptance。
-  2. Final Full Tauri multi-fixture / real-data visual acceptance（Deferred：当前不以真实 FLClash/Mihomo lifecycle validation 作为验收路径）。
-  3. UI Design System 继续保持 Draft。
+  1. Final Full Tauri multi-fixture / real-data visual acceptance（Deferred：当前不以真实 FLClash/Mihomo lifecycle validation 作为验收路径）。
+  2. UI Design System 继续保持 Draft。
 
 ### Phase 3E-1 Runtime Core (Complete)
 
@@ -53,6 +52,14 @@
 - Windows Tauri installed mode 优先让 Go lifecycle CLI 复用/ensure Task Scheduler owner；无已注册 owner 的 developer checkout 保留 direct Supervisor fallback；Query API 仍是 UI-owned read-only sidecar；
 - canonical NSIS 配置为 `installMode=currentUser`。PREINSTALL/PREUNINSTALL 先 exact unregister + graceful stop，POSTINSTALL reconcile owner；upgrade 保留 DB、config、Controller URL、autostart preference 与 WinCred，uninstall 删除程序/task/process 但保留用户数据与 credential；
 - 已通过非 elevated feasibility gate（随机 `\ProxyLens-Test\<UUID>` + harmless temporary executable）及 isolated Package A → Package B → uninstall acceptance；task-owner acceptance 使用 E2E TimeTrigger 激活同一无限 `PT1M` repetition contract，未使用 Service、tray、MSI 或 updater。
+
+### Phase 3E-2B2B Settings & Installed Product Polish (Complete)
+
+- 已新增 sidebar footer secondary utility Settings dialog；不新增 Settings 顶层导航，沿用现有 dialog、token、Light/Dark 与 English / 中文 1:1 语言契约；
+- Settings 通过 Tauri commands 调用 bundled proxylens-supervisor，React 不直接访问 filesystem、Credential Manager、Task Scheduler 或 SQLite；Go config apply 使用 bounded、strict stdin JSON，支持 Secret keep / replace / clear，Secret 不进入 argv、runtime.json、日志或 SQLite；
+- Controller URL、有效来源与 MIHOMO_SECRET / Credential Manager precedence 以安全 metadata 展示；environment/process override 不会被伪装为 persisted setting；Controller/Secret 变化走 exact stop → owner rebootstrap，autostart-only 变化只 reconcile exact task，不中断当前采集；
+- installed layout gate 防止 developer checkout 修改生产 Task Scheduler task；persistence success / activation failure 显示 saved-pending-restart，Query API 与已有 authority DB 在重启期间保持 read-only 可读；
+- mock-only installed product acceptance：random loopback mock Controller、random ProxyLens/Test/<UUID> WinCred、random \ProxyLens-Test\<UUID> task、temporary DB；覆盖 Secret A → Secret B、新 Secret Runtime 使用、autostart false → true、UI-close owner survival 与 DB preservation。
 
 ### 已实现的正式 UI
 
@@ -101,8 +108,8 @@
 - System Status heartbeat consistency：PASS；
 - Inspector crash resilience：PASS；
 - TypeScript / frontend build：本轮本地 PASS；
-- UI regression coverage：85 tests（18 suites 本地执行结果），包含 `keepLiveTickOnly` 作用域守卫、History 查询证据隔离、History 翻页选区重置与返回保留、Coverage 混合缺口类型、Overview Route 局部加载与 null 防假 0、`gapIdentity` 稳定身份映射、快照生命周期转换、locale dictionary parity、静态 translation-key audit、calendar navigation utilities、time snapshot、drill reset、future segments 与 system diagnostics；
-- Locale dictionary parity：EN / 中文各 390 个 key，静态 UI translation keys 严格 1:1 对齐无缺失；
+- UI regression coverage：90 tests（19 suites 本地执行结果），在既有交互回归之上增加 Settings draft、URL validation、Secret action 与 effective-source metadata tests；
+- Locale dictionary parity：EN / 中文各 458 个 key，静态 UI translation keys 严格 1:1 对齐无缺失；
 - Typography asset build：6 个 WOFF2、17,066,080 bytes（约 17.07MB / 16.28MiB）；Manrope/Sarasa/JetBrains 均为本地正式资产，无 TTF/WOFF/italic 或额外字重；Sarasa SemiBold 源以 CSS 500 角色加载；
 - Overlay native-control audit：官方产品页面不再使用 native `<select>` 或 `datetime-local`；
 - Compact inline alignment：Time Range / Route / badge / chip / network token / status / legend，以及 Causal Path / Accounting Events 的 primary-first-line marker 与 first-baseline 规则已在 Light / Dark、EN / 中文浏览器 fallback 中核验；
@@ -111,6 +118,7 @@
 - 当前分支无远端 CI status，不能把本地 PASS 表述为 GitHub CI PASS。
 - Phase 3E-1 Go runtime/scheduler mock E2E、Tauri path unit tests、双 binary build 与 Tauri release build 均已完成本地验证；Phase 3E-2A 与 3E-2B1 的 Go ownership/config/protocol/Supervisor tests、Rust parser/path tests、UI tests、三 binary build、Tauri release build、Go subprocess acceptance 与 mock-only Supervisor lifecycle smoke 也已完成本地验证；这些结果不是 GitHub CI PASS。
 - Phase 3E-2B2A：`go test` affected packages、`go vet` affected packages、Rust `cargo fmt --check` / `cargo test`、UI/build 与 Windows NSIS build；`node tools/runtime/run-phase3e2b2a-task-owner.mjs` 与 `node tools/runtime/run-phase3e2b2a-installed-lifecycle.mjs` 均为 PASS，均使用随机 mock/temp identities；这些结果不是 GitHub CI PASS。
+- Phase 3E-2B2B：affected Go tests / `go vet`、Rust tests、90 UI tests、TypeScript/Vite build、Windows NSIS installed product build 与 `node tools/runtime/run-phase3e2b2b-settings-product.mjs` 均为 PASS；acceptance 使用随机 mock/temp identities，输出确认 Secret A → Secret B、autostart false → true、UI-close survival 与 DB preservation；这些结果不是 GitHub CI PASS。
 - 本任务正式 runtime 测试使用 `httptest` / mock WebSocket 与隔离临时 SQLite DB；真实 FLClash/Mihomo lifecycle 与 real-data validation 未纳入本阶段正式验收。
 - `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
 - 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller；AST 守卫递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；lifecycle tooling 另有随机 mock URL、temp-dir、E2E-only status file 与 exact-PID cleanup guard。3E-2B1 验收未启动或修改真实 FLClash/Mihomo，未发生真实网络生命周期或 Mihomo 写操作。
@@ -167,7 +175,7 @@
 ## Open Questions
 
 - 最终视觉验收后，当前 Draft Design System v1 是否 Freeze；
-- Phase 3E-2B2B 的 minimal Settings/autostart UI、installed startup/status polish 与最终 installed product acceptance；Windows Service、tray、MSI、updater 与真实 FLClash/Mihomo validation 仍不在当前范围。
+- Windows Service、tray、MSI、updater、Test Connection、FLClash config discovery、Mihomo 自动配置与真实 FLClash/Mihomo validation 仍不在当前范围。
 
 ---
 
@@ -175,12 +183,13 @@
 
 - 交互模型收口已完成：Overview / Coverage 使用动态推进的 Live Analysis Range，History 使用确定性冻结快照，已解决快照提前生成与展示范围语义漂移问题。
 - UI Design System 仍为 Draft，不应在最终视觉验收前标记 Frozen。
-- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻与 Supervisor crash recovery 已由 Phase 3E-2B2A 的 current-user Task Scheduler LogonTrigger + 无限 `PT1M` repetition 提供，Runtime crash recovery 仍由 Supervisor bounded backoff 负责；后续只剩 2B2B 的 Settings/status polish。
+- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻与 Supervisor crash recovery 已由 Phase 3E-2B2A 的 current-user Task Scheduler LogonTrigger + 无限 `PT1M` repetition 提供，Runtime crash recovery 仍由 Supervisor bounded backoff 负责。Settings/status polish 已完成；最终视觉与真实环境验证仍 Deferred。
 
 ---
 
 ## Next Step
 
-1. 进入 Phase 3E-2B2B，处理 minimal Settings/autostart surface、installed startup/status polish 与最终 installed product acceptance。
+1. 待完整桌面 runtime 条件具备且用户明确安排真实环境后，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
+2. 在完整桌面视觉验收前，UI Design System 继续保持 Draft；之后再按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence。
 2. 待完整桌面 runtime 条件具备且用户明确安排真实环境后，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
 3. 在完整桌面视觉验收前，UI Design System 继续保持 Draft；之后再按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence。

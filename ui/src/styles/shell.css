@@ -138,6 +138,11 @@
   color: var(--pl-text-primary);
 }
 
+.pl-sidebar__theme-toggle:disabled {
+  color: var(--pl-text-disabled);
+  cursor: default;
+}
+
 .pl-sidebar__theme-toggle svg {
   width: 13px;
   height: 13px;

@@ -21,11 +21,18 @@ import (
 )
 
 type configStatus struct {
-	SchemaVersion        int    `json:"schemaVersion"`
-	ControllerConfigured bool   `json:"controllerConfigured"`
-	ControllerURL        string `json:"controllerUrl,omitempty"`
-	AutostartEnabled     bool   `json:"autostartEnabled"`
-	SecretPresent        bool   `json:"secretPresent"`
+	SchemaVersion          int    `json:"schemaVersion"`
+	ControllerConfigured   bool   `json:"controllerConfigured"`
+	ControllerURL          string `json:"controllerUrl,omitempty"`
+	PersistedControllerURL string `json:"persistedControllerUrl"`
+	EffectiveControllerURL string `json:"effectiveControllerUrl"`
+	ControllerSource       string `json:"controllerSource"`
+	AutostartEnabled       bool   `json:"autostartEnabled"`
+	CredentialStored       bool   `json:"credentialStored"`
+	EffectiveSecretPresent bool   `json:"effectiveSecretPresent"`
+	SecretPresent          bool   `json:"secretPresent"`
+	SecretSource           string `json:"secretSource"`
+	InstalledLayout        bool   `json:"installedLayout"`
 }
 
 func main() {
@@ -213,12 +220,14 @@ func emitSupervisorSignal(encode func(io.Writer) error) error {
 
 func runConfigCommand(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: proxylens-supervisor config <status|set-controller|set-autostart|set-secret|clear-secret>")
+		fmt.Fprintln(os.Stderr, "Usage: proxylens-supervisor config <status|apply|set-controller|set-autostart|set-secret|clear-secret>")
 		return 2
 	}
 	switch args[0] {
 	case "status":
 		return configStatusCommand()
+	case "apply":
+		return configApplyCommand()
 	case "set-controller":
 		return configSetControllerCommand(args[1:])
 	case "set-autostart":
@@ -234,22 +243,10 @@ func runConfigCommand(args []string) int {
 }
 
 func configStatusCommand() int {
-	cfg, err := loadRuntimeConfig()
+	status, err := buildConfigStatus()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load runtime config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to inspect runtime config: %v\n", err)
 		return 1
-	}
-	secretPresent, err := readConfiguredSecretPresence()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to inspect secure runtime config: %v\n", err)
-		return 1
-	}
-	status := configStatus{
-		SchemaVersion:        cfg.SchemaVersion,
-		ControllerConfigured: strings.TrimSpace(cfg.ControllerURL) != "",
-		ControllerURL:        cfg.ControllerURL,
-		AutostartEnabled:     cfg.AutostartEnabled,
-		SecretPresent:        secretPresent,
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(status); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to emit runtime config status: %v\n", err)
@@ -377,19 +374,4 @@ func configuredSecretStoreForCommand() (runtimeconfig.SecretStore, error) {
 		return nil, fmt.Errorf("Windows Credential Manager target is unavailable")
 	}
 	return store, nil
-}
-
-func readConfiguredSecretPresence() (bool, error) {
-	if strings.TrimSpace(os.Getenv("MIHOMO_SECRET")) != "" {
-		return true, nil
-	}
-	store, _, err := runtimeconfig.NewConfiguredSecretStore(os.Getenv(runtimeconfig.E2EModeEnv) == "1")
-	if err != nil {
-		return false, err
-	}
-	if store == nil {
-		return false, nil
-	}
-	_, found, err := store.Read(context.Background())
-	return found, err
 }

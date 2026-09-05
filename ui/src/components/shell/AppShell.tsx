@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { QueryApiClient } from '../../api/client';
 import { useAuditContext, useLocale, ViewName } from '../../state/AuditContext';
 import { useMetaQuery } from '../../api/queries';
@@ -8,6 +8,7 @@ import { HistoryPage } from '../../features/history/HistoryPage';
 import { CoveragePage } from '../../features/coverage/CoveragePage';
 import { DiagnosticsView } from '../../diagnostics/DiagnosticsView';
 import { IconCoverage, IconHistory, IconLens, IconMoon, IconOverview, IconSun } from '../ui/icons';
+import { SettingsDialog, SettingsTriggerIcon as SettingsDialogIcon } from '../settings/SettingsDialog';
 
 const NAV_ITEMS: { view: ViewName; labelKey: string; icon: React.ReactNode }[] = [
   { view: 'overview', labelKey: 'nav.overview', icon: <IconOverview /> },
@@ -34,6 +35,13 @@ export const AppShell: React.FC<{
   const { t } = useLocale();
   const metaQuery = useMetaQuery(client);
   const showDiagnostics = useHashDiagnostics();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const closeSettings = () => {
+    setSettingsOpen(false);
+    window.requestAnimationFrame(() => settingsTriggerRef.current?.focus());
+  };
 
   if (showDiagnostics) {
     return (
@@ -74,6 +82,20 @@ export const AppShell: React.FC<{
           <SystemStatusFooter meta={metaQuery.data} />
           <div className="pl-sidebar__utility">
             <button
+              ref={settingsTriggerRef}
+              type="button"
+              className="pl-sidebar__theme-toggle"
+              onClick={() => setSettingsOpen(true)}
+              disabled={!isTauri}
+              title={isTauri ? t('settings.open') : t('settings.desktopOnly')}
+              aria-label={isTauri ? t('settings.open') : t('settings.desktopOnly')}
+              aria-haspopup="dialog"
+              aria-expanded={settingsOpen}
+            >
+              <SettingsDialogIcon />
+              {t('settings.open')}
+            </button>
+            <button
               className="pl-sidebar__theme-toggle"
               onClick={toggleTheme}
               title={theme === 'light' ? t('theme.switchToDark') : t('theme.switchToLight')}
@@ -108,6 +130,7 @@ export const AppShell: React.FC<{
           </div>
         </div>
       </aside>
+      {settingsOpen && isTauri && <SettingsDialog onClose={closeSettings} />}
       <main className="pl-workspace">
         {view === 'overview' && <OverviewPage client={client} sessionError={sessionError} meta={metaQuery.data} />}
         {view === 'history' && <HistoryPage client={client} sessionError={sessionError} meta={metaQuery.data} />}

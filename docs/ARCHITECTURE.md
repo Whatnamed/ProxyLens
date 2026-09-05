@@ -30,6 +30,7 @@ proxylens-runtime                    │
                               ▼
 Tauri v2（Desktop Shell）
    ├─ installed owner status/ensure；无任务的 dev path direct ensure
+   ├─ Settings commands → bundled Supervisor config/status/apply/lifecycle
    └─ owns / starts / stops → proxylens-query-api
                                 │ read-only
                                 ▼
@@ -48,8 +49,9 @@ API，Supervisor 与 Runtime/Collector 继续运行，下一次 UI 打开时复�
 这不等同于 Runtime 自行 daemonize。
 
 当前 3E-2B2A 已覆盖登录启动、安装版 ownership、upgrade/uninstall lifecycle 与 UI-close
-后的持续运行；Windows Service、托盘、Settings/autostart UI 和其他产品 polish 仍属于
-Phase 3E-2B2B，尚未实现。
+后的持续运行；3E-2B2B 已补齐 Settings/autostart utility、installed status polish 与
+mock-only installed product acceptance。Windows Service、托盘、MSI/updater、Test
+Connection、FLClash config discovery、Mihomo 自动配置与真实环境验收仍 Deferred。
 
 核心隔离原则：
 
@@ -65,7 +67,7 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 
 当前确定 Runtime、Collector、Storage、UI 四类职责解耦运行：
 
-### Desktop Runtime Core, Windows Ownership & Supervisor (Phase 3E-1 / 3E-2A / 3E-2B1 / 3E-2B2A)
+### Desktop Runtime Core, Windows Ownership, Supervisor & Settings (Phase 3E-1 / 3E-2A / 3E-2B1 / 3E-2B2A / 3E-2B2B)
 
 - `proxylens-runtime` 是 Go Runtime executable，组合可复用的 `CollectorRunner` 与周期性 `AccountingScheduler`；它保持前台进程语义，不自行 daemonize；
 - Runtime 负责解析 DB path、初始化 writer DB、启动 Collector 与自动核算，并在 cancellation 时按 scheduler-first 顺序 graceful shutdown；
@@ -77,7 +79,16 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 - Tauri 在安装版优先调用 Go lifecycle CLI ensure 已注册且 enabled 的 owner；没有已安装 owner 的 dev checkout 保留 direct Supervisor ensure。两条路径都让 UI close 只停止 Query API，Supervisor 与 Runtime/Collector 在 UI 关闭后继续运行；
 - `runtime.json` v2 只保存非敏感 Controller URL 与 `autostartEnabled`，Secret 通过 Windows Credential Manager 的 Generic Credential 保存；`MIHOMO_SECRET` 仍是显式开发环境 override，Secret 不进入 JSON、argv、handshake 或日志；
 - Supervisor 不读取 Mihomo、不打开或写入 SQLite 业务数据；Runtime 继续拥有 Collector、Accounting 与唯一 writer DB 生命周期；
-- upgrade 保留 DB、config、Controller URL、autostart preference 与 credential；uninstall 删除 task/process/program files 但保留用户数据与 credential；Windows Service、托盘与 Settings/autostart UI 不在 2B2A。
+- upgrade 保留 DB、config、Controller URL、autostart preference 与 credential；uninstall 删除 task/process/program files 但保留用户数据与 credential；Windows Service、托盘、MSI/updater 与真实环境验收仍 Deferred。
+
+### Settings utility and configuration boundary (Phase 3E-2B2B)
+
+- Settings 是 sidebar footer 的 secondary utility，不进入顶层导航；React 只维护 draft、dirty、applying、applied、pending 与 failure 状态，通过 Tauri commands 读取/提交安全 snapshot；
+- Tauri/Rust 不直接访问 filesystem、Credential Manager、Task Scheduler 或 SQLite。Settings command 只调用 bundled Supervisor CLI；Go 是 runtime.json、Windows Credential Manager、exact Task Scheduler 与 lifecycle stop/rebootstrap 的 OS/config authority；
+- config apply 是严格 bounded stdin JSON contract，字段只允许 Controller URL、autostart preference、Secret action 与 transient replacement Secret。Secret 只进入一次性 stdin 和 Credential Manager API，不进入 argv、runtime.json、日志、SQLite、Query cache、localStorage、sessionStorage 或 URL；
+- Controller URL 的 persisted/effective/source metadata 由现有 CLI/env/persisted/product-default precedence 产生；环境或进程 override 生效时 UI 只能展示保存值与当前有效来源，不能把保存值伪装成 authority。E2E 仍 fail closed，persisted URL 不成为自动化网络 authority；
+- Controller/Secret 改变按 exact graceful stop → owner rebootstrap 激活；只改 autostart 时仅 reconcile exact owner task，不中断当前 Runtime/Collector。保存成功但激活失败返回 saved-pending-restart；existing DB 继续走 read-only Query fallback；
+- 只有 evidence-based installed layout 才允许 Settings 修改生产 Task Scheduler owner。developer checkout 可以保存配置并展示事实状态，但不得注册、删除或修改生产 task。
 
 ### Collector (已确立生产原型)
 
@@ -129,9 +140,9 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
   - **Tauri / Rust**: 负责桌面窗口生命周期、bundled `proxylens-supervisor` ensure-start、Go Query API Sidecar 启停与单次会话高熵 Bearer Token（>=256-bit），**严禁** 在 Rust 中实现 Analytics SQL、核算或存储业务逻辑；Supervisor/Runtime child 不纳入 UI close 的 Query cleanup；
   - **Go Local Query API (`proxylens-query-api`)**: 以只读模式（`query_only=ON`, `busy_timeout=10000`）打开数据库，严格绑定 `127.0.0.1` 随机端口，校验 Bearer Token 与 CORS，完全复用 `storage.AnalyticsService` 与 `storage.QueryService`；
   - **React / TypeScript**: 纯 Web 前端，通过 TanStack React Query 消费 HTTP JSON API，**严禁** 直接读取 SQLite 数据库；
-  - **零耦合生命周期**: 安装版 Tauri 启动顺序为 writable DB resolve → installed owner status/ensure → existing read-only DB resolve → Query API；无已注册 owner 的 dev path 为 writable DB resolve → direct Supervisor ensure/handshake → existing read-only DB resolve → Query API。UI 关闭时仅终止 Query API，Supervisor/Runtime/Collector 保持运行并可被下一次 UI 复用；2B2B 只补 Settings/status polish。
+  - **零耦合生命周期**: 安装版 Tauri 启动顺序为 writable DB resolve → installed owner status/ensure → existing read-only DB resolve → Query API；无已注册 owner 的 dev path 为 writable DB resolve → direct Supervisor ensure/handshake → existing read-only DB resolve → Query API。UI 关闭时仅终止 Query API，Supervisor/Runtime/Collector 保持运行并可被下一次 UI 复用；Settings utility 仍通过上述 Tauri → Supervisor boundary，不改变 Query-only 数据路径。
 
-### 2.1 Desktop data path contract (Phase 3E-1 / Phase 3E-2A / Phase 3E-2B1 / Phase 3E-2B2A)
+### 2.1 Desktop data path and configuration contract (Phase 3E-1 / Phase 3E-2A / Phase 3E-2B1 / Phase 3E-2B2A / Phase 3E-2B2B)
 
 正式 Windows V1 authority DB 默认位于 `%LOCALAPPDATA%\ProxyLens\data\proxylens.db`。路径 precedence 为 `PROXYLENS_DB_PATH` → `PROXYLENS_DATA_DIR\proxylens.db` → 默认路径；Runtime writer 可创建目录/DB，Tauri/Query API 只读 resolver 在 DB 缺失时返回 `DB_NOT_READY`，不创建或猜测数据库。
 

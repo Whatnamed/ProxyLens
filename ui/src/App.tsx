@@ -90,6 +90,40 @@ export const App: React.FC = () => {
     runE2EProbe();
   }, [apiClient, isTauri]);
 
+  const settingsProbeReportedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isTauri || settingsProbeReportedRef.current) return;
+    const runSettingsProbe = async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        if (!(await invoke<boolean>('get_settings_e2e_mode'))) return;
+        const settings = await invoke<{
+          ownerMode: string;
+          supervisorRunning: boolean;
+          runtimeRunning: boolean;
+        }>('get_runtime_settings');
+        settingsProbeReportedRef.current = true;
+        await invoke('report_settings_e2e_probe', {
+          report: {
+            settingsOk: settings.ownerMode !== 'unavailable',
+            ownerOk: settings.supervisorRunning || settings.ownerMode !== 'unavailable',
+            runtimeOk: settings.runtimeRunning,
+          },
+        });
+      } catch {
+        settingsProbeReportedRef.current = true;
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('report_settings_e2e_probe', {
+            report: { settingsOk: false, ownerOk: false, runtimeOk: false },
+          });
+        } catch {}
+      }
+    };
+    runSettingsProbe();
+  }, [isTauri]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <AuditProvider>

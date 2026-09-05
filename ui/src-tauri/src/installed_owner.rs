@@ -12,6 +12,8 @@ use tauri::AppHandle;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InstalledOwnerWire {
     mode: String,
+    #[serde(default)]
+    installed_layout: bool,
     task_registered: bool,
     task_enabled: bool,
     supervisor_running: bool,
@@ -39,6 +41,9 @@ pub fn ensure_installed_owner(
         Err(error) => return Err(error),
     };
     if status.mode != "installed-task" || !status.task_registered || !status.task_enabled {
+        return Ok(None);
+    }
+    if !status.installed_layout {
         return Ok(None);
     }
 
