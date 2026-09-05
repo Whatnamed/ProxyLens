@@ -752,3 +752,147 @@ func TestIncrementalBoundaryRefusesIncompleteFrame(t *testing.T) {
 		t.Fatalf("expected boundary to advance to %d, got %d", f2MaxSeq, *run.SourceJournalSequenceMax)
 	}
 }
+
+// TestIncrementalBoundaryInterleavedCompletionRefusesPartialPublish is an interleaving
+// race regression test:
+// 1. Accounting captures currentMax boundary N where Frame 2 has only emitted up to event N.
+// 2. A hook pauses accounting right after boundary capture and commits the completion
+//    event (SamplingResidual, event N+1) for the same Frame 2.
+// 3. Accounting resumes boundary calculation. Invariant: evidence committed after the captured
+//    boundary must NOT prove or partially publish Frame 2. The cut must step back to the
+//    previous complete frame (Frame 1), refusing to partially publish up to N.
+// 4. Only the subsequent accounting round (with a newly captured boundary covering N+1)
+//    advances to publish the complete Frame 2.
+func TestIncrementalBoundaryInterleavedCompletionRefusesPartialPublish(t *testing.T) {
+	ctx := context.Background()
+	base := fixtureBase()
+	dbPath, cleanup := createAccountingTestDB(t)
+	defer cleanup()
+	db, closeDB := runEquivalenceDB(t, dbPath)
+	defer closeDB()
+
+	sess := equivalenceFixtureSession
+	s, err := OpenSQLiteSink(ctx, dbPath, sess, "v-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyChains := []string{"NodeA", "GroupX"}
+
+	// Frame 1: Complete frame with ConnectionNew and SamplingResidual.
+	ts1 := base.Add(time.Second)
+	emitEquivalenceFrame(t, s, 1, ts1, func(f, e int64) []*types.CollectorEvent {
+		return []*types.CollectorEvent{
+			evNew("conn-1", 100, 200, 100, 200, types.RouteProxy, types.ClassKnownApplication, fixtureProxyMeta, "MATCH", proxyChains),
+			{
+				Type:      types.EventSamplingResidual,
+				Timestamp: ts1,
+				Details: map[string]any{
+					"residualUpload":   int64(0),
+					"residualDownload": int64(0),
+				},
+			},
+		}
+	})
+
+	// Seed initial generation to publish Frame 1.
+	for {
+		gen, genErr := GetActiveAccountingGeneration(ctx, db)
+		if genErr == nil && gen != nil {
+			break
+		}
+		if _, err := AdvanceAccountingV2(ctx, db, "seed frame 1", 0); err != nil {
+			t.Fatalf("seed failed: %v", err)
+		}
+	}
+
+	gen, err := GetActiveAccountingGeneration(ctx, db)
+	if err != nil || gen == nil {
+		t.Fatalf("expected active generation, got gen=%v err=%v", gen, err)
+	}
+	p1 := gen.PublishedJournalSequence
+	if p1 <= 0 {
+		t.Fatalf("expected positive published sequence, got %d", p1)
+	}
+
+	// Frame 2: Emit the first event (ConnectionDelta, sequence p1 + 1).
+	ts2 := base.Add(2 * time.Second)
+	evDelta := &types.CollectorEvent{
+		EventID:                 "ev-f2-interleaved-delta",
+		SessionID:               sess,
+		EpochID:                 1,
+		FrameSequence:           2,
+		EventSequence:           1,
+		Type:                    types.EventConnectionDelta,
+		Timestamp:               ts2,
+		ConnectionID:            "conn-1",
+		ObservedUploadCounter:   200,
+		ObservedDownloadCounter: 400,
+		DeltaUpload:             100,
+		DeltaDownload:           200,
+		Route:                   types.RouteProxy,
+		AttributionClass:        types.ClassKnownApplication,
+		Metadata:                fixtureProxyMeta,
+		Rule:                    "MATCH",
+		Chains:                  proxyChains,
+	}
+	if err := s.Emit(evDelta); err != nil {
+		t.Fatalf("failed to emit delta: %v", err)
+	}
+
+	// Interleaving hook: after accounting captures currentMax (= p1 + 1),
+	// before it calculates the cut, emit Frame 2's SamplingResidual (sequence p1 + 2).
+	hookFired := false
+	onAfterCaptureBoundaryHook = func(capturedBoundary int64) {
+		if capturedBoundary == p1+1 && !hookFired {
+			hookFired = true
+			evResidual := &types.CollectorEvent{
+				EventID:       "ev-f2-interleaved-residual",
+				SessionID:     sess,
+				EpochID:       1,
+				FrameSequence: 2,
+				EventSequence: 2,
+				Type:          types.EventSamplingResidual,
+				Timestamp:     ts2,
+				Details: map[string]any{
+					"residualUpload":   int64(0),
+					"residualDownload": int64(0),
+				},
+			}
+			if err := s.Emit(evResidual); err != nil {
+				t.Errorf("hook emit residual failed: %v", err)
+			}
+		}
+	}
+	defer func() { onAfterCaptureBoundaryHook = nil }()
+
+	// Execute accounting with the active race condition hook.
+	run, err := AdvanceAccountingV2(ctx, db, "race tick", 0)
+	if err != nil {
+		t.Fatalf("AdvanceAccountingV2 during race failed: %v", err)
+	}
+	if !hookFired {
+		t.Fatalf("expected interleaving hook to fire during boundary capture")
+	}
+
+	// Invariant check: The published boundary must stay at p1 (Frame 1 end)!
+	// It MUST NOT have published to p1 + 1 (partial Frame 2)!
+	if *run.SourceJournalSequenceMax != p1 {
+		t.Fatalf("RACE CONDITION VIOLATION: boundary advanced to %d into partial frame! want %d",
+			*run.SourceJournalSequenceMax, p1)
+	}
+
+	// Clear hook so normal capture proceeds.
+	onAfterCaptureBoundaryHook = nil
+
+	// Next round: now that Frame 2 was fully completed and the next capture sees p1 + 2,
+	// the published boundary advances cleanly to the complete Frame 2 end.
+	run2, err := AdvanceAccountingV2(ctx, db, "post-race tick", 0)
+	if err != nil {
+		t.Fatalf("post-race AdvanceAccountingV2 failed: %v", err)
+	}
+	if *run2.SourceJournalSequenceMax != p1+2 {
+		t.Fatalf("expected boundary to advance to complete frame end %d, got %d",
+			p1+2, *run2.SourceJournalSequenceMax)
+	}
+}

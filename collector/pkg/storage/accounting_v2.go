@@ -1080,12 +1080,17 @@ func frameAlignedCut(ctx context.Context, db *sql.DB, from, boundary, maxEvents 
 	return to, nil
 }
 
+var onAfterCaptureBoundaryHook func(capturedBoundary int64)
+
 // frameAlignedIncrementalCut captures the current journal max and extends the
 // chunk cut to a whole-frame boundary.
 func frameAlignedIncrementalCut(ctx context.Context, db *sql.DB, from, maxEvents int64) (int64, int64, error) {
 	var currentMax int64
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(journal_sequence), 0) FROM event_journal;`).Scan(&currentMax); err != nil {
 		return 0, 0, fmt.Errorf("failed to capture current journal boundary: %w", err)
+	}
+	if onAfterCaptureBoundaryHook != nil {
+		onAfterCaptureBoundaryHook(currentMax)
 	}
 	if currentMax <= from {
 		return from, currentMax, nil
@@ -1106,6 +1111,12 @@ func extendCutToFrameEnd(ctx context.Context, db *sql.DB, candidate, boundary in
 	if err != nil {
 		return 0, fmt.Errorf("failed to locate frame at cut: %w", err)
 	}
+
+	// Invariant 1: Check the true physical frame end across the entire journal.
+	// Any evidence committed AFTER capturedBoundary must NOT be used to prove or
+	// partially publish this frame. If the candidate frame extends beyond the
+	// captured boundary, it was still in flight when the boundary was captured:
+	// we must step back to before this frame instead of clipping to the boundary.
 	var frameEnd int64
 	if err := db.QueryRowContext(ctx, `
 		SELECT COALESCE(MAX(journal_sequence), ?) FROM event_journal
@@ -1113,12 +1124,24 @@ func extendCutToFrameEnd(ctx context.Context, db *sql.DB, candidate, boundary in
 	`, candidate, sessID, frameSeq).Scan(&frameEnd); err != nil {
 		return 0, err
 	}
+	if frameEnd > boundary {
+		var frameStart int64
+		if err := db.QueryRowContext(ctx, `
+			SELECT COALESCE(MIN(journal_sequence), ?) FROM event_journal
+			WHERE session_id = ? AND frame_sequence = ?;
+		`, candidate, sessID, frameSeq).Scan(&frameStart); err != nil {
+			return 0, err
+		}
+		safeEnd := frameStart - 1
+		if safeEnd < 0 {
+			safeEnd = 0
+		}
+		return safeEnd, nil
+	}
 
-	// Verify whether the candidate frame has completed emitting all its events.
-	// If the cut lands on an in-progress frame whose completion evidence has
-	// not yet committed, do not publish into the middle of the frame; step back
-	// to before this frame so the frame is published atomically when complete.
-	complete, err := isFrameComplete(ctx, db, sessID, frameSeq, frameEnd)
+	// Invariant 2: Verify whether the candidate frame has completed emitting all its
+	// events within the captured boundary. Evidence after boundary is ignored.
+	complete, err := isFrameComplete(ctx, db, sessID, frameSeq, boundary)
 	if err != nil {
 		return 0, fmt.Errorf("failed to verify frame completion: %w", err)
 	}
@@ -1137,9 +1160,6 @@ func extendCutToFrameEnd(ctx context.Context, db *sql.DB, candidate, boundary in
 		return safeEnd, nil
 	}
 
-	if frameEnd > boundary {
-		frameEnd = boundary
-	}
 	return frameEnd, nil
 }
 
@@ -1149,14 +1169,15 @@ func extendCutToFrameEnd(ctx context.Context, db *sql.DB, candidate, boundary in
 // 2. The session itself is no longer running (closed or interrupted).
 // 3. The frame contains definitive completion evidence: SamplingResidual (steady-state frames),
 //    or frame/gap closure markers (MonitoringGapClosed, MonitoringGapOpened).
-func isFrameComplete(ctx context.Context, db *sql.DB, sessID string, frameSeq int64, frameEnd int64) (bool, error) {
-	// 1. Has a newer frame in the same session or a later session started?
+func isFrameComplete(ctx context.Context, db *sql.DB, sessID string, frameSeq int64, boundary int64) (bool, error) {
+	// 1. Has a newer frame in the same session or a later session committed WITHIN boundary?
 	var hasNewer int
 	if err := db.QueryRowContext(ctx, `
 		SELECT 1 FROM event_journal
-		WHERE (session_id = ? AND frame_sequence > ?) OR journal_sequence > ?
+		WHERE ((session_id = ? AND frame_sequence > ?) OR (session_id != ? AND journal_sequence > ?))
+		  AND journal_sequence <= ?
 		LIMIT 1;
-	`, sessID, frameSeq, frameEnd).Scan(&hasNewer); err == nil && hasNewer == 1 {
+	`, sessID, frameSeq, sessID, boundary, boundary).Scan(&hasNewer); err == nil && hasNewer == 1 {
 		return true, nil
 	}
 
@@ -1173,14 +1194,16 @@ func isFrameComplete(ctx context.Context, db *sql.DB, sessID string, frameSeq in
 	if err != nil {
 		return false, fmt.Errorf("failed to query session status: %w", err)
 	}
-	// 3. Check for completion evidence within this frame.
+
+	// 3. For an actively running session, the latest frame must contain completion evidence
+	// committed WITHIN the captured boundary. Evidence committed after boundary is ignored.
 	var hasCompletion int
 	if err := db.QueryRowContext(ctx, `
 		SELECT 1 FROM event_journal
-		WHERE session_id = ? AND frame_sequence = ?
+		WHERE session_id = ? AND frame_sequence = ? AND journal_sequence <= ?
 		  AND event_type IN ('SamplingResidual', 'MonitoringGapClosed', 'MonitoringGapOpened')
 		LIMIT 1;
-	`, sessID, frameSeq).Scan(&hasCompletion); err == nil && hasCompletion == 1 {
+	`, sessID, frameSeq, boundary).Scan(&hasCompletion); err == nil && hasCompletion == 1 {
 		return true, nil
 	}
 
