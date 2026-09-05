@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/state"
@@ -28,8 +29,8 @@ import (
 )
 
 func main() {
-	phase := flag.String("phase", "", "density|seed-real|soak|constant-cost|crash")
-	dir := flag.String("dir", "", "working directory (must be on E:)")
+	phase := flag.String("phase", "", "density|seed-real|soak|constant-cost|crash|cardinality")
+	dir := flag.String("dir", "", "working directory (must be on an allowed test volume)")
 	realDB := flag.String("real-db", "", "path to the E: copy of the real production DB")
 	minutes := flag.Float64("minutes", 30, "soak duration in minutes")
 	chunk := flag.Int64("chunk-events", 50000, "journal events per accounting chunk")
@@ -39,6 +40,26 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: proxylens-scale-acceptance -phase <name> -dir <E:\\dir> [-real-db <path>] [-minutes 30]")
 		os.Exit(2)
 	}
+
+	// Fail-closed volume guard: every path this harness writes to - including
+	// the working directory and any database it opens read-write - must live
+	// on an explicitly allowed non-system test volume. The C: system volume
+	// and the production DB must never become a scale target.
+	if err := enforceAllowedVolumes(*dir, *realDB); err != nil {
+		fatal("volume guard: %v", err)
+	}
+
+	// SQLite spill strategy: temp files (sorter spills, temp b-trees) must
+	// land on the allowed test volume too, never in the user profile temp on
+	// the system drive. Set before any database is opened.
+	tempDir := filepath.Join(*dir, ".tmp")
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+		fatal("create temp dir: %v", err)
+	}
+	_ = os.Setenv("TMP", tempDir)
+	_ = os.Setenv("TEMP", tempDir)
+	_ = os.Setenv("SQLITE_TMPDIR", tempDir)
+
 	if err := os.MkdirAll(*dir, 0o755); err != nil {
 		fatal("create dir: %v", err)
 	}
@@ -56,6 +77,8 @@ func main() {
 		err = runConstantCost(ctx, *dir, *realDB)
 	case "crash":
 		err = runCrash(ctx, *dir, *chunk)
+	case "cardinality":
+		err = runCardinality(ctx, *dir, *chunk)
 	default:
 		fatal("unknown phase %q", *phase)
 	}
@@ -63,6 +86,39 @@ func main() {
 		fatal("phase %s failed: %v", *phase, err)
 	}
 	fmt.Printf("[scale] phase %s PASS\n", *phase)
+}
+
+// enforceAllowedVolumes fails closed unless every supplied path is on an
+// explicitly allowed test volume. Default allowed volume: E:\. The environment
+// variable PROXYLENS_SCALE_ALLOWED_VOLUMES may add volumes (semicolon
+// separated, e.g. "X:\;Y:\") for isolated test environments; C: can never be
+// added.
+func enforceAllowedVolumes(paths ...string) error {
+	allowed := map[string]bool{"E:": true}
+	if extra := os.Getenv("PROXYLENS_SCALE_ALLOWED_VOLUMES"); extra != "" {
+		for _, v := range strings.Split(extra, ";") {
+			v = strings.ToUpper(strings.TrimSpace(v))
+			v = strings.TrimSuffix(v, "\\")
+			if v == "C:" || v == "" {
+				continue
+			}
+			allowed[v] = true
+		}
+	}
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return fmt.Errorf("resolve %q: %w", p, err)
+		}
+		vol := strings.ToUpper(filepath.VolumeName(abs))
+		if !allowed[vol] {
+			return fmt.Errorf("path %q is on volume %s which is not an allowed scale-test volume (allowed: %v); refusing to run - the production system drive and its databases must never be a scale target", p, vol, allowed)
+		}
+	}
+	return nil
 }
 
 func fatal(f string, a ...any) {

@@ -746,6 +746,328 @@ func runCrash(ctx context.Context, dir string, chunk int64) error {
 	return nil
 }
 
+// -----------------------------------------------------------------------------
+// cardinality: long-session high-cardinality incremental accounting gate
+// -----------------------------------------------------------------------------
+
+// cardinalityReport is the evidence record of one cardinality gate run: the
+// same small appended batch on two databases whose only difference is the
+// number of distinct historical connections in one long session/epoch. The
+// writer contract holds if the transaction writer-hold duration stays bounded
+// as cardinality grows; preparation work is expected to grow (it reads the
+// dirty closure) but must stay OFF the writer lock.
+type cardinalityReport struct {
+	HistoricalConns      int     `json:"historicalConns"`
+	JournalBefore        int64   `json:"journalBefore"`
+	TotalDurationSeconds float64 `json:"totalDurationSeconds"`
+	PrepDurationSeconds  float64 `json:"prepDurationSeconds"`
+	TxDurationSeconds    float64 `json:"txWriterHoldSeconds"`
+	Processed            int64   `json:"processed"`
+	DirtyConns           int     `json:"dirtyConns"`
+	ClosureConns         int     `json:"closureConns"`
+	AffectedGroups       int     `json:"affectedGroups"`
+	ClassChanges         int     `json:"classChanges"`
+	AccountedRows        int64   `json:"accountedRows"`
+	FinalLag             int64   `json:"finalLag"`
+}
+
+func runCardinality(ctx context.Context, dir string, chunk int64) error {
+	sizes := []int{1000, 10000}
+	reports := make(map[string]cardinalityReport, len(sizes))
+
+	for _, n := range sizes {
+		dbPath := filepath.Join(dir, fmt.Sprintf("cardinality-%05d.db", n))
+		_ = os.Remove(dbPath)
+		_ = os.Remove(dbPath + "-wal")
+		_ = os.Remove(dbPath + "-shm")
+
+		db, err := storage.OpenDB(ctx, dbPath)
+		if err != nil {
+			return err
+		}
+
+		// History: one long session/epoch with n distinct short-lived
+		// connections (New with traffic, then disappeared -> terminal) plus
+		// two long-lived active connections, one of them a relay candidate so
+		// every incremental chunk exercises real matching work against the
+		// whole historical logical population on the same node chain.
+		base := time.Now().UTC().Add(-24 * time.Hour)
+		if err := bulkInsertCardinalityHistory(ctx, db, "sess-card", n, base); err != nil {
+			db.Close()
+			return err
+		}
+		if err := seedToActive(ctx, db, chunk); err != nil {
+			db.Close()
+			return fmt.Errorf("cardinality seed (%d conns): %w", n, err)
+		}
+
+		var journalBefore int64
+		if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(journal_sequence),0) FROM event_journal;`).Scan(&journalBefore); err != nil {
+			db.Close()
+			return err
+		}
+
+		// Identical small appended batch on every database: fresh evidence for
+		// the two long-lived connections plus a handful of new connections.
+		batchFrame := int64(9_000_000_000) + int64(n)
+		if err := bulkInsertCardinalityBatch(ctx, db, "sess-card", base.Add(23*time.Hour), batchFrame); err != nil {
+			db.Close()
+			return err
+		}
+
+		t0 := time.Now()
+		if _, err := storage.AdvanceAccountingV2(ctx, db, "cardinality batch", 0); err != nil {
+			db.Close()
+			return fmt.Errorf("cardinality incremental (%d conns): %w", n, err)
+		}
+		total := time.Since(t0)
+
+		fresh, err := storage.NewAnalyticsService(db).GetAccountingFreshness(ctx)
+		if err != nil {
+			db.Close()
+			return err
+		}
+		if fresh.LagEvents != 0 {
+			db.Close()
+			return fmt.Errorf("cardinality %d: lag %d after incremental", n, fresh.LagEvents)
+		}
+
+		telm := storage.LastIncrementalChunkTelemetry()
+		if telm == nil {
+			db.Close()
+			return fmt.Errorf("no incremental chunk telemetry recorded")
+		}
+		rep := cardinalityReport{
+			HistoricalConns:      n,
+			JournalBefore:        journalBefore,
+			TotalDurationSeconds: total.Seconds(),
+			PrepDurationSeconds:  telm.PrepDuration.Seconds(),
+			TxDurationSeconds:    telm.TxDuration.Seconds(),
+			Processed:            telm.Processed,
+			DirtyConns:           telm.DirtyConns,
+			ClosureConns:         telm.ClosureConns,
+			AffectedGroups:       telm.AffectedGroups,
+			ClassChanges:         telm.ClassChanges,
+			AccountedRows:        telm.AccountedRows,
+			FinalLag:             fresh.LagEvents,
+		}
+		reports[fmt.Sprintf("%d", n)] = rep
+		db.Close()
+	}
+
+	report(map[string]any{
+		"runs": reports,
+		"note": "txWriterHoldSeconds is the writer-lock hold of the incremental transaction; it must stay bounded as cardinality grows (preparation runs off the writer lock)",
+	})
+
+	small := reports["1000"]
+	large := reports["10000"]
+	if large.TxDurationSeconds <= 0 {
+		return fmt.Errorf("missing writer-hold telemetry for the 10k run")
+	}
+	// Writer contract gates: the 10k writer hold must stay under a 2s absolute
+	// bound. A ratio check against the 1k hold only applies once the hold
+	// exceeds an absolute noise floor: at millisecond scale the hold is
+	// dominated by fixed per-write overhead (WAL commit, fsync, bookkeeping),
+	// not cardinality-proportional work, so a raw ratio is not evidence of
+	// scaling. Above the floor, the hold must also stay within 5x of the 1k
+	// baseline.
+	if large.TxDurationSeconds > 2.0 {
+		return fmt.Errorf("10k writer hold %.3fs exceeds the 2s absolute bound", large.TxDurationSeconds)
+	}
+	ratio := 1.0
+	if small.TxDurationSeconds > 0 {
+		ratio = large.TxDurationSeconds / small.TxDurationSeconds
+	}
+	const writerHoldNoiseFloorSeconds = 0.250
+	if large.TxDurationSeconds > writerHoldNoiseFloorSeconds && ratio > 5 {
+		return fmt.Errorf("10k writer hold %.3fs is %.1fx the 1k hold %.3fs - writer transaction scales with cardinality",
+			large.TxDurationSeconds, ratio, small.TxDurationSeconds)
+	}
+	return nil
+}
+
+// bulkInsertCardinalityHistory writes n terminal short-lived connections and
+// two long-lived active connections directly into the journal of one
+// session/epoch. Chains intentionally share the same final egress node so the
+// relay reconciliation scans the full historical logical population.
+func bulkInsertCardinalityHistory(ctx context.Context, db *sql.DB, session string, n int, base time.Time) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO event_journal (
+			event_id, session_id, epoch_id, frame_sequence, event_sequence, event_type,
+			observed_at, connection_id, event_json, event_sha256, ingested_at, journal_sequence
+		) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	var seq int64
+	emit := func(frame int64, evSeq int64, evType, connID, observedAt, eventJSON string) error {
+		seq++
+		sum := sha256.Sum256([]byte(eventJSON))
+		_, err := stmt.ExecContext(ctx,
+			fmt.Sprintf("card-%d", seq), session, frame, evSeq, evType, observedAt, connID,
+			eventJSON, hex.EncodeToString(sum[:]), observedAt, seq)
+		return err
+	}
+
+	newEvent := func(connID string, ts time.Time, up, down int64, candidate bool) string {
+		meta := `{"network":"tcp","process":"app.exe","host":"logical.example"}`
+		attr := "known_application"
+		rule := `"MATCH"`
+		if candidate {
+			meta = `{"network":"tcp","host":"relay.example"}`
+			attr = "relay_candidate"
+			rule = `""`
+		}
+		return fmt.Sprintf(`{"eventId":"%s","sessionId":%q,"epochId":1,"frameSequence":0,"eventSequence":1,`+
+			`"timestamp":%q,"type":"ConnectionNew","connectionId":%q,`+
+			`"observedUploadCounter":%d,"observedDownloadCounter":%d,`+
+			`"deltaUpload":%d,"deltaDownload":%d,`+
+			`"monitoredCumulativeUpload":%d,"monitoredCumulativeDownload":%d,`+
+			`"baselineUploadCounter":0,"baselineDownloadCounter":0,`+
+			`"route":"PROXY","attributionClass":%q,`+
+			`"metadata":%s,"rule":%s,"chains":["Node-C","Group-C"]}`,
+			connID, session, ts.UTC().Format(time.RFC3339Nano), connID, up, down, up, down, up, down, attr, meta, rule)
+	}
+	disappearEvent := func(connID string, ts time.Time) string {
+		return fmt.Sprintf(`{"eventId":"%s-dis","sessionId":%q,"epochId":1,"frameSequence":0,"eventSequence":2,`+
+			`"timestamp":%q,"type":"ConnectionDisappeared","connectionId":%q,"possibleUnobservedTail":true}`,
+			connID, session, ts.UTC().Format(time.RFC3339Nano), connID)
+	}
+
+	// Two long-lived active connections at session start (conn-active-cand is
+	// the candidate whose class decision scans the logical population).
+	activeTS := base
+	if err := emit(1, 1, "ConnectionNew", "conn-active-cand", activeTS.Format(time.RFC3339Nano),
+		newEvent("conn-active-cand", activeTS, 4000, 4000, true)); err != nil {
+		return err
+	}
+	if err := emit(2, 1, "ConnectionNew", "conn-active-logical", activeTS.Add(time.Second).Format(time.RFC3339Nano),
+		newEvent("conn-active-logical", activeTS.Add(time.Second), 4050, 3980, false)); err != nil {
+		return err
+	}
+
+	for i := 0; i < n; i++ {
+		ts := base.Add(2*time.Second + time.Duration(i)*300*time.Millisecond)
+		frame := int64(100) + int64(i)
+		connID := fmt.Sprintf("card-hist-%06d", i)
+		cand := i%50 == 0 // 2% historical candidates, matching a realistic mix
+		up, down := int64(6000), int64(6100)
+		if cand {
+			up, down = 4200, 4100
+		}
+		if err := emit(frame, 1, "ConnectionNew", connID, ts.Format(time.RFC3339Nano), newEvent(connID, ts, up, down, cand)); err != nil {
+			return err
+		}
+		if err := emit(frame, 2, "ConnectionDisappeared", connID, ts.Add(100*time.Millisecond).Format(time.RFC3339Nano), disappearEvent(connID, ts.Add(100*time.Millisecond))); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// bulkInsertCardinalityBatch appends the identical small batch: deltas on the
+// two long-lived connections (their ancient firstObs pulls the full terminal
+// history into the dirty-closure window - the honest worst case) plus a few
+// brand-new connections.
+func bulkInsertCardinalityBatch(ctx context.Context, db *sql.DB, session string, base time.Time, frameBase int64) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO event_journal (
+			event_id, session_id, epoch_id, frame_sequence, event_sequence, event_type,
+			observed_at, connection_id, event_json, event_sha256, ingested_at, journal_sequence
+		) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	var seq int64
+	var maxSeq int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(journal_sequence),0) FROM event_journal;`).Scan(&maxSeq); err != nil {
+		return err
+	}
+	emit := func(frame int64, evSeq int64, evType, connID, observedAt, eventJSON string) error {
+		seq++
+		sum := sha256.Sum256([]byte(eventJSON))
+		_, err := stmt.ExecContext(ctx,
+			fmt.Sprintf("cardbatch-%d", seq), session, frame, evSeq, evType, observedAt, connID,
+			eventJSON, hex.EncodeToString(sum[:]), observedAt, maxSeq+seq)
+		return err
+	}
+
+	deltaEvent := func(connID string, ts time.Time, up, down int64, candidate bool) string {
+		meta := `{"network":"tcp","process":"app.exe","host":"logical.example"}`
+		attr := "known_application"
+		rule := `"MATCH"`
+		if candidate {
+			meta = `{"network":"tcp","host":"relay.example"}`
+			attr = "relay_candidate"
+			rule = `""`
+		}
+		return fmt.Sprintf(`{"eventId":"%s-d","sessionId":%q,"epochId":1,"frameSequence":0,"eventSequence":1,`+
+			`"timestamp":%q,"type":"ConnectionDelta","connectionId":%q,`+
+			`"observedUploadCounter":%d,"observedDownloadCounter":%d,`+
+			`"deltaUpload":150,"deltaDownload":250,`+
+			`"monitoredCumulativeUpload":%d,"monitoredCumulativeDownload":%d,`+
+			`"baselineUploadCounter":0,"baselineDownloadCounter":0,`+
+			`"route":"PROXY","attributionClass":%q,`+
+			`"metadata":%s,"rule":%s,"chains":["Node-C","Group-C"]}`,
+			connID+"-b", session, ts.UTC().Format(time.RFC3339Nano), connID, up, down, up+150, down+250, attr, meta, rule)
+	}
+	newEvent := func(connID string, ts time.Time, up, down int64, candidate bool) string {
+		meta := `{"network":"tcp","process":"app.exe","host":"logical.example"}`
+		attr := "known_application"
+		rule := `"MATCH"`
+		if candidate {
+			meta = `{"network":"tcp","host":"relay.example"}`
+			attr = "relay_candidate"
+			rule = `""`
+		}
+		return fmt.Sprintf(`{"eventId":"%s","sessionId":%q,"epochId":1,"frameSequence":0,"eventSequence":1,`+
+			`"timestamp":%q,"type":"ConnectionNew","connectionId":%q,`+
+			`"observedUploadCounter":%d,"observedDownloadCounter":%d,`+
+			`"deltaUpload":%d,"deltaDownload":%d,`+
+			`"monitoredCumulativeUpload":%d,"monitoredCumulativeDownload":%d,`+
+			`"baselineUploadCounter":0,"baselineDownloadCounter":0,`+
+			`"route":"PROXY","attributionClass":%q,`+
+			`"metadata":%s,"rule":%s,"chains":["Node-C","Group-C"]}`,
+			connID, session, ts.UTC().Format(time.RFC3339Nano), connID, up, down, up, down, up, down, attr, meta, rule)
+	}
+
+	// Deltas on the two long-lived connections.
+	if err := emit(frameBase, 1, "ConnectionDelta", "conn-active-cand", base.Format(time.RFC3339Nano),
+		deltaEvent("conn-active-cand", base, 4150, 4250, true)); err != nil {
+		return err
+	}
+	if err := emit(frameBase+1, 1, "ConnectionDelta", "conn-active-logical", base.Add(250*time.Millisecond).Format(time.RFC3339Nano),
+		deltaEvent("conn-active-logical", base.Add(250*time.Millisecond), 4200, 4430, false)); err != nil {
+		return err
+	}
+	// Five brand-new logical connections with traffic.
+	for i := 0; i < 5; i++ {
+		connID := fmt.Sprintf("card-new-%06d", i)
+		ts := base.Add(time.Duration(500+i*250) * time.Millisecond)
+		if err := emit(frameBase+2+int64(i), 1, "ConnectionNew", connID, ts.Format(time.RFC3339Nano), newEvent(connID, ts, 1000+int64(i)*100, 2000+int64(i)*100, false)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func netListen() (net.Listener, error) {
 	return net.Listen("tcp", "127.0.0.1:0")
 }
