@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-09-05 — Phase 3S Production Storage & Accounting Scale Closure
+
+**Scope:** 在只读 root-cause measurement 确认生产库 97.63% 零增量 delta 行、
+周期性全量核算重建与 WAL 每 tick TRUNCATE 三处规模化缺陷后，完成 S1 零增量
+抑制 + 稀疏在场证据、S2 generation-based 增量核算 v2、S3 可观测 WAL checkpoint
+策略、S4 E: 盘生产规模验收与生产库短时 revalidation；不削弱任何审计语义，
+不启动 Phase 4，Final Visual Acceptance 保持 Deferred。
+
+**Completed:**
+
+- S1：StateEngine 共享 emission contract 抑制零字节 `ConnectionDelta` 持久化，
+  新增 `ConnectionPresenceCheckpoint`（30s/active connection）稀疏在场证据；
+  `ConnectionDisappeared` 携带精确 final presence；历史 raw 行零删除；
+- S2：migration 008（additive）+ `accounting_generations` 单活跃 generation
+  增量推进 `(publishedBoundary, newBoundary]`，单事务原子发布（失败/取消零
+  残留、幂等）；full rebuild 仅限显式 seed/repair；v2 未激活时 Query 回退
+  legacy；relay/dedup 与 legacy 共享同一分类/分配代码路径；
+- S3：`CheckpointWAL` 结构化 `Busy/LogFrames/CheckpointedFrames` 遥测取代
+  每 tick TRUNCATE（取代 `2bfd8c5`）；TRUNCATE 仅在 shutdown/maintenance
+  安全边界执行；优雅关闭新增最终核算 flush（零 lag 收敛）；
+- 投影契约修复（soak 暴露）：同 epoch 重观测以 upsert 重开 `connections`
+  终态行并保留原始 `first_observed_at`；`ConnectionNew` 与 Bootstrap 一致
+  绑定 baseline 计数器；`RebuildProjections` 重放确定性一致；
+- ADR 0010 记录全部决策、compaction divergence 与验证证据。
+
+**Validation state:**
+
+- E: 盘（`proxylens-scale-acceptance`）全部 PASS：density 97.62% 行削减且
+  字节和精确；真实生产库 E-copy seed（1.55M events / 61 chunks / 456.6s /
+  WAL 峰值 8.5MB / authority 字节不变）；crash/cancel/boundary/checkpoint
+  竞争/失败清理有界；常数成本 0.42s@50K vs 0.34s@1.57M；30min soak 全门限
+  PASS（FinalLag=0、LegacyRuns=0、QueueOverload=0、MaxIncremental ~0.14s、
+  WAL 峰值 ~5MB）；
+- 生产 C: 库短时 revalidation 完成（migration 008 即开即用、63 seed chunks +
+  21 incremental chunks、lag 0、WAL 0、quick_check ok）后 collection 再次停止，
+  未恢复 24/7 常驻；
+- Go 全量测试 + vet、UI 90 tests + build、cargo test、`git diff --check`
+  全部本地 PASS（非 GitHub CI）。
+
+---
+
 ## 2026-09-05 — Phase 3E-2B2B Settings & Installed Product Polish
 
 **Scope:** 在 3E-2B2A installed ownership 基线上完成最小 Settings utility、

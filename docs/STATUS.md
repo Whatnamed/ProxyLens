@@ -7,7 +7,7 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3E Desktop Runtime Integration — Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
+- **当前阶段**：Phase 3S Production Storage & Accounting Scale Closure complete。此前 Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
 - **代码线**：以当前 checkout 的 Git HEAD 及其相对 `origin/main` 的关系为准；活动分支名和短期 SHA 不在此处硬编码。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
 - **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 `main`；工程/语义 Gate 全部通过。
@@ -60,6 +60,17 @@
 - Controller URL、有效来源与 MIHOMO_SECRET / Credential Manager precedence 以安全 metadata 展示；environment/process override 不会被伪装为 persisted setting；Controller/Secret 变化走 exact stop → owner rebootstrap，autostart-only 变化只 reconcile exact task，不中断当前采集；
 - installed layout gate 防止 developer checkout 修改生产 Task Scheduler task；persistence success / activation failure 显示 saved-pending-restart，Query API 与已有 authority DB 在重启期间保持 read-only 可读；
 - mock-only installed product acceptance：random loopback mock Controller、random ProxyLens/Test/<UUID> WinCred、random \ProxyLens-Test\<UUID> task、temporary DB；覆盖 Secret A → Secret B、新 Secret Runtime 使用、autostart false → true、UI-close owner survival 与 DB preservation。
+
+### Phase 3S — Production Storage & Accounting Scale Closure (Complete)
+
+- 只读 root-cause measurement（EQP 验证、SHA256 前后一致、production 停止）确认真实生产库（~5.2GB / ~1.55M journal events）97.63% 的 `ConnectionDelta` raw 行为零增量重复证据（wall-clock 口径），且常规核算 tick 在 stale 时触发全历史重建；
+- S1 Raw density：StateEngine 以共享 emission contract（steady-state 与 reconnect-recovery 同路径）抑制零字节 `ConnectionDelta` 的持久化，改为 `ConnectionPresenceCheckpoint` 稀疏在场证据（30s/active connection）；非零 delta、metadata/rule/chain/counter/relay/gap 证据语义不变；`ConnectionDisappeared` 携带精确 final presence；零删除历史 raw 行；
+- S2 Incremental Accounting v2（migration 008 additive）：generation-based 增量核算，常规 tick 只处理 `(publishedBoundary, newBoundary]` frame-aligned 有界区间并在单事务内原子发布派生行与 boundary（失败/取消零残留、幂等）；full rebuild 仅限显式 seed/repair（`collector storage seed-v2`）；v2 未激活时 analytics/Query 回退 legacy；relay/dedup 分类、区间分配与行构造与 legacy 共享同一代码路径（`classifyConnectionGroup` / allocation helpers）；
+- S3 WAL / failed-run hygiene：取代 `2bfd8c5` 每 tick TRUNCATE；稳态 PASSIVE checkpoint + 结构化 `WALCheckpointResult` 遥测；TRUNCATE 仅在 shutdown/maintenance 安全边界以 fresh non-canceled context 执行；Runtime shutdown 检查点不杀 busy reader；
+- 重观测契约修复（soak 暴露的真实投影缺陷）：同一 epoch 内连接 ID 在 Disappeared 后重新被观测时，`ConnectionNew` 以 upsert 重开既有行（保留原始 `first_observed_at`，清除 disappearance/observation-end 事实，journal 双事件保留，`RebuildProjections` 重放确定性一致）；`ConnectionNew` 现在与 Bootstrap 一致绑定事件 baseline 计数器；
+- S4 E: 盘生产规模验收（`collector/cmd/proxylens-scale-acceptance`，全部 PASS）：density 97.62% 行削减且字节和精确；真实生产库 E-copy 迁移+seed（61 chunks / 456.6s / WAL 峰值 8.5MB / DB +32MB / quick_check ok / authority 字节不变 / published 字节和与直接测量一致）；crash/cancel/publish-boundary/checkpoint 竞争/失败 generation 清理有界；常数成本 0.42s@50K vs 0.34s@1.57M（`INDEXED BY` 修正 planner 误选后无历史规模缩放）；30min 连续 soak（Collector+增量核算+只读 Query 负载）通过全部门限；
+- 生产 C: 库短时 revalidation 完成：migration 008 打开即应用；runtime 对 1.55M 事件 journal 自动 seed（63 个 seed chunk 完成）并激活 v2 generation，随后对真实流量执行 21 个增量 chunk（零失败）；最终 published boundary == journal max（shutdown flush 后 **lag 0**）、accounted==raw 字节和（927,714,947 / 1,209,704,764）、`quick_check ok`、shutdown TRUNCATE 后 **WAL 0 字节**、DB +205MB（v2 派生行 + revalidation 窗口 raw 证据）；FLClash/FlClashCore PIDs 全程不变，只读 Query API 提供 v2 读取；结束后 collection 再次停止（autostart=false、无 Task owner），未恢复 24/7 常驻；
+- ADR 0010 记录全部决策与证据（`docs/decisions/0010-production-scale-storage-and-incremental-accounting.md`）。
 
 ### 已实现的正式 UI
 
@@ -119,6 +130,7 @@
 - Phase 3E-1 Go runtime/scheduler mock E2E、Tauri path unit tests、双 binary build 与 Tauri release build 均已完成本地验证；Phase 3E-2A 与 3E-2B1 的 Go ownership/config/protocol/Supervisor tests、Rust parser/path tests、UI tests、三 binary build、Tauri release build、Go subprocess acceptance 与 mock-only Supervisor lifecycle smoke 也已完成本地验证；这些结果不是 GitHub CI PASS。
 - Phase 3E-2B2A：`go test` affected packages、`go vet` affected packages、Rust `cargo fmt --check` / `cargo test`、UI/build 与 Windows NSIS build；`node tools/runtime/run-phase3e2b2a-task-owner.mjs` 与 `node tools/runtime/run-phase3e2b2a-installed-lifecycle.mjs` 均为 PASS，均使用随机 mock/temp identities；这些结果不是 GitHub CI PASS。
 - Phase 3E-2B2B：affected Go tests / `go vet`、Rust tests、90 UI tests、TypeScript/Vite build、Windows NSIS installed product build 与 `node tools/runtime/run-phase3e2b2b-settings-product.mjs` 均为 PASS；acceptance 使用随机 mock/temp identities，输出确认 Secret A → Secret B、autostart false → true、UI-close survival 与 DB preservation；这些结果不是 GitHub CI PASS。
+- Phase 3S：E: 盘生产规模验收全部 PASS（density 97.62% 行削减/字节精确；真实库 seed WAL 峰值 8.5MB、authority 字节不变；crash/cancel/bounded；常数成本 0.42s@50K vs 0.34s@1.57M；30min soak FinalLag=0、LegacyRuns=0、QueueOverload=0、MaxIncremental ~0.14s、WAL 峰值 ~5MB）；生产 C: 库短时 revalidation 完成后 collection 再次停止；Go 全量测试 + vet、UI 90 tests + build、cargo 19 tests、`git diff --check` 本地 PASS；这些结果不是 GitHub CI PASS。
 - 本任务正式 runtime 测试使用 `httptest` / mock WebSocket 与隔离临时 SQLite DB；真实 FLClash/Mihomo lifecycle 与 real-data validation 未纳入本阶段正式验收。
 - `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
 - 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller；AST 守卫递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；lifecycle tooling 另有随机 mock URL、temp-dir、E2E-only status file 与 exact-PID cleanup guard。3E-2B1 验收未启动或修改真实 FLClash/Mihomo，未发生真实网络生命周期或 Mihomo 写操作。
@@ -191,5 +203,4 @@
 
 1. 待完整桌面 runtime 条件具备且用户明确安排真实环境后，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
 2. 在完整桌面视觉验收前，UI Design System 继续保持 Draft；之后再按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence。
-2. 待完整桌面 runtime 条件具备且用户明确安排真实环境后，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
-3. 在完整桌面视觉验收前，UI Design System 继续保持 Draft；之后再按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence。
+3. Phase 3S 已完成生产库迁移与短时 revalidation；如恢复长期常驻采集，由用户明确决定，不自行动恢复。

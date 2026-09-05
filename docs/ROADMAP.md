@@ -27,6 +27,8 @@ Phase 3  审计 UI                                  [IN PROGRESS — core UI imp
    ↓
 Phase 3E Desktop Runtime Integration              [IN PROGRESS — runtime implementation complete; final visual/real-environment validation deferred]
    ↓
+Phase 3S Production Storage & Accounting Scale    [COMPLETED]
+   ↓
 Phase 4  Audit Intelligence                       [PLANNED]
    ↓
 Later    长期增强                                 [PLANNED]
@@ -206,6 +208,29 @@ Later    长期增强                                 [PLANNED]
 - [x] developer checkout installed-layout gate、exact lifecycle rebootstrap、autostart-only non-disruption 与 EN / 中文、Light / Dark utility-dialog states；
 - [x] mock-only installed product acceptance：random mock Controller、random WinCred/task identities、Secret replacement、autostart false → true、UI-close survival 与 same-DB preservation；
 - [ ] real FLClash/Mihomo validation 与最终 real-data visual acceptance（Deferred）。
+
+---
+
+## Phase 3S — Production Storage & Accounting Scale Closure [COMPLETED]
+
+目标：在真实生产库规模（~1.5M journal events / 5.2GB）下，修正三处规模化缺陷——零增量原始证据密度、周期性全量核算重建、WAL 增长策略——且不削弱任何审计语义，并以 E: 盘生产规模验收加生产库短时 revalidation 收口。
+
+背景：只读 root-cause measurement 确认真实生产库 97.63% 的 `ConnectionDelta` 原始行是零增量重复证据（wall-clock 口径），且常规 30s 核算 tick 在 stale 时会触发全历史重建，WAL 靠每 tick TRUNCATE 压制。
+
+已完成核心成果：
+
+- [x] Raw delta density 修正：StateEngine 共享 emission contract（steady-state 与 reconnect-recovery 同路径），零字节帧不再 emit 全量 `ConnectionDelta`，改为 `ConnectionPresenceCheckpoint` 稀疏在场证据（30s/active connection named constant）；非零 delta 全保留；metadata/rule/chain/counter/relay/gap 证据语义不变；presence 只更新 durable liveness/last-observed，不产生 `connection_traffic`；`ConnectionDisappeared` 携带 engine 内存中的精确 final presence（`lastObservedAt` + counters）由投影确定性落库；不删除任何历史 raw 行；
+- [x] Incremental Accounting v2（migration 008，additive）：generation-based 增量推进，常规 30s tick 只处理 `(publishedBoundary, newBoundary]` 的 frame-aligned 有界区间，派生写入与 boundary 推进单事务原子发布（失败/取消零残留、幂等重试）；full rebuild 仅限显式 seed/repair/migration；v2 未激活时 Query/API 回退 legacy；relay/dedup 语义与 legacy 共享同一分类/分配/行构造代码路径；
+- [x] WAL / failed-run hygiene：取代 `2bfd8c5` 每 tick TRUNCATE——稳态 PASSIVE checkpoint + 结构化 `Busy/LogFrames/CheckpointedFrames` 遥测；TRUNCATE 仅在 shutdown/maintenance 安全边界以 fresh non-canceled context 执行；失败/暂存 derived 行 bounded cleanup；Collector ingestion 优先于 accounting maintenance；
+- [x] 同 epoch 重观测投影契约修复：`ConnectionNew` 由纯 INSERT 改为 re-observation-aware upsert（重开终态行、保留原始 `first_observed_at`、journal 双事件保留、rebuild 重放确定性一致），并使 baseline 计数器与 Bootstrap 契约一致；
+- [x] E: 盘生产规模验收（`proxylens-scale-acceptance` 工具，全部 PASS）：zero-heavy density（97.62% durable delta 行削减、字节和精确）、真实生产库 E-copy 迁移+seed（1.55M events、61 chunks、456.6s、WAL 峰值 8.5MB、authority 字节不变、quick_check ok）、crash/cancel/publish-boundary/checkpoint 竞争/失败 generation 清理、50K vs 1.57M 常数成本（0.42s vs 0.34s 同批增量）、30min 连续 soak（Collector+增量核算+只读 Query 负载+WAL 遥测）；
+- [x] 生产 C: 库 15–30min 短时 revalidation（真实 Controller 只读 GET/WS、migration 008 + auto-seed、密度/WAL/lag/磁盘遥测采样），结束后再次停止 collection，不恢复 24/7 常驻；
+- [x] ADR 0010（`docs/decisions/0010-production-scale-storage-and-incremental-accounting.md`）记录全部决策与验证证据。
+
+明确不做（本阶段边界）：
+
+- Final Full Tauri visual acceptance 保持 Deferred；不启动 Phase 4；不 Freeze Design System；
+- 不删除/重写/VACUUM 真实 authority DB；不改变 raw authority 语义；不修改 Mihomo/FLClash 任何状态。
 
 ---
 
