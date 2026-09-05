@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -67,5 +69,49 @@ func TestDiskGuardTripLoopImmediateTrip(t *testing.T) {
 	case <-trips:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("TripLoop did not fire onTrip for an immediately-breached floor")
+	}
+}
+
+// TestDiskGuardMissingDirectoryLowSpaceProbe verifies that when dbPath points to
+// a deeply nested directory that does not yet exist, Check() does not fail-open.
+// It resolves the nearest existing ancestor (or volume root) to probe free space,
+// computes floor based on dbSize=0, trips if floor exceeds free space, and NEVER
+// creates any directory.
+func TestDiskGuardMissingDirectoryLowSpaceProbe(t *testing.T) {
+	tempRoot := t.TempDir()
+	nestedDir := filepath.Join(tempRoot, "missing_ancestor_1", "missing_ancestor_2")
+	dbPath := filepath.Join(nestedDir, "proxylens.db")
+
+	// Ensure the parent directory does not exist prior to probe.
+	if _, err := os.Stat(nestedDir); !os.IsNotExist(err) {
+		t.Fatalf("expected nestedDir to not exist: %v", err)
+	}
+
+	guard := NewDiskGuard(dbPath)
+	// Set floor to MaxUint64 to simulate low space on the probed volume.
+	guard.SetFloorFn(func(dbSize uint64) uint64 {
+		if dbSize != 0 {
+			t.Errorf("expected dbSize=0 for non-existent db file, got %d", dbSize)
+		}
+		return math.MaxUint64
+	})
+
+	status := guard.Check()
+	if !status.Tripped {
+		t.Fatalf("expected guard to trip on low-space probe with missing parent directory: %+v", status)
+	}
+	if !guard.Tripped() {
+		t.Fatalf("sticky tripped state not set")
+	}
+	if status.DBSizeBytes != 0 {
+		t.Fatalf("expected DBSizeBytes=0, got %d", status.DBSizeBytes)
+	}
+	if status.FreeBytes == 0 {
+		t.Fatalf("expected positive FreeBytes from nearest ancestor probe, got 0")
+	}
+
+	// CRITICAL INVARIANT: Check() must NEVER create the directory!
+	if _, err := os.Stat(nestedDir); !os.IsNotExist(err) {
+		t.Fatalf("pre-start probe created directory %s! must remain non-existent before OpenDB/migrations", nestedDir)
 	}
 }
