@@ -117,6 +117,9 @@ func emitEquivalenceFrameScript(t *testing.T, s *SQLiteEventSink, frame int64, t
 		emitEquivalenceFrame(t, s, frame, ts, func(f, e int64) []*types.CollectorEvent {
 			return []*types.CollectorEvent{
 				evDelta("cand-relay", 500, 1000, 1400, 2800, types.RouteProxy, types.ClassRelayCandidate, fixtureCandMeta, "", proxyChains),
+				// Real nonzero DIRECT traffic so the route equivalence checks
+				// cannot pass vacuously through 0 == 0.
+				evDelta("direct-logical", 700, 300, 710, 320, types.RouteDirect, types.ClassKnownApplication, fixtureDirectMeta, "NETWORK,udp", []string{"DIRECT"}),
 			}
 		})
 	case 14:
@@ -260,8 +263,9 @@ func TestLegacyV2EquivalenceOnClosedDataset(t *testing.T) {
 			rawUpA, rawDownA, accUpA, accDownA, rawUpB, rawDownB, accUpB, accDownB)
 	}
 	// Expected fixture semantics: candidate is confirmed (accounted 0),
-	// logical keeps its deltas, missing keeps its bytes.
-	if accUpA != 400+1000+300 || accDownA != 800+2000+400 {
+	// logical keeps its deltas, missing keeps its bytes, direct-logical adds
+	// its real nonzero DIRECT deltas.
+	if accUpA != 400+1000+300+700 || accDownA != 800+2000+400+300 {
 		t.Fatalf("unexpected accounted totals %d/%d", accUpA, accDownA)
 	}
 
@@ -432,10 +436,15 @@ func TestLegacyV2EquivalenceOnClosedDataset(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sumA.ProxyUpload != sumB.ProxyUpload || sumA.ProxyDownload != sumB.ProxyDownload ||
-		sumA.DirectUpload != sumB.DirectDownload || sumA.DirectDownload != sumB.DirectDownload ||
+		sumA.DirectUpload != sumB.DirectUpload || sumA.DirectDownload != sumB.DirectDownload ||
 		sumA.UnknownRouteUpload != sumB.UnknownRouteUpload || sumA.MissingAttributionUpload != sumB.MissingAttributionUpload ||
 		sumA.UniqueObservedUpload != sumB.UniqueObservedUpload || sumA.UniqueObservedDownload != sumB.UniqueObservedDownload {
 		t.Fatalf("usage summaries diverge:\nlegacy: %+v\nv2:     %+v", sumA, sumB)
+	}
+	// Nonzero DIRECT totals prove the route comparison above is not vacuous:
+	// direct-logical contributed 700/300 in frame 13.
+	if sumA.DirectUpload == 0 || sumA.DirectDownload == 0 {
+		t.Fatalf("fixture must produce nonzero DIRECT totals, got %d/%d", sumA.DirectUpload, sumA.DirectDownload)
 	}
 
 	_ = closeA

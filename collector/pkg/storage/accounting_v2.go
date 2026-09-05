@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,6 +48,11 @@ var (
 	// ErrNoActiveGeneration is returned when v2 queries need an active
 	// generation but none exists (the caller falls back to legacy runs).
 	ErrNoActiveGeneration = errors.New("no active accounting generation")
+	// ErrSeedDiskSpaceInsufficient is returned by the automatic-seed preflight
+	// when the database volume cannot safely absorb the derived-state growth
+	// of a full seed. Raw collection is never blocked by it; accounting stays
+	// on the legacy fallback and the seed retries on later ticks.
+	ErrSeedDiskSpaceInsufficient = errors.New("seed disk preflight failed: insufficient free space for v2 derived state")
 )
 
 var v2RunSeqCounter int64
@@ -245,6 +253,13 @@ func advanceSeed(ctx context.Context, db *sql.DB, notes string, maxEvents int64)
 		return nil, err
 	}
 	if gen == nil {
+		// Automatic background seed safety boundary: before committing to a
+		// full derived-state build, verify the database volume can absorb it.
+		// The check fails closed only with positive evidence of insufficient
+		// space; unknown platforms or unstatable databases proceed.
+		if err := checkSeedDiskPreflight(ctx, db); err != nil {
+			return nil, err
+		}
 		if _, err := CleanupFailedGenerations(ctx, db); err != nil {
 			return nil, err
 		}
@@ -319,8 +334,46 @@ func advanceSeed(ctx context.Context, db *sql.DB, notes string, maxEvents int64)
 	}
 }
 
-func reloadGeneration(ctx context.Context, db *sql.DB, generationID string) (*AccountingGeneration, error) {
-	row := db.QueryRowContext(ctx, `
+// seedPreflightFreeFloor is the absolute minimum free space required for a
+// full v2 seed regardless of database size.
+const seedPreflightFreeFloor = 512 << 20
+
+// seedPreflightDBSizeRatio is the estimated derived-state growth of a full
+// seed relative to the database file size. Production measurement (Phase 3S
+// revalidation: +205MB derived on a 5.2GB authority DB) observed ~4%; the
+// estimate keeps a safety factor of roughly 3.75x.
+const seedPreflightDBSizeRatio = 15
+
+// checkSeedDiskPreflight verifies the volume holding the database can absorb
+// the derived-state growth of a full seed: free space must be at least
+// max(512MB, 15% of the current database file size). Unknown free space
+// (non-Windows platform, unstatable path) never blocks the seed.
+func checkSeedDiskPreflight(ctx context.Context, db *sql.DB) error {
+	var file sql.NullString
+	if err := db.QueryRowContext(ctx, `PRAGMA database_list;`).Scan(new(any), new(any), &file); err != nil || !file.Valid || file.String == "" {
+		// In-memory or unresolvable database: treat as unknown, proceed.
+		return nil
+	}
+	fi, err := os.Stat(file.String)
+	if err != nil {
+		return nil
+	}
+	free, ok := freeDiskBytes(filepath.Dir(file.String))
+	if !ok {
+		return nil
+	}
+	need := fi.Size() * int64(seedPreflightDBSizeRatio) / 100
+	if need < seedPreflightFreeFloor {
+		need = seedPreflightFreeFloor
+	}
+	if int64(free) < need {
+		return fmt.Errorf("%w: free %d bytes < required %d bytes for %s",
+			ErrSeedDiskSpaceInsufficient, free, need, file.String)
+	}
+	return nil
+}
+
+func reloadGeneration(ctx context.Context, db *sql.DB, generationID string) (*AccountingGeneration, error) {	row := db.QueryRowContext(ctx, `
 		SELECT generation_id, algorithm_version, derivation_version, status,
 		       seed_last_sequence, seed_boundary_sequence, materialize_last_sequence,
 		       published_journal_sequence, published_frame_time,
@@ -577,10 +630,82 @@ func markGenerationFailed(ctx context.Context, db *sql.DB, generationID string, 
 // -----------------------------------------------------------------------------
 // Incremental: bounded (published, newBoundary] chunks
 // -----------------------------------------------------------------------------
+// Collector ingestion priority is a structural property of this path, not a
+// timeout budget: every expensive read/compute step (streaming the immutable
+// journal range, decoding events, loading generation state, running the
+// bounded-scope relay reconciliation) happens in the read-only preparation
+// phase OUTSIDE the writer transaction. The writer transaction only rechecks
+// the published boundary and applies the precomputed bounded mutations plus
+// the atomic publish, keeping writer-lock hold time proportional to the chunk
+// footprint, never to session history cardinality.
+//
+// Reading generation derived state outside the transaction is safe because
+// derived rows and the published boundary commit in the same transaction:
+// published == from implies no other actor changed derived state since the
+// preparation phase read it. Any concurrent advance is detected by the
+// in-transaction boundary recheck and the chunk is skipped (no fake
+// completion), never double-applied.
+
+// IncrementalChunkTelemetry is the observable evidence of one incremental
+// chunk: how long the read-only preparation took, how long the writer
+// transaction held the write lock, and the bounded-scope sizes. The scale
+// acceptance gate and health surfaces read it to prove the writer contract.
+type IncrementalChunkTelemetry struct {
+	PrepDuration   time.Duration `json:"prepDuration"`
+	TxDuration     time.Duration `json:"txDuration"`
+	Processed      int64         `json:"processed"`
+	DirtyConns     int           `json:"dirtyConns"`
+	ClosureConns   int           `json:"closureConns"`
+	AffectedGroups int           `json:"affectedGroups"`
+	ClassChanges   int           `json:"classChanges"`
+	AccountedRows  int64         `json:"accountedRows"`
+	SkippedRace    bool          `json:"skippedRace"`
+}
+
+var (
+	lastIncrementalChunkMu   sync.Mutex
+	lastIncrementalChunkTelm *IncrementalChunkTelemetry
+)
+
+// LastIncrementalChunkTelemetry returns the telemetry of the most recent
+// incremental chunk, or nil before the first chunk.
+func LastIncrementalChunkTelemetry() *IncrementalChunkTelemetry {
+	lastIncrementalChunkMu.Lock()
+	defer lastIncrementalChunkMu.Unlock()
+	if lastIncrementalChunkTelm == nil {
+		return nil
+	}
+	cp := *lastIncrementalChunkTelm
+	return &cp
+}
+
+func recordIncrementalChunkTelemetry(t *IncrementalChunkTelemetry) {
+	lastIncrementalChunkMu.Lock()
+	lastIncrementalChunkTelm = t
+	lastIncrementalChunkMu.Unlock()
+}
+
+// classChange is one connection whose accounting class changed within a chunk.
+type classChange struct {
+	key      connKey
+	oldClass AccountingClass
+	newClass AccountingClass
+}
+
+// incrementalPrep is the read-only result of one chunk's preparation phase.
+type incrementalPrep struct {
+	processed      int64
+	updates        map[connKey]*connStateUpdate
+	affectedGroups []connGroup
+	classChanges   []classChange
+	relations      []RelayRelationRecord
+	closureConns   int
+	accounted      *accountedPlan
+}
 
 func advanceIncrementalChunk(ctx context.Context, db *sql.DB, gen *AccountingGeneration, notes string, maxEvents int64) (*AccountingRunRecord, error) {
 	from := gen.PublishedJournalSequence
-	to, currentMax, err := frameAlignedIncrementalCut(ctx, db, from, maxEvents)
+	to, _, err := frameAlignedIncrementalCut(ctx, db, from, maxEvents)
 	if err != nil {
 		return nil, err
 	}
@@ -595,14 +720,36 @@ func advanceIncrementalChunk(ctx context.Context, db *sql.DB, gen *AccountingGen
 			SourceJournalSequenceMax: &from, Notes: notes + " (no new evidence)",
 		}, nil
 	}
-	_ = currentMax
+
+	prepStart := time.Now()
+	prep, err := prepareIncrementalChunk(ctx, db, gen.GenerationID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	prepDuration := time.Since(prepStart)
 
 	startedAt := time.Now().UTC()
 	runID := newV2RunID()
 
+	skipped := false
+	actualBoundary := int64(0)
+	var inserted *accountedInsertResult
+	var correction *accountingCorrection
+
+	tel := &IncrementalChunkTelemetry{
+		PrepDuration:   prepDuration,
+		Processed:      prep.processed,
+		DirtyConns:     len(prep.updates),
+		ClosureConns:   prep.closureConns,
+		AffectedGroups: len(prep.affectedGroups),
+		ClassChanges:   len(prep.classChanges),
+	}
+
 	err = execWithTxRetry(ctx, db, 10, func(tx *sql.Tx) error {
+		skipped = false
 		// Re-read the published boundary inside the transaction so concurrent
-		// accounting can never double-process a range.
+		// accounting can never double-process a range, and so a concurrent
+		// advance invalidates this chunk's prepared state.
 		var published int64
 		if err := tx.QueryRowContext(ctx, `
 			SELECT published_journal_sequence FROM accounting_generations WHERE generation_id = ?;
@@ -610,56 +757,243 @@ func advanceIncrementalChunk(ctx context.Context, db *sql.DB, gen *AccountingGen
 			return err
 		}
 		if published != from {
-			// Another chunk already advanced the boundary; skip safely.
+			// Another writer already advanced the boundary: report the real
+			// boundary instead of a fake completion for the unprocessed range.
+			skipped = true
+			actualBoundary = published
 			return nil
 		}
 
 		// 1. Apply the range's raw evidence to the connection summary state.
-		processed, err := applyConnStateRange(ctx, tx, gen.GenerationID, from, to)
+		if err := applyConnStateUpdates(ctx, tx, gen.GenerationID, prep.updates); err != nil {
+			return err
+		}
+
+		// 2. Persist class changes for the bounded dirty closure.
+		if err := applyClassChanges(ctx, tx, gen.GenerationID, prep.classChanges); err != nil {
+			return err
+		}
+
+		// 3. Persist the closure candidates' relay relation decisions.
+		if err := applyRelayRelationsV2(ctx, tx, gen.GenerationID, prep.relations); err != nil {
+			return err
+		}
+
+		// 4. Bounded corrections for classification changes (existing derived
+		// rows of the changed connections).
+		correction, err = applyClassCorrections(ctx, tx, gen.GenerationID, prep.classChanges)
 		if err != nil {
 			return err
 		}
 
-		// 2. Affected groups = groups with events in the range.
-		groups, err := loadAffectedGroups(ctx, tx, gen.GenerationID, from, to)
+		// 5. New derived rows for the range's nonzero traffic evidence.
+		inserted, err = applyAccountedPlan(ctx, tx, gen.GenerationID, prep.accounted)
 		if err != nil {
 			return err
 		}
 
-		// 3. Reclassify affected groups with the shared contract and apply
-		//    bounded corrections for classification changes.
-		correction, err := reclassifyAffectedGroups(ctx, tx, gen.GenerationID, groups, to)
-		if err != nil {
-			return err
-		}
-
-		// 4. New derived rows for the range's nonzero traffic evidence.
-		classMap, err := loadGroupClasses(ctx, tx, gen.GenerationID, groups)
-		if err != nil {
-			return err
-		}
-		inserted, err := applyAccountedRange(ctx, tx, gen.GenerationID, from, to, classMap)
-		if err != nil {
-			return err
-		}
-
-		// 5. Atomically publish the new boundary with the run record.
+		// 6. Atomically publish the new boundary with the run record.
 		if err := publishGenerationBoundary(ctx, tx, gen.GenerationID, to, correction, inserted); err != nil {
 			return err
 		}
-		return updateV2RunRecord(ctx, tx, runID, gen.GenerationID, "incremental", from, to, startedAt, processed, "")
+		return updateV2RunRecord(ctx, tx, runID, gen.GenerationID, "incremental", from, to, startedAt, prep.processed, "")
 	})
+	tel.TxDuration = time.Since(startedAt)
+	tel.SkippedRace = skipped
+	if inserted != nil {
+		tel.AccountedRows = inserted.rowCount
+	}
+	recordIncrementalChunkTelemetry(tel)
+
 	if err != nil {
 		return nil, err
 	}
 
 	completed := time.Now().UTC()
 	boundary := to
+	if skipped {
+		boundary = actualBoundary
+		notes += " (skipped: published boundary advanced concurrently)"
+	}
 	return &AccountingRunRecord{
 		RunID: runID, AlgorithmVersion: AccountingAlgorithmVersionV2,
 		StartedAt: startedAt, CompletedAt: &completed, Status: AccountingRunCompleted,
 		SourceJournalSequenceMax: &boundary, Notes: notes,
 	}, nil
+}
+
+// prepareIncrementalChunk performs the full read-only preparation of one
+// incremental chunk: it streams the immutable journal range, aggregates
+// per-connection state updates, loads the bounded dirty closure of the
+// affected groups, runs the shared relay reconciliation over that closure and
+// builds the accounted insert plan. It runs outside any writer transaction.
+func prepareIncrementalChunk(ctx context.Context, db *sql.DB, generationID string, from, to int64) (*incrementalPrep, error) {
+	updates, trafficItems, processed, err := streamJournalRange(ctx, db, from, to)
+	if err != nil {
+		return nil, err
+	}
+	prep := &incrementalPrep{
+		processed: processed,
+		updates:   updates,
+	}
+
+	// Affected groups = groups with connection evidence in the range.
+	groupKeys := make(map[string]connGroup)
+	for k := range updates {
+		gk := fmt.Sprintf("%s:%d", k.sessionID, k.epochID)
+		g, ok := groupKeys[gk]
+		if !ok {
+			g = connGroup{sessionID: k.sessionID, epochID: k.epochID}
+			groupKeys[gk] = g
+		}
+	}
+	for _, g := range groupKeys {
+		prep.affectedGroups = append(prep.affectedGroups, g)
+	}
+
+	if len(updates) == 0 {
+		prep.accounted = &accountedPlan{}
+		return prep, nil
+	}
+
+	// Dirty closure: the chunk's own connections, every live (non-terminal)
+	// connection of the affected groups, and terminal connections whose
+	// disappearance is recent enough to overlap a dirty connection's window.
+	// A terminal connection T can only change class through a pair with some
+	// dirty connection D, which requires D.firstObs <= T.disappearedAt; with
+	// cutoff = min(firstObs over dirty connections) the SQL filter below is a
+	// sound superset. The cutoff timestamp is rendered with fixed-width
+	// fractional digits so the lexicographic comparison is order-safe
+	// (over-inclusive by at most one second boundary).
+	dirtyKeys := make([]connKey, 0, len(updates))
+	for k := range updates {
+		dirtyKeys = append(dirtyKeys, k)
+	}
+	dirtyRows, err := loadConnStateRowsByKeys(ctx, db, generationID, dirtyKeys)
+	if err != nil {
+		return nil, err
+	}
+	cutoffStr := dirtyClosureCutoff(updates, dirtyRows)
+	closureRows, err := loadConnStateClosure(ctx, db, generationID, prep.affectedGroups, cutoffStr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the classification input: prior state merged with the chunk's
+	// updates for dirty connections, prior state alone for closure partners.
+	closure := make(map[connKey]*connInfo, len(dirtyRows)+len(closureRows))
+	priorClass := make(map[connKey]AccountingClass, len(dirtyRows)+len(closureRows))
+	for k, row := range dirtyRows {
+		c := connInfoFromState("", k.sessionID, k.epochID, k.connectionID,
+			row.firstObservedAt, row.lastEventAt, row.disappearedAt,
+			row.route, row.attr, row.process, row.host, row.destIP, row.rule, row.rulePayload, row.chainsJSON,
+			row.monUp, row.monDown, time.Time{})
+		priorClass[k] = AccountingClass(row.accountingClass)
+		if u := updates[k]; u != nil {
+			u.applyTo(c)
+		}
+		closure[k] = c
+	}
+	for k, row := range closureRows {
+		if _, exists := closure[k]; exists {
+			continue
+		}
+		c := connInfoFromState("", k.sessionID, k.epochID, k.connectionID,
+			row.firstObservedAt, row.lastEventAt, row.disappearedAt,
+			row.route, row.attr, row.process, row.host, row.destIP, row.rule, row.rulePayload, row.chainsJSON,
+			row.monUp, row.monDown, time.Time{})
+		priorClass[k] = AccountingClass(row.accountingClass)
+		closure[k] = c
+	}
+	// First-ever dirty connections have no prior row: their classification
+	// input is built purely from the chunk's updates.
+	for k, u := range updates {
+		if _, exists := closure[k]; exists {
+			continue
+		}
+		c := &connInfo{
+			key:              k,
+			firstObs:         u.firstObs,
+			lastEvent:        u.lastEvent,
+			route:            u.route,
+			attributionClass: u.attribution,
+			process:          u.process,
+			host:             u.host,
+			destIP:           u.destIP,
+			rule:             u.rule,
+			rulePayload:      u.rulePayload,
+			chains:           u.chains,
+			monitoredUp:      u.monUp,
+			monitoredDown:    u.monDown,
+			disappearedAt:    u.disappearedAt,
+		}
+		if u.lifecycle == lifecycleActive {
+			c.disappearedAt = nil
+		}
+		c.lastObs = effectiveLastObs(c, time.Time{})
+		closure[k] = c
+	}
+	prep.closureConns = len(closure)
+
+	// Classify each affected group over its closure with the shared contract.
+	closureGroups := make(map[string][]*connInfo)
+	for k, c := range closure {
+		gk := fmt.Sprintf("%s:%d", k.sessionID, k.epochID)
+		closureGroups[gk] = append(closureGroups[gk], c)
+	}
+	classMap := make(map[connKey]AccountingClass, len(closure))
+	for _, g := range prep.affectedGroups {
+		gk := fmt.Sprintf("%s:%d", g.sessionID, g.epochID)
+		conns := closureGroups[gk]
+		boundaryTime := boundaryFrameTimeForGroup(ctx, db, &g, to)
+		for _, c := range conns {
+			c.lastObs = effectiveLastObs(c, boundaryTime)
+		}
+		classes, relations := classifyConnectionGroup(conns)
+		for k, class := range classes {
+			classMap[k] = class
+		}
+		prep.relations = append(prep.relations, relations...)
+	}
+	for k := range closure {
+		class, ok := classMap[k]
+		if !ok {
+			class = ClassUnique
+		}
+		if old, hasPrior := priorClass[k]; !hasPrior || old != class {
+			prep.classChanges = append(prep.classChanges, classChange{key: k, oldClass: old, newClass: class})
+		}
+		classMap[k] = class
+	}
+
+	// Accounted insert plan for the range's nonzero traffic evidence.
+	prep.accounted, err = buildAccountedPlan(trafficItems, classMap)
+	if err != nil {
+		return nil, err
+	}
+	return prep, nil
+}
+
+// dirtyClosureCutoff computes min(firstObs) over the chunk's dirty
+// connections, using each connection's prior first observation where one
+// exists and the chunk's own first event otherwise.
+func dirtyClosureCutoff(updates map[connKey]*connStateUpdate, dirtyRows map[connKey]*connStateRow) string {
+	cutoff := time.Time{}
+	for k, u := range updates {
+		t := u.firstObs
+		if row := dirtyRows[k]; row != nil {
+			if priorFirst, err := time.Parse(time.RFC3339Nano, row.firstObservedAt); err == nil {
+				t = priorFirst
+			}
+		}
+		if cutoff.IsZero() || t.Before(cutoff) {
+			cutoff = t
+		}
+	}
+	if cutoff.IsZero() {
+		cutoff = time.Now().UTC()
+	}
+	return cutoff.UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
 }
 
 // -----------------------------------------------------------------------------
@@ -753,12 +1087,33 @@ func extendCutToFrameEnd(ctx context.Context, db *sql.DB, candidate, boundary in
 	return frameEnd, nil
 }
 
+// rowQuerier abstracts *sql.DB and *sql.Tx for read-only helpers so the same
+// logic serves the seed path (inside a transaction) and the incremental
+// preparation phase (outside any transaction).
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// connLifecycle is the final lifecycle decision a chunk carries for one
+// connection. none keeps the stored marker untouched, active is the explicit
+// clear emitted by a re-observation (New/Bootstrap), terminal sets the
+// disappearance marker.
+type connLifecycle int
+
+const (
+	lifecycleNone     connLifecycle = 0
+	lifecycleActive   connLifecycle = 1
+	lifecycleTerminal connLifecycle = 2
+)
+
 // connStateUpdate is the in-memory aggregation of one chunk's events for a
 // single connection, mirroring the legacy connInfo construction exactly.
 type connStateUpdate struct {
 	firstObs       time.Time
 	lastEvent      time.Time
 	disappearedAt  *time.Time
+	lifecycle      connLifecycle
 	route          types.RouteType
 	attribution    types.AttributionClass
 	process        string
@@ -771,6 +1126,46 @@ type connStateUpdate struct {
 	hasUpdate      bool
 }
 
+// applyTo merges the chunk's aggregated update into the connection's prior
+// durable state, producing the classification input for the boundary.
+func (u *connStateUpdate) applyTo(c *connInfo) {
+	c.monitoredUp += u.monUp
+	c.monitoredDown += u.monDown
+	if u.lastEvent.After(c.lastEvent) {
+		c.lastEvent = u.lastEvent
+	}
+	if u.route != "" {
+		c.route = u.route
+	}
+	if u.attribution != "" {
+		c.attributionClass = u.attribution
+	}
+	if u.process != "" {
+		c.process = u.process
+	}
+	if u.host != "" {
+		c.host = u.host
+	}
+	if u.destIP != "" {
+		c.destIP = u.destIP
+	}
+	if u.rule != "" {
+		c.rule = u.rule
+	}
+	if u.rulePayload != "" {
+		c.rulePayload = u.rulePayload
+	}
+	if len(u.chains) > 0 {
+		c.chains = u.chains
+	}
+	switch u.lifecycle {
+	case lifecycleActive:
+		c.disappearedAt = nil
+	case lifecycleTerminal:
+		c.disappearedAt = u.disappearedAt
+	}
+}
+
 func (u *connStateUpdate) mergeEvent(obsTime time.Time, ev *types.CollectorEvent) {
 	if !u.hasUpdate {
 		u.firstObs = obsTime
@@ -779,9 +1174,19 @@ func (u *connStateUpdate) mergeEvent(obsTime time.Time, ev *types.CollectorEvent
 	if obsTime.After(u.lastEvent) {
 		u.lastEvent = obsTime
 	}
-	if ev.Type == types.EventConnectionDisappeared {
+	// Events stream in journal order, so the final lifecycle state of the
+	// chunk is decided by its last lifecycle event: Disappeared after New
+	// ends terminal, New/Bootstrap after Disappeared re-opens and must clear
+	// the terminal marker (the old COALESCE contract could not express the
+	// explicit clear).
+	switch ev.Type {
+	case types.EventConnectionDisappeared:
 		t := obsTime
 		u.disappearedAt = &t
+		u.lifecycle = lifecycleTerminal
+	case types.EventConnectionNew, types.EventConnectionBootstrap:
+		u.disappearedAt = nil
+		u.lifecycle = lifecycleActive
 	}
 	if ev.Route != "" {
 		u.route = ev.Route
@@ -822,7 +1227,11 @@ const connStateUpsertSQL = `
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unique')
 	ON CONFLICT(generation_id, session_id, epoch_id, connection_id) DO UPDATE SET
 		last_event_at = excluded.last_event_at,
-		disappeared_at = COALESCE(excluded.disappeared_at, accounting_conn_state_v2.disappeared_at),
+		disappeared_at = CASE ?
+			WHEN 1 THEN NULL
+			WHEN 2 THEN excluded.disappeared_at
+			ELSE accounting_conn_state_v2.disappeared_at
+		END,
 		route = CASE WHEN excluded.route IS NOT NULL AND excluded.route != '' THEN excluded.route ELSE accounting_conn_state_v2.route END,
 		attribution_class = CASE WHEN excluded.attribution_class IS NOT NULL AND excluded.attribution_class != '' THEN excluded.attribution_class ELSE accounting_conn_state_v2.attribution_class END,
 		process = CASE WHEN excluded.process IS NOT NULL AND excluded.process != '' THEN excluded.process ELSE accounting_conn_state_v2.process END,
@@ -835,61 +1244,226 @@ const connStateUpsertSQL = `
 		monitored_download = monitored_download + excluded.monitored_download;
 `
 
-// applyConnStateRange streams the journal range (from, to] and upserts the
-// generation's connection summary state. It must run inside the caller's
-// transaction so cursor advancement and state stay atomic.
+// applyConnStateRange streams the journal range (from, to] inside the caller's
+// transaction (seed path) and upserts the generation's connection summary
+// state so cursor advancement and state stay atomic.
 func applyConnStateRange(ctx context.Context, tx *sql.Tx, generationID string, from, to int64) (int64, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id, epoch_id, connection_id, event_type, observed_at, event_json
+	updates, _, processed, err := streamJournalRange(ctx, tx, from, to)
+	if err != nil {
+		return 0, err
+	}
+	if err := applyConnStateUpdates(ctx, tx, generationID, updates); err != nil {
+		return processed, err
+	}
+	return processed, nil
+}
+
+// streamJournalRange streams the immutable journal range (from, to] in
+// sequence order and aggregates per-connection state updates plus the range's
+// raw traffic items (ConnectionNew/ConnectionDelta). It performs no writes and
+// is used by both the seed (inside a transaction) and the incremental
+// preparation phase (outside any transaction).
+func streamJournalRange(ctx context.Context, q rowQuerier, from, to int64) (map[connKey]*connStateUpdate, []journalTrafficItem, int64, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT session_id, epoch_id, connection_id, event_type, observed_at, event_json, journal_sequence
 		FROM event_journal INDEXED BY idx_event_journal_sequence
 		WHERE journal_sequence > ? AND journal_sequence <= ?
 		ORDER BY journal_sequence ASC;
 	`, from, to)
 	if err != nil {
-		return 0, fmt.Errorf("failed to stream journal range: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to stream journal range: %w", err)
 	}
 	defer rows.Close()
 
 	updates := make(map[connKey]*connStateUpdate)
+	var traffic []journalTrafficItem
 	var processed int64
 	for rows.Next() {
 		var sessID, eventType, obsAtStr, ej string
 		var connID sql.NullString
 		var epochID int
-		if err := rows.Scan(&sessID, &epochID, &connID, &eventType, &obsAtStr, &ej); err != nil {
-			return 0, err
+		var seq int64
+		if err := rows.Scan(&sessID, &epochID, &connID, &eventType, &obsAtStr, &ej, &seq); err != nil {
+			return nil, nil, 0, err
 		}
 		processed++
-		if !connID.Valid || connID.String == "" {
-			// Session-scoped evidence (gaps, health) carries no connection.
-			continue
-		}
+		if connID.Valid && connID.String != "" {
+			var ev types.CollectorEvent
+			dec := json.NewDecoder(strings.NewReader(ej))
+			dec.UseNumber()
+			if err := dec.Decode(&ev); err != nil {
+				return nil, nil, 0, fmt.Errorf("failed to decode journal event: %w", err)
+			}
+			obsTime, _ := time.Parse(time.RFC3339Nano, obsAtStr)
+			obsTime = obsTime.UTC()
 
-		var ev types.CollectorEvent
-		dec := json.NewDecoder(strings.NewReader(ej))
-		dec.UseNumber()
-		if err := dec.Decode(&ev); err != nil {
-			return 0, fmt.Errorf("failed to decode journal event: %w", err)
-		}
-		obsTime, _ := time.Parse(time.RFC3339Nano, obsAtStr)
-		obsTime = obsTime.UTC()
+			k := connKey{sessionID: sessID, epochID: epochID, connectionID: connID.String}
+			u := updates[k]
+			if u == nil {
+				u = &connStateUpdate{}
+				updates[k] = u
+			}
+			u.mergeEvent(obsTime, &ev)
 
-		k := connKey{sessionID: sessID, epochID: epochID, connectionID: connID.String}
-		u := updates[k]
-		if u == nil {
-			u = &connStateUpdate{}
-			updates[k] = u
+			if eventType == string(types.EventConnectionNew) || eventType == string(types.EventConnectionDelta) {
+				traffic = append(traffic, journalTrafficItem{
+					eventID: ev.EventID, sessID: sessID, epochID: epochID, connID: connID.String,
+					obsAtStr: obsAtStr, ej: ej, seq: seq,
+				})
+			}
 		}
-		u.mergeEvent(obsTime, &ev)
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("error streaming journal range: %w", err)
+		return nil, nil, 0, fmt.Errorf("error streaming journal range: %w", err)
 	}
-	rows.Close()
+	return updates, traffic, processed, rows.Close()
+}
 
+// connStateRow is one durable accounting_conn_state_v2 row as loaded for the
+// classification input.
+type connStateRow struct {
+	firstObservedAt string
+	lastEventAt     string
+	disappearedAt   sql.NullString
+	route           sql.NullString
+	attr            sql.NullString
+	process         sql.NullString
+	host            sql.NullString
+	destIP          sql.NullString
+	rule            sql.NullString
+	rulePayload     sql.NullString
+	chainsJSON      sql.NullString
+	monUp           int64
+	monDown         int64
+	accountingClass string
+}
+
+const connStateRowColumns = `
+	first_observed_at, last_event_at, disappeared_at,
+	route, attribution_class, process, host, destination_ip, rule, rule_payload, chains_json,
+	monitored_upload, monitored_download, accounting_class`
+
+func scanConnStateRow(row *sql.Row) (*connStateRow, error) {
+	var r connStateRow
+	err := row.Scan(&r.firstObservedAt, &r.lastEventAt, &r.disappearedAt,
+		&r.route, &r.attr, &r.process, &r.host, &r.destIP, &r.rule, &r.rulePayload, &r.chainsJSON,
+		&r.monUp, &r.monDown, &r.accountingClass)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func queryConnStateRow(ctx context.Context, q rowQuerier, generationID string, k connKey) (*connStateRow, error) {
+	row := q.QueryRowContext(ctx, `
+		SELECT `+connStateRowColumns+`
+		FROM accounting_conn_state_v2
+		WHERE generation_id = ? AND session_id = ? AND epoch_id = ? AND connection_id = ?;`,
+		generationID, k.sessionID, k.epochID, k.connectionID)
+	r, err := scanConnStateRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return r, err
+}
+
+// loadConnStateRowsByKeys loads connection summary state rows for exact keys
+// in bounded batches.
+func loadConnStateRowsByKeys(ctx context.Context, db *sql.DB, generationID string, keys []connKey) (map[connKey]*connStateRow, error) {
+	out := make(map[connKey]*connStateRow, len(keys))
+	const batch = 400
+	for i := 0; i < len(keys); i += batch {
+		end := i + batch
+		if end > len(keys) {
+			end = len(keys)
+		}
+		batchKeys := keys[i:end]
+		var sb strings.Builder
+		sb.WriteString(`SELECT session_id, epoch_id, connection_id, ` + connStateRowColumns + `
+			FROM accounting_conn_state_v2
+			WHERE generation_id = ? AND (session_id, epoch_id, connection_id) IN (VALUES `)
+		args := []any{generationID}
+		for j, k := range batchKeys {
+			if j > 0 {
+				sb.WriteString(",")
+			}
+			sb.WriteString("(?,?,?)")
+			args = append(args, k.sessionID, k.epochID, k.connectionID)
+		}
+		sb.WriteString(");")
+		rows, err := db.QueryContext(ctx, sb.String(), args...)
+		if err != nil {
+			return nil, err
+		}
+		if err := collectConnStateRows(rows, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// loadConnStateClosure loads, per affected group, every connection that is
+// live (no terminal marker), whose terminal marker or last event is at least
+// the cutoff, or whose terminal marker is older than its last event (an
+// active connection with a stale pre-contract marker). Terminal connections
+// older than the cutoff cannot pair with any dirty connection of this chunk,
+// so excluding them keeps the reconciliation scope bounded without weakening
+// legacy relay semantics.
+func loadConnStateClosure(ctx context.Context, db *sql.DB, generationID string, groups []connGroup, cutoff string) (map[connKey]*connStateRow, error) {
+	out := make(map[connKey]*connStateRow)
+	for _, g := range groups {
+		rows, err := db.QueryContext(ctx, `
+			SELECT connection_id, `+connStateRowColumns+`
+			FROM accounting_conn_state_v2
+			WHERE generation_id = ? AND session_id = ? AND epoch_id = ?
+			  AND (disappeared_at IS NULL OR disappeared_at >= ? OR last_event_at >= ?
+			       OR last_event_at > disappeared_at);`,
+			generationID, g.sessionID, g.epochID, cutoff, cutoff)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var sessID, connID string
+			var epochID int
+			var r connStateRow
+			if err := rows.Scan(&connID, &r.firstObservedAt, &r.lastEventAt, &r.disappearedAt,
+				&r.route, &r.attr, &r.process, &r.host, &r.destIP, &r.rule, &r.rulePayload, &r.chainsJSON,
+				&r.monUp, &r.monDown, &r.accountingClass); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[connKey{sessionID: sessID, epochID: epochID, connectionID: connID}] = &r
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
+func collectConnStateRows(rows *sql.Rows, out map[connKey]*connStateRow) error {
+	defer rows.Close()
+	for rows.Next() {
+		var sessID, connID string
+		var epochID int
+		var r connStateRow
+		if err := rows.Scan(&sessID, &epochID, &connID, &r.firstObservedAt, &r.lastEventAt, &r.disappearedAt,
+			&r.route, &r.attr, &r.process, &r.host, &r.destIP, &r.rule, &r.rulePayload, &r.chainsJSON,
+			&r.monUp, &r.monDown, &r.accountingClass); err != nil {
+			return err
+		}
+		out[connKey{sessionID: sessID, epochID: epochID, connectionID: connID}] = &r
+	}
+	return rows.Err()
+}
+
+// applyConnStateUpdates writes the chunk's aggregated per-connection state.
+func applyConnStateUpdates(ctx context.Context, tx *sql.Tx, generationID string, updates map[connKey]*connStateUpdate) error {
 	stmt, err := tx.PrepareContext(ctx, connStateUpsertSQL)
 	if err != nil {
-		return processed, err
+		return err
 	}
 	defer stmt.Close()
 
@@ -916,11 +1490,12 @@ func applyConnStateRange(ctx context.Context, tx *sql.Tx, generationID string, f
 			route, attr, nullIfEmpty(u.process), nullIfEmpty(u.host), nullIfEmpty(u.destIP),
 			nullIfEmpty(u.rule), nullIfEmpty(u.rulePayload), chainsJSON,
 			u.monUp, u.monDown,
+			int(u.lifecycle),
 		); err != nil {
-			return processed, fmt.Errorf("failed to upsert conn state for %s: %w", k.connectionID, err)
+			return fmt.Errorf("failed to upsert conn state for %s: %w", k.connectionID, err)
 		}
 	}
-	return processed, nil
+	return nil
 }
 
 func nullIfEmpty(s string) any {
@@ -931,10 +1506,9 @@ func nullIfEmpty(s string) any {
 }
 
 // connInfoFromState converts a durable conn_state row into the shared
-// in-memory classification input, applying the exact lastObserved rule:
-// a connection without a trailing disappearance was still present in the
-// boundary frame, so its lastObs equals the boundary frame time - matching
-// legacy semantics where every observed frame emitted evidence.
+// in-memory classification input. The lastObserved contract is applied through
+// effectiveLastObs; with a zero boundary the terminal marker and last event
+// time are the only available facts.
 func connInfoFromState(generationID string, sessID string, epochID int, connID string,
 	firstObsStr, lastEventStr string, disappearedAt sql.NullString,
 	route, attr, process, host, destIP, rule, rulePayload, chainsJSON sql.NullString,
@@ -945,20 +1519,10 @@ func connInfoFromState(generationID string, sessID string, epochID int, connID s
 	lastEvent, _ := time.Parse(time.RFC3339Nano, lastEventStr)
 	lastEvent = lastEvent.UTC()
 
-	lastObs := boundaryFrameTime
-	if disappearedAt.Valid && disappearedAt.String != "" {
-		if t, err := time.Parse(time.RFC3339Nano, disappearedAt.String); err == nil {
-			t = t.UTC()
-			if !t.Before(lastEvent) {
-				lastObs = t
-			}
-		}
-	}
-
 	c := &connInfo{
 		key:              connKey{sessionID: sessID, epochID: epochID, connectionID: connID},
 		firstObs:         firstObs,
-		lastObs:          lastObs,
+		lastEvent:        lastEvent,
 		route:            types.RouteType(route.String),
 		attributionClass: types.AttributionClass(attr.String),
 		process:          process.String,
@@ -969,6 +1533,13 @@ func connInfoFromState(generationID string, sessID string, epochID int, connID s
 		monitoredUp:      monUp,
 		monitoredDown:    monDown,
 	}
+	if disappearedAt.Valid && disappearedAt.String != "" {
+		if t, err := time.Parse(time.RFC3339Nano, disappearedAt.String); err == nil {
+			t = t.UTC()
+			c.disappearedAt = &t
+		}
+	}
+	c.lastObs = effectiveLastObs(c, boundaryFrameTime)
 	if chainsJSON.Valid && chainsJSON.String != "" {
 		_ = json.Unmarshal([]byte(chainsJSON.String), &c.chains)
 	}
@@ -1098,21 +1669,43 @@ func persistGroupClassifications(ctx context.Context, tx *sql.Tx, generationID s
 	return decided, nil
 }
 
-// effectiveLastObs applies the exact lastObserved rule for relay overlap
-// windows: connections without a trailing disappearance were present in the
-// boundary frame (their lastObs is the boundary frame time, matching legacy
-// per-frame evidence), disappeared connections keep their first-absent time.
+// effectiveLastObs is the single shared lastObserved contract for relay
+// overlap windows, applied identically by the legacy rebuild and v2:
+//
+//   - a terminal (disappeared, not re-opened) connection keeps its
+//     disappearance/first-absent time — its observation window ended there and
+//     must never extend toward the boundary;
+//   - an active connection was present in the group's latest observation
+//     frame, so its lastObs is the authoritative group frame time (with S1
+//     sparse presence evidence the last per-connection event can be much
+//     older than the frame it was actually present in);
+//   - a disappearance marker older than the last durable evidence cannot be
+//     terminal (the connection re-opened; also covers rows written before the
+//     lifecycle-explicit contract) and is treated as active;
+//   - without any frame time in range the last durable event time is the only
+//     honest fallback.
 func effectiveLastObs(c *connInfo, boundaryFrameTime time.Time) time.Time {
+	if c.disappearedAt != nil && !c.disappearedAt.Before(c.lastEvent) {
+		return *c.disappearedAt
+	}
+	if boundaryFrameTime.IsZero() {
+		return c.lastEvent
+	}
 	return boundaryFrameTime
 }
 
-// boundaryFrameTimeForGroup resolves the observed_at of the latest frame of
-// the group within the boundary range.
-func boundaryFrameTimeForGroup(ctx context.Context, tx *sql.Tx, g *connGroup, boundary int64) time.Time {
+// boundaryFrameTimeForGroup resolves the authoritative frame timestamp of the
+// group's most recent observation frame within the boundary range: the latest
+// frame-derived evidence (per-connection events and per-frame sampling
+// residuals). It must not key on the last connection-carrying event — with
+// sparse presence evidence an idle connection can be silent for a full
+// checkpoint interval while newer frames keep flowing.
+func boundaryFrameTimeForGroup(ctx context.Context, q rowQuerier, g *connGroup, boundary int64) time.Time {
 	var obsStr sql.NullString
-	err := tx.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 		SELECT observed_at FROM event_journal
-		WHERE session_id = ? AND epoch_id = ? AND journal_sequence <= ? AND connection_id != ''
+		WHERE session_id = ? AND epoch_id = ? AND journal_sequence <= ?
+		  AND ((connection_id IS NOT NULL AND connection_id != '') OR event_type = 'SamplingResidual')
 		ORDER BY journal_sequence DESC LIMIT 1;
 	`, g.sessionID, g.epochID, boundary).Scan(&obsStr)
 	if err != nil || !obsStr.Valid {
@@ -1122,106 +1715,95 @@ func boundaryFrameTimeForGroup(ctx context.Context, tx *sql.Tx, g *connGroup, bo
 	return t.UTC()
 }
 
-// loadAffectedGroups lists the (session, epoch) groups with events in the
-// incremental range.
-func loadAffectedGroups(ctx context.Context, tx *sql.Tx, generationID string, from, to int64) ([]connGroup, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT DISTINCT session_id, epoch_id FROM event_journal
-		WHERE journal_sequence > ? AND journal_sequence <= ?;
-	`, from, to)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var groups []connGroup
-	for rows.Next() {
-		var g connGroup
-		if err := rows.Scan(&g.sessionID, &g.epochID); err != nil {
-			return nil, err
-		}
-		groups = append(groups, g)
-	}
-	return groups, rows.Err()
-}
-
-// reclassifyAffectedGroups re-runs the shared classification for the affected
-// groups and applies byte corrections for changed classes. It returns the
-// aggregate byte correction so the publish step can keep the generation
-// totals invariant-consistent.
+// accountingCorrection carries the aggregate accounted-byte adjustment of a
+// chunk's class changes so the publish step keeps the generation totals
+// invariant-consistent.
 type accountingCorrection struct {
 	accUpDelta   int64
 	accDownDelta int64
 }
 
-func reclassifyAffectedGroups(ctx context.Context, tx *sql.Tx, generationID string, groups []connGroup, boundary int64) (*accountingCorrection, error) {
+// applyClassChanges persists the bounded dirty closure's classification
+// changes. Only connections whose class actually changed are written, so the
+// writer cost is proportional to real decision churn, not group cardinality.
+func applyClassChanges(ctx context.Context, tx *sql.Tx, generationID string, changes []classChange) error {
+	if len(changes) == 0 {
+		return nil
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+		UPDATE accounting_conn_state_v2 SET accounting_class = ?, classified_at = ?
+		WHERE generation_id = ? AND session_id = ? AND epoch_id = ? AND connection_id = ?;
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, ch := range changes {
+		if _, err := stmt.ExecContext(ctx, string(ch.newClass), nowStr, generationID,
+			ch.key.sessionID, ch.key.epochID, ch.key.connectionID); err != nil {
+			return fmt.Errorf("failed to persist class change for %s: %w", ch.key.connectionID, err)
+		}
+	}
+	return nil
+}
+
+// applyRelayRelationsV2 replaces the relay relation records of the closure
+// candidates. Non-closure candidates keep their previous records, so the write
+// scope stays bounded.
+func applyRelayRelationsV2(ctx context.Context, tx *sql.Tx, generationID string, relations []RelayRelationRecord) error {
+	if len(relations) == 0 {
+		return nil
+	}
+	delStmt, err := tx.PrepareContext(ctx, `
+		DELETE FROM relay_relations_v2
+		WHERE generation_id = ? AND candidate_session_id = ? AND candidate_epoch_id = ? AND candidate_connection_id = ?;
+	`)
+	if err != nil {
+		return err
+	}
+	defer delStmt.Close()
+	insStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO relay_relations_v2 (
+			generation_id, candidate_session_id, candidate_epoch_id, candidate_connection_id,
+			logical_session_id, logical_epoch_id, logical_connection_id,
+			status, evidence_json, derivation_version
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`)
+	if err != nil {
+		return err
+	}
+	defer insStmt.Close()
+
+	for _, rel := range relations {
+		if _, err := delStmt.ExecContext(ctx, generationID,
+			rel.CandidateSessionID, rel.CandidateEpochID, rel.CandidateConnectionID); err != nil {
+			return err
+		}
+		rel.RunID = generationID
+		var logSess, logConn sql.NullString
+		var logEpoch sql.NullInt64
+		if rel.LogicalConnectionID != "" {
+			logSess = sql.NullString{String: rel.LogicalSessionID, Valid: true}
+			logEpoch = sql.NullInt64{Int64: int64(rel.LogicalEpochID), Valid: true}
+			logConn = sql.NullString{String: rel.LogicalConnectionID, Valid: true}
+		}
+		if _, err := insStmt.ExecContext(ctx, generationID, rel.CandidateSessionID, rel.CandidateEpochID, rel.CandidateConnectionID,
+			logSess, logEpoch, logConn, string(rel.Status), rel.EvidenceJSON, rel.DerivationVersion); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyClassCorrections rewrites the derived rows of connections whose class
+// changed and aggregates the byte correction for the publish step. The
+// correction scope is the chunk's class-change set, not the closure.
+func applyClassCorrections(ctx context.Context, tx *sql.Tx, generationID string, changes []classChange) (*accountingCorrection, error) {
 	correction := &accountingCorrection{}
-	for _, g := range groups {
-		// Load the group's connection state rows (post-range upsert).
-		rows, err := tx.QueryContext(ctx, `
-			SELECT session_id, epoch_id, connection_id, first_observed_at, last_event_at, disappeared_at,
-			       route, attribution_class, process, host, destination_ip, rule, rule_payload, chains_json,
-			       monitored_upload, monitored_download, accounting_class
-			FROM accounting_conn_state_v2
-			WHERE generation_id = ? AND session_id = ? AND epoch_id = ?;
-		`, generationID, g.sessionID, g.epochID)
-		if err != nil {
+	for _, ch := range changes {
+		if err := applyClassCorrection(ctx, tx, generationID, ch.key, ch.oldClass, ch.newClass, correction); err != nil {
 			return nil, err
-		}
-		type stateRow struct {
-			info     *connInfo
-			oldClass AccountingClass
-		}
-		var groupRows []stateRow
-		for rows.Next() {
-			var sessID, connID, firstObsStr, lastEventStr string
-			var epochID int
-			var disappearedAt, route, attr, process, host, destIP, rule, rulePayload, chainsJSON sql.NullString
-			var monUp, monDown int64
-			var oldClassStr string
-			if err := rows.Scan(&sessID, &epochID, &connID, &firstObsStr, &lastEventStr, &disappearedAt,
-				&route, &attr, &process, &host, &destIP, &rule, &rulePayload, &chainsJSON,
-				&monUp, &monDown, &oldClassStr); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			info := connInfoFromState(generationID, sessID, epochID, connID,
-				firstObsStr, lastEventStr, disappearedAt, route, attr, process, host, destIP, rule, rulePayload, chainsJSON,
-				monUp, monDown, time.Time{})
-			groupRows = append(groupRows, stateRow{info: info, oldClass: AccountingClass(oldClassStr)})
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		if len(groupRows) == 0 {
-			continue
-		}
-
-		conns := make([]*connInfo, len(groupRows))
-		for i, r := range groupRows {
-			conns[i] = r.info
-		}
-
-		groupMap := map[string]*connGroup{
-			fmt.Sprintf("%s:%d", g.sessionID, g.epochID): {sessionID: g.sessionID, epochID: g.epochID, conns: conns},
-		}
-		classes, err := persistGroupClassifications(ctx, tx, generationID, groupMap, boundary)
-		if err != nil {
-			return nil, err
-		}
-
-		// Apply bounded corrections for connections whose class changed.
-		for _, r := range groupRows {
-			newClass := classes[r.info.key]
-			if newClass == "" {
-				newClass = ClassUnique
-			}
-			if newClass == r.oldClass {
-				continue
-			}
-			if err := applyClassCorrection(ctx, tx, generationID, r.info.key, r.oldClass, newClass, correction); err != nil {
-				return nil, err
-			}
 		}
 	}
 	return correction, nil
@@ -1506,32 +2088,6 @@ func loadGenerationClasses(ctx context.Context, db *sql.DB, generationID string)
 	return out, rows.Err()
 }
 
-func loadGroupClasses(ctx context.Context, tx *sql.Tx, generationID string, groups []connGroup) (map[connKey]AccountingClass, error) {
-	out := make(map[connKey]AccountingClass)
-	for _, g := range groups {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT connection_id, accounting_class FROM accounting_conn_state_v2
-			WHERE generation_id = ? AND session_id = ? AND epoch_id = ?;
-		`, generationID, g.sessionID, g.epochID)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var connID, class string
-			if err := rows.Scan(&connID, &class); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			out[connKey{sessionID: g.sessionID, epochID: g.epochID, connectionID: connID}] = AccountingClass(class)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
 // accountedInsertResult carries the byte deltas of newly inserted derived rows
 // so the publish step keeps generation totals exact.
 type accountedInsertResult struct {
@@ -1542,80 +2098,51 @@ type accountedInsertResult struct {
 	accDownDelta int64
 }
 
-// applyAccountedRange inserts derived accounted rows for the range's nonzero
-// traffic evidence (ConnectionNew/ConnectionDelta with positive bytes) and
-// maintains the hourly aggregates plus distinct-connection evidence.
-func applyAccountedRange(ctx context.Context, tx *sql.Tx, generationID string, from, to int64, classMap map[connKey]AccountingClass) (*accountedInsertResult, error) {
-	// The event_type filter must never lure the planner away from the
-	// sequence range index: without the hint SQLite scans the whole history
-	// through idx_journal_type_obs (observed at production scale, 12s for an
-	// empty range on 1.5M rows).
-	rows, err := tx.QueryContext(ctx, `
-		SELECT event_id, session_id, epoch_id, connection_id, observed_at, event_json, journal_sequence
-		FROM event_journal INDEXED BY idx_event_journal_sequence
-		WHERE journal_sequence > ? AND journal_sequence <= ?
-		  AND event_type IN ('ConnectionNew', 'ConnectionDelta')
-		ORDER BY journal_sequence ASC;
-	`, from, to)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stream traffic range: %w", err)
-	}
+// journalTrafficItem is one raw traffic event (ConnectionNew/ConnectionDelta)
+// of a streamed journal range, awaiting derived-row planning.
+type journalTrafficItem struct {
+	eventID, sessID, connID, obsAtStr, ej string
+	epochID                               int
+	seq                                   int64
+}
 
-	type trafficItem struct {
-		eventID, sessID, connID, obsAtStr, ej string
-		epochID                               int
-		seq                                   int64
-	}
-	var items []trafficItem
-	for rows.Next() {
-		var it trafficItem
-		if err := rows.Scan(&it.eventID, &it.sessID, &it.epochID, &it.connID, &it.obsAtStr, &it.ej, &it.seq); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		items = append(items, it)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
+// aggKeyV2 is one hourly aggregate key of the v2 dimension model.
+type aggKeyV2 struct {
+	bucket  time.Time
+	dimType string
+	dimKey  string
+	route   types.RouteType
+}
 
-	result := &accountedInsertResult{}
-	if len(items) == 0 {
-		return result, nil
-	}
+// accountedPlan is the fully precomputed derived-row write set of one range:
+// rows to insert, hourly byte deltas and distinct-connection registrations.
+// Building it is read-only computation; applying it is a bounded write.
+type accountedPlan struct {
+	rows       []accountedPlanRow
+	byteDeltas map[aggKeyV2][4]int64
+	seenPairs  map[aggKeyV2]map[connKey]bool
+	result     accountedInsertResult
+}
 
-	type aggKeyV2 struct {
-		bucket  time.Time
-		dimType string
-		dimKey  string
-		route   types.RouteType
-	}
-	// Per-key byte deltas: [exactUp, exactDown, estUp, estDown].
-	byteDeltas := make(map[aggKeyV2][4]int64)
-	seenPairs := make(map[aggKeyV2]map[connKey]bool)
+type accountedPlanRow struct {
+	rec AccountedTrafficRecord
+	seq int64
+}
 
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO accounted_traffic_v2 (
-			generation_id, source_event_id, source_journal_sequence, session_id, epoch_id, connection_id,
-			observed_at, interval_start, interval_end, precision, route,
-			raw_upload, raw_download, accounted_upload, accounted_download, accounting_class,
-			process, process_path, host, sniff_host, destination_ip, network,
-			rule, rule_payload, final_proxy, top_policy_group, dimension_derivation_version
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-	`)
-	if err != nil {
-		return nil, err
+// buildAccountedPlan decodes the range's traffic items and builds the derived
+// insert plan (zero-byte events are compacted away per the documented Phase 3S
+// decision). No database access.
+func buildAccountedPlan(items []journalTrafficItem, classMap map[connKey]AccountingClass) (*accountedPlan, error) {
+	plan := &accountedPlan{
+		byteDeltas: make(map[aggKeyV2][4]int64),
+		seenPairs:  make(map[aggKeyV2]map[connKey]bool),
 	}
-	defer stmt.Close()
-
 	for _, it := range items {
 		var ev types.CollectorEvent
 		dec := json.NewDecoder(strings.NewReader(it.ej))
 		dec.UseNumber()
 		if err := dec.Decode(&ev); err != nil {
-			return result, fmt.Errorf("failed to decode traffic event %s: %w", it.eventID, err)
+			return nil, fmt.Errorf("failed to decode traffic event %s: %w", it.eventID, err)
 		}
 		// Zero-byte derived compaction: rows that contribute no bytes are not
 		// duplicated into derived storage (documented Phase 3S decision).
@@ -1625,24 +2152,12 @@ func applyAccountedRange(ctx context.Context, tx *sql.Tx, generationID string, f
 
 		k := connKey{sessionID: it.sessID, epochID: it.epochID, connectionID: ev.ConnectionID}
 		rec := buildAccountedRecord(it.eventID, it.sessID, it.epochID, it.obsAtStr, &ev, classMap[k])
-
-		if _, err := stmt.ExecContext(ctx,
-			generationID, rec.SourceEventID, it.seq, rec.SessionID, rec.EpochID, rec.ConnectionID,
-			rec.ObservedAt.UTC().Format(time.RFC3339Nano),
-			nullTimeStr(rec.IntervalStart), nullTimeStr(rec.IntervalEnd), rec.Precision, string(rec.Route),
-			rec.RawUpload, rec.RawDownload, rec.AccountedUpload, rec.AccountedDownload, string(rec.AccountingClass),
-			nullIfEmpty(rec.Process), nullIfEmpty(rec.ProcessPath), nullIfEmpty(rec.Host), nullIfEmpty(rec.SniffHost),
-			nullIfEmpty(rec.DestinationIP), nullIfEmpty(rec.Network),
-			nullIfEmpty(rec.Rule), nullIfEmpty(rec.RulePayload), nullIfEmpty(rec.FinalProxy), nullIfEmpty(rec.TopPolicyGroup),
-			rec.DimensionDerivationVersion,
-		); err != nil {
-			return result, fmt.Errorf("failed to insert accounted row: %w", err)
-		}
-		result.rowCount++
-		result.rawUpDelta += rec.RawUpload
-		result.rawDownDelta += rec.RawDownload
-		result.accUpDelta += rec.AccountedUpload
-		result.accDownDelta += rec.AccountedDownload
+		plan.rows = append(plan.rows, accountedPlanRow{rec: rec, seq: it.seq})
+		plan.result.rowCount++
+		plan.result.rawUpDelta += rec.RawUpload
+		plan.result.rawDownDelta += rec.RawDownload
+		plan.result.accUpDelta += rec.AccountedUpload
+		plan.result.accDownDelta += rec.AccountedDownload
 
 		// Hourly contribution.
 		dims := accountedDimensionPairs(
@@ -1663,28 +2178,68 @@ func applyAccountedRange(ctx context.Context, tx *sql.Tx, generationID string, f
 		for _, alloc := range allocations {
 			for _, d := range dims {
 				key := aggKeyV2{bucket: alloc.bucketStart, dimType: d.dimType, dimKey: d.dimKey, route: rec.Route}
-				prev := byteDeltas[key]
+				prev := plan.byteDeltas[key]
 				if alloc.isExact {
-					byteDeltas[key] = [4]int64{prev[0] + alloc.upBytes, prev[1] + alloc.downBytes, prev[2], prev[3]}
+					plan.byteDeltas[key] = [4]int64{prev[0] + alloc.upBytes, prev[1] + alloc.downBytes, prev[2], prev[3]}
 				} else {
-					byteDeltas[key] = [4]int64{prev[0], prev[1], prev[2] + alloc.upBytes, prev[3] + alloc.downBytes}
+					plan.byteDeltas[key] = [4]int64{prev[0], prev[1], prev[2] + alloc.upBytes, prev[3] + alloc.downBytes}
 				}
 				if contributesConn {
-					if seenPairs[key] == nil {
-						seenPairs[key] = make(map[connKey]bool)
+					if plan.seenPairs[key] == nil {
+						plan.seenPairs[key] = make(map[connKey]bool)
 					}
-					seenPairs[key][k] = true
+					plan.seenPairs[key][k] = true
 				}
 			}
 		}
 	}
+	return plan, nil
+}
 
-	for key, bytes := range byteDeltas {
+// applyAccountedPlan writes a precomputed derived-row plan inside the caller's
+// transaction.
+func applyAccountedPlan(ctx context.Context, tx *sql.Tx, generationID string, plan *accountedPlan) (*accountedInsertResult, error) {
+	result := &accountedInsertResult{}
+	if plan == nil || len(plan.rows) == 0 {
+		return result, nil
+	}
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO accounted_traffic_v2 (
+			generation_id, source_event_id, source_journal_sequence, session_id, epoch_id, connection_id,
+			observed_at, interval_start, interval_end, precision, route,
+			raw_upload, raw_download, accounted_upload, accounted_download, accounting_class,
+			process, process_path, host, sniff_host, destination_ip, network,
+			rule, rule_payload, final_proxy, top_policy_group, dimension_derivation_version
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	for _, row := range plan.rows {
+		rec := row.rec
+		if _, err := stmt.ExecContext(ctx,
+			generationID, rec.SourceEventID, row.seq, rec.SessionID, rec.EpochID, rec.ConnectionID,
+			rec.ObservedAt.UTC().Format(time.RFC3339Nano),
+			nullTimeStr(rec.IntervalStart), nullTimeStr(rec.IntervalEnd), rec.Precision, string(rec.Route),
+			rec.RawUpload, rec.RawDownload, rec.AccountedUpload, rec.AccountedDownload, string(rec.AccountingClass),
+			nullIfEmpty(rec.Process), nullIfEmpty(rec.ProcessPath), nullIfEmpty(rec.Host), nullIfEmpty(rec.SniffHost),
+			nullIfEmpty(rec.DestinationIP), nullIfEmpty(rec.Network),
+			nullIfEmpty(rec.Rule), nullIfEmpty(rec.RulePayload), nullIfEmpty(rec.FinalProxy), nullIfEmpty(rec.TopPolicyGroup),
+			rec.DimensionDerivationVersion,
+		); err != nil {
+			return result, fmt.Errorf("failed to insert accounted row: %w", err)
+		}
+	}
+
+	for key, bytes := range plan.byteDeltas {
 		if err := upsertHourlyBytesV2(ctx, tx, generationID, key.bucket, key.dimType, key.dimKey, key.route, bytes[0], bytes[1], bytes[2], bytes[3]); err != nil {
 			return result, err
 		}
 	}
-	for key, conns := range seenPairs {
+	for key, conns := range plan.seenPairs {
 		for ck := range conns {
 			inserted, err := insertHourlyConnSeenV2(ctx, tx, generationID, key.bucket, key.dimType, key.dimKey, key.route, ck)
 			if err != nil {
@@ -1698,7 +2253,51 @@ func applyAccountedRange(ctx context.Context, tx *sql.Tx, generationID string, f
 		}
 	}
 
+	result.rowCount = plan.result.rowCount
+	result.rawUpDelta = plan.result.rawUpDelta
+	result.rawDownDelta = plan.result.rawDownDelta
+	result.accUpDelta = plan.result.accUpDelta
+	result.accDownDelta = plan.result.accDownDelta
 	return result, nil
+}
+
+// applyAccountedRange derives and writes accounted rows for the range's
+// nonzero traffic evidence inside the caller's transaction (seed path).
+func applyAccountedRange(ctx context.Context, tx *sql.Tx, generationID string, from, to int64, classMap map[connKey]AccountingClass) (*accountedInsertResult, error) {
+	// The event_type filter must never lure the planner away from the
+	// sequence range index: without the hint SQLite scans the whole history
+	// through idx_journal_type_obs (observed at production scale, 12s for an
+	// empty range on 1.5M rows).
+	rows, err := tx.QueryContext(ctx, `
+		SELECT event_id, session_id, epoch_id, connection_id, observed_at, event_json, journal_sequence
+		FROM event_journal INDEXED BY idx_event_journal_sequence
+		WHERE journal_sequence > ? AND journal_sequence <= ?
+		  AND event_type IN ('ConnectionNew', 'ConnectionDelta')
+		ORDER BY journal_sequence ASC;
+	`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stream traffic range: %w", err)
+	}
+	var items []journalTrafficItem
+	for rows.Next() {
+		var it journalTrafficItem
+		if err := rows.Scan(&it.eventID, &it.sessID, &it.epochID, &it.connID, &it.obsAtStr, &it.ej, &it.seq); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	plan, err := buildAccountedPlan(items, classMap)
+	if err != nil {
+		return nil, err
+	}
+	return applyAccountedPlan(ctx, tx, generationID, plan)
 }
 
 func nullTimeStr(t *time.Time) any {

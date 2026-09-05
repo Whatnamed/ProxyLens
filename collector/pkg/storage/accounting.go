@@ -215,6 +215,8 @@ type connKey struct {
 type connInfo struct {
 	key                        connKey
 	firstObs, lastObs          time.Time
+	lastEvent                  time.Time
+	disappearedAt              *time.Time
 	route                      types.RouteType
 	attributionClass           types.AttributionClass
 	process, host, destIP      string
@@ -225,10 +227,14 @@ type connInfo struct {
 
 // reconcileBoundedRelayRelations 从 <= boundarySeq 的不可变 Journal 事件中构建连接事实并进行 Relay 对账
 func reconcileBoundedRelayRelations(ctx context.Context, db *sql.DB, runID string, boundarySeq int64) (map[connKey]AccountingClass, []RelayRelationRecord, error) {
+	// Frame-derived evidence (per-connection events plus per-frame sampling
+	// residuals) also feeds the per-group authoritative frame timestamp; gap
+	// and health events without connections are not frame observations and
+	// must not extend presence into unobserved time.
 	rows, err := db.QueryContext(ctx, `
 		SELECT session_id, epoch_id, connection_id, event_type, observed_at, event_json
 		FROM event_journal
-		WHERE journal_sequence <= ? AND connection_id IS NOT NULL AND connection_id != ''
+		WHERE journal_sequence <= ? AND ((connection_id IS NOT NULL AND connection_id != '') OR event_type = 'SamplingResidual')
 		ORDER BY frame_sequence ASC, event_sequence ASC;
 	`, boundarySeq)
 	if err != nil {
@@ -237,6 +243,7 @@ func reconcileBoundedRelayRelations(ctx context.Context, db *sql.DB, runID strin
 	defer rows.Close()
 
 	connMap := make(map[connKey]*connInfo)
+	groupFrameTime := make(map[string]time.Time)
 
 	for rows.Next() {
 		var sessID, connID, eventType, obsAtStr, ej string
@@ -248,17 +255,25 @@ func reconcileBoundedRelayRelations(ctx context.Context, db *sql.DB, runID strin
 		obsTime, _ := time.Parse(time.RFC3339Nano, obsAtStr)
 		obsTime = obsTime.UTC()
 
+		groupKey := fmt.Sprintf("%s:%d", sessID, epochID)
+		if obsTime.After(groupFrameTime[groupKey]) {
+			groupFrameTime[groupKey] = obsTime
+		}
+		if connID == "" {
+			continue
+		}
+
 		k := connKey{sessionID: sessID, epochID: epochID, connectionID: connID}
 		c, ok := connMap[k]
 		if !ok {
-			c = &connInfo{key: k, firstObs: obsTime, lastObs: obsTime}
+			c = &connInfo{key: k, firstObs: obsTime, lastEvent: obsTime}
 			connMap[k] = c
 		}
 		if obsTime.Before(c.firstObs) {
 			c.firstObs = obsTime
 		}
-		if obsTime.After(c.lastObs) {
-			c.lastObs = obsTime
+		if obsTime.After(c.lastEvent) {
+			c.lastEvent = obsTime
 		}
 
 		var ev types.CollectorEvent
@@ -294,6 +309,17 @@ func reconcileBoundedRelayRelations(ctx context.Context, db *sql.DB, runID strin
 				c.monitoredDown += ev.DeltaDownload
 			}
 		}
+
+		// Lifecycle tracking mirrors the v2 contract exactly: a Disappeared
+		// marks the connection terminal at its observation time; a later
+		// New/Bootstrap re-opens it and clears the terminal marker.
+		switch types.EventType(eventType) {
+		case types.EventConnectionDisappeared:
+			t := obsTime
+			c.disappearedAt = &t
+		case types.EventConnectionNew, types.EventConnectionBootstrap:
+			c.disappearedAt = nil
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("error reading journal rows: %w", err)
@@ -309,7 +335,13 @@ func reconcileBoundedRelayRelations(ctx context.Context, db *sql.DB, runID strin
 	finalClasses := make(map[connKey]AccountingClass)
 	var relationsToInsert []RelayRelationRecord
 
-	for _, conns := range grouped {
+	for groupKey, conns := range grouped {
+		// Apply the shared lastObserved contract: active connections were
+		// present in the group's latest observation frame, terminal ones keep
+		// their disappearance time.
+		for _, c := range conns {
+			c.lastObs = effectiveLastObs(c, groupFrameTime[groupKey])
+		}
 		groupClasses, groupRelations := classifyConnectionGroup(conns)
 		for k, class := range groupClasses {
 			finalClasses[k] = class
