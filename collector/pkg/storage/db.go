@@ -106,6 +106,22 @@ var (
 	ErrSchemaIncompatible = fmt.Errorf("database schema incompatible")
 )
 
+// WALCheckpointTruncate runs PRAGMA wal_checkpoint(TRUNCATE) so the write-ahead
+// log file is fully checkpointed back into the main database and truncated to
+// zero bytes. Committed data is never altered. A busy result (readers active)
+// is reported through the returned values rather than treated as an error.
+func WALCheckpointTruncate(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("wal checkpoint requires a database")
+	}
+	var busy, logFrames, checkpointedFrames int64
+	row := db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
+	if err := row.Scan(&busy, &logFrames, &checkpointedFrames); err != nil {
+		return fmt.Errorf("wal checkpoint failed: %w", err)
+	}
+	return nil
+}
+
 // OpenReadOnlyDB 以严格只读模式打开指定 SQLite 数据库并验证模式兼容性，绝不执行迁移或写操作
 func OpenReadOnlyDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	if dbPath == "" {

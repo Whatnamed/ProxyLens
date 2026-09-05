@@ -28,6 +28,7 @@ const (
 
 type AccountingFreshnessFunc func(context.Context) (*storage.AccountingFreshness, error)
 type AccountingRebuildFunc func(context.Context, string) (*storage.AccountingRunRecord, error)
+type AccountingCheckpointFunc func(context.Context) error
 
 // AccountingTickResult is returned by Tick and optionally delivered to the
 // scheduler callback after each periodic decision.
@@ -43,6 +44,10 @@ type AccountingSchedulerOptions struct {
 	Notes     string
 	Freshness AccountingFreshnessFunc
 	Rebuild   AccountingRebuildFunc
+	// Checkpoint bounds WAL growth by truncating the write-ahead log after each
+	// scheduled tick. It is best-effort: a checkpoint failure never alters the
+	// tick result or stops collection.
+	Checkpoint AccountingCheckpointFunc
 
 	// OnRebuildStart is called only after a stale boundary is observed and
 	// immediately before invoking Rebuild.
@@ -58,6 +63,7 @@ type AccountingScheduler struct {
 	notes          string
 	freshness      AccountingFreshnessFunc
 	rebuild        AccountingRebuildFunc
+	checkpoint     AccountingCheckpointFunc
 	onRebuildStart func(*storage.AccountingFreshness)
 	onTick         func(AccountingTickResult)
 	tickMu         sync.Mutex
@@ -78,6 +84,9 @@ func NewAccountingScheduler(db *sql.DB, interval time.Duration, notes string) (*
 		},
 		Rebuild: func(ctx context.Context, notes string) (*storage.AccountingRunRecord, error) {
 			return storage.RebuildAccounting(ctx, db, notes)
+		},
+		Checkpoint: func(ctx context.Context) error {
+			return storage.WALCheckpointTruncate(ctx, db)
 		},
 	})
 }
@@ -102,6 +111,7 @@ func NewAccountingSchedulerWithOptions(opts AccountingSchedulerOptions) (*Accoun
 		notes:          notes,
 		freshness:      opts.Freshness,
 		rebuild:        opts.Rebuild,
+		checkpoint:     opts.Checkpoint,
 		onRebuildStart: opts.OnRebuildStart,
 		onTick:         opts.OnTick,
 	}, nil
@@ -174,17 +184,30 @@ func (s *AccountingScheduler) Run(ctx context.Context) error {
 	}
 
 	s.publish(s.Tick(ctx))
+	s.runCheckpoint(ctx)
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			s.runCheckpoint(ctx)
 			return nil
 		case <-ticker.C:
 			s.publish(s.Tick(ctx))
+			s.runCheckpoint(ctx)
 		}
 	}
+}
+
+// runCheckpoint bounds WAL growth after every scheduled tick. Checkpoint
+// failures are deliberately silent: the next tick retries, and collection or
+// accounting correctness never depends on WAL truncation succeeding.
+func (s *AccountingScheduler) runCheckpoint(ctx context.Context) {
+	if s.checkpoint == nil {
+		return
+	}
+	_ = s.checkpoint(ctx)
 }
 
 func (s *AccountingScheduler) publish(result AccountingTickResult) {

@@ -260,3 +260,75 @@ func TestAccountingSchedulerCancellationExitsCleanly(t *testing.T) {
 		t.Fatal("scheduler did not exit after cancellation")
 	}
 }
+
+func TestAccountingSchedulerRunInvokesCheckpointPerTick(t *testing.T) {
+	var ticks atomic.Int64
+	var checkpoints atomic.Int64
+	scheduler, err := NewAccountingSchedulerWithOptions(AccountingSchedulerOptions{
+		Interval: 10 * time.Millisecond,
+		Freshness: func(ctx context.Context) (*storage.AccountingFreshness, error) {
+			ticks.Add(1)
+			return freshness(0, 0), nil
+		},
+		Rebuild: func(context.Context, string) (*storage.AccountingRunRecord, error) {
+			return testRun(), nil
+		},
+		Checkpoint: func(ctx context.Context) error {
+			checkpoints.Add(1)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAccountingSchedulerWithOptions failed: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- scheduler.Run(ctx) }()
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("scheduler Run returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("scheduler did not exit")
+	}
+	if ticks.Load() == 0 || checkpoints.Load() < ticks.Load() {
+		t.Fatalf("checkpoint coverage mismatch: ticks=%d checkpoints=%d", ticks.Load(), checkpoints.Load())
+	}
+}
+
+func TestAccountingSchedulerCheckpointFailureIsNonFatal(t *testing.T) {
+	scheduler, err := NewAccountingSchedulerWithOptions(AccountingSchedulerOptions{
+		Freshness: func(ctx context.Context) (*storage.AccountingFreshness, error) {
+			return freshness(0, 0), nil
+		},
+		Rebuild: func(context.Context, string) (*storage.AccountingRunRecord, error) {
+			return testRun(), nil
+		},
+		Checkpoint: func(ctx context.Context) error {
+			return errors.New("checkpoint exploded")
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAccountingSchedulerWithOptions failed: %v", err)
+	}
+	result := scheduler.Tick(context.Background())
+	if result.Action != AccountingSkippedNoEvents {
+		t.Fatalf("checkpoint failure must not alter tick result, got %+v", result)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- scheduler.Run(ctx) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("scheduler Run returned error despite checkpoint failure: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not exit")
+	}
+}

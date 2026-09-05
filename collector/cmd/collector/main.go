@@ -324,6 +324,11 @@ func runStorageCommand(args []string) {
 			fmt.Fprintf(os.Stderr, "[FATAL REBUILD ERROR] %v\n", err)
 			os.Exit(1)
 		}
+		// A full rebuild streams the whole journal through the WAL; truncate it
+		// back so the maintenance run never leaves a multi-GB log behind.
+		if err := storage.WALCheckpointTruncate(ctx, db); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] post-rebuild WAL checkpoint failed: %v\n", err)
+		}
 		fmt.Printf("Storage projections successfully rebuilt!\n")
 
 	case "cleanup":
@@ -513,11 +518,15 @@ func runAnalyticsCommand(args []string) {
 	var filter storage.AnalyticsFilter
 	if *fromStr != "" {
 		t, err := time.Parse(time.RFC3339, *fromStr)
-		if err == nil { filter.StartTime = &t }
+		if err == nil {
+			filter.StartTime = &t
+		}
 	}
 	if *toStr != "" {
 		t, err := time.Parse(time.RFC3339, *toStr)
-		if err == nil { filter.EndTime = &t }
+		if err == nil {
+			filter.EndTime = &t
+		}
 	}
 	filter.Route = types.RouteType(*routeFilter)
 	filter.Limit = *limit
