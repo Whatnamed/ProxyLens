@@ -45,17 +45,18 @@ const (
 type EventType string
 
 const (
-	EventConnectionBootstrap        EventType = "ConnectionBootstrap"
-	EventConnectionNew              EventType = "ConnectionNew"
-	EventConnectionDelta            EventType = "ConnectionDelta"
-	EventConnectionDisappeared      EventType = "ConnectionDisappeared"
-	EventConnectionMetadataUpdated  EventType = "ConnectionMetadataUpdated"
-	EventRelayClassificationChanged EventType = "RelayClassificationChanged"
-	EventSamplingResidual           EventType = "SamplingResidual"
-	EventMonitoringGapOpened        EventType = "MonitoringGapOpened"
-	EventMonitoringGapClosed        EventType = "MonitoringGapClosed"
-	EventCounterEpochBreak          EventType = "CounterEpochBreak"
-	EventCollectorHealth            EventType = "CollectorHealth"
+	EventConnectionBootstrap          EventType = "ConnectionBootstrap"
+	EventConnectionNew                EventType = "ConnectionNew"
+	EventConnectionDelta              EventType = "ConnectionDelta"
+	EventConnectionPresenceCheckpoint EventType = "ConnectionPresenceCheckpoint"
+	EventConnectionDisappeared        EventType = "ConnectionDisappeared"
+	EventConnectionMetadataUpdated    EventType = "ConnectionMetadataUpdated"
+	EventRelayClassificationChanged   EventType = "RelayClassificationChanged"
+	EventSamplingResidual             EventType = "SamplingResidual"
+	EventMonitoringGapOpened          EventType = "MonitoringGapOpened"
+	EventMonitoringGapClosed          EventType = "MonitoringGapClosed"
+	EventCounterEpochBreak            EventType = "CounterEpochBreak"
+	EventCollectorHealth              EventType = "CollectorHealth"
 )
 
 // QualityFlags 细化记录元数据字段完整度

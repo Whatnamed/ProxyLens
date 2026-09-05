@@ -148,11 +148,56 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 			?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?,
-			?, 0, 0,
+			?, ?, ?,
 			?, ?,
 			?, ?, ?, ?
-		);
+		)
+		ON CONFLICT(session_id, epoch_id, connection_id) DO UPDATE SET
+			state = 'active',
+			disappeared_observed_at = NULL,
+			possible_unobserved_tail = 0,
+			observation_ended_at = NULL,
+			observation_end_reason = NULL,
+			observation_end_event_id = NULL,
+			last_observed_at = excluded.last_observed_at,
+			last_observed_upload_counter = excluded.last_observed_upload_counter,
+			last_observed_download_counter = excluded.last_observed_download_counter,
+			baseline_upload_counter = excluded.baseline_upload_counter,
+			baseline_download_counter = excluded.baseline_download_counter,
+			monitored_upload_total = excluded.monitored_upload_total,
+			monitored_download_total = excluded.monitored_download_total,
+			process = excluded.process,
+			process_path = excluded.process_path,
+			host = excluded.host,
+			sniff_host = excluded.sniff_host,
+			network = excluded.network,
+			type = excluded.type,
+			source_ip = excluded.source_ip,
+			source_port = excluded.source_port,
+			destination_ip = excluded.destination_ip,
+			remote_destination = excluded.remote_destination,
+			destination_port = excluded.destination_port,
+			dns_mode = excluded.dns_mode,
+			special_proxy = excluded.special_proxy,
+			special_rules_json = excluded.special_rules_json,
+			inbound_user = excluded.inbound_user,
+			inbound_name = excluded.inbound_name,
+			inbound_port = excluded.inbound_port,
+			rule = excluded.rule,
+			rule_payload = excluded.rule_payload,
+			chains_json = excluded.chains_json,
+			provider_chains_json = excluded.provider_chains_json,
+			route = excluded.route,
+			latest_attribution_class = excluded.latest_attribution_class,
+			quality_flags_json = excluded.quality_flags_json,
+			relay_evidence_json = excluded.relay_evidence_json,
+			updated_at = excluded.updated_at;
 		`
+		// 同一 epoch 内连接 ID 在 Disappeared 之后被重新观测（快照闪断或 ID 复用）
+		// 必须重新打开既有行而不是插入第二行：connections 行持有该连接在本 epoch
+		// 的观察生命周期，first_observed_at 保留原始首次观测。journal 中 Disappeared
+		// 与 New 两个事件都保留，这里不改写任何 raw 事实；RebuildProjections 重放
+		// 同一事件序列时命中同一条 conflict 路径，投影确定性一致。
 		if _, err := tx.ExecContext(ctx, insertSQL,
 			ev.SessionID, ev.EpochID, ev.ConnectionID, ev.MihomoStart, obsAtStr, obsAtStr,
 			ev.Metadata.Process, ev.Metadata.ProcessPath, ev.Metadata.Host, ev.Metadata.SniffHost,
@@ -162,6 +207,7 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 			ev.Metadata.InboundUser, ev.Metadata.InboundName, ev.Metadata.InboundPort,
 			ev.Rule, ev.RulePayload, string(chainsJSON), string(providerChainsJSON),
 			string(ev.Route), string(ev.AttributionClass), string(qualityJSON), string(relayEvJSON),
+			ev.BaselineUploadCounter, ev.BaselineDownloadCounter,
 			ev.ObservedUploadCounter, ev.ObservedDownloadCounter,
 			ev.MonitoredCumulativeUpload, ev.MonitoredCumulativeDownload,
 			nowStr, nowStr,
@@ -243,6 +289,33 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 			return fmt.Errorf("%w: expected 1 row affected for ConnectionDelta on connection %s, got %d", ErrProjectionContractViolation, ev.ConnectionID, rows)
 		}
 
+	case types.EventConnectionPresenceCheckpoint:
+		// Presence checkpoints are liveness evidence, not traffic: they must
+		// never create connection_traffic rows. They only refresh the durable
+		// last-observed facts for the connection.
+		updateSQL := `
+		UPDATE connections SET
+			last_observed_at = ?,
+			last_observed_upload_counter = ?,
+			last_observed_download_counter = ?,
+			updated_at = ?
+		WHERE session_id = ? AND epoch_id = ? AND connection_id = ?;
+		`
+		res, err := tx.ExecContext(ctx, updateSQL,
+			obsAtStr, ev.ObservedUploadCounter, ev.ObservedDownloadCounter, nowStr,
+			ev.SessionID, ev.EpochID, ev.ConnectionID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to project ConnectionPresenceCheckpoint: %w", err)
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("failed to get rows affected for ConnectionPresenceCheckpoint: %w", err)
+		}
+		if rows != 1 {
+			return fmt.Errorf("%w: expected 1 row affected for ConnectionPresenceCheckpoint on connection %s, got %d", ErrProjectionContractViolation, ev.ConnectionID, rows)
+		}
+
 	case types.EventConnectionMetadataUpdated:
 		qualityJSON, _ := json.Marshal(ev.QualityFlags)
 		chainsJSON, _ := json.Marshal(ev.Chains)
@@ -281,6 +354,10 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 		}
 
 	case types.EventConnectionDisappeared:
+		// first absent observation is the event timestamp; the final known
+		// presence (carried exactly by the engine as lastObservedAt) may be
+		// older and is projected deterministically when present so zero-byte
+		// Delta suppression cannot make the final presence look stale.
 		updateSQL := `
 		UPDATE connections SET
 			state = 'disappeared_from_snapshot',
@@ -289,10 +366,30 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 			observation_ended_at = ?,
 			observation_end_reason = 'disappeared_from_snapshot',
 			observation_end_event_id = ?,
+			last_observed_at = COALESCE(?, last_observed_at),
+			last_observed_upload_counter = COALESCE(?, last_observed_upload_counter),
+			last_observed_download_counter = COALESCE(?, last_observed_download_counter),
 			updated_at = ?
 		WHERE session_id = ? AND epoch_id = ? AND connection_id = ?;
 		`
-		res, err := tx.ExecContext(ctx, updateSQL, obsAtStr, obsAtStr, ev.EventID, nowStr, ev.SessionID, ev.EpochID, ev.ConnectionID)
+		var lastObs sql.NullString
+		var lastUp, lastDown sql.NullInt64
+		if ev.Details != nil {
+			if v, ok := ev.Details["lastObservedAt"].(string); ok && v != "" {
+				if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+					lastObs = sql.NullString{String: t.UTC().Format(time.RFC3339Nano), Valid: true}
+				} else {
+					lastObs = sql.NullString{String: v, Valid: true}
+				}
+			}
+			if v, ok := toInt64(ev.Details["lastObservedUploadCounter"]); ok {
+				lastUp = sql.NullInt64{Int64: v, Valid: true}
+			}
+			if v, ok := toInt64(ev.Details["lastObservedDownloadCounter"]); ok {
+				lastDown = sql.NullInt64{Int64: v, Valid: true}
+			}
+		}
+		res, err := tx.ExecContext(ctx, updateSQL, obsAtStr, obsAtStr, ev.EventID, lastObs, lastUp, lastDown, nowStr, ev.SessionID, ev.EpochID, ev.ConnectionID)
 		if err != nil {
 			return fmt.Errorf("failed to project Disappeared: %w", err)
 		}

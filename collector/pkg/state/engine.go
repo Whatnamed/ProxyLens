@@ -22,11 +22,17 @@ type ActiveConnectionState struct {
 	MonitoredCumulativeDownload int64
 	BaselineUploadCounter       int64
 	BaselineDownloadCounter     int64
-	PreexistingAtStart          bool
-	PossibleUnobservedTail      bool
-	Route                       types.RouteType
-	AttributionClass            types.AttributionClass
-	QualityFlags                types.QualityFlags
+	// LastDurableEvidenceAt is the timestamp of the most recent durable
+	// per-connection evidence emission (ConnectionNew, ConnectionDelta,
+	// ConnectionPresenceCheckpoint, ConnectionMetadataUpdated, relay class
+	// change or counter-regression health event). It drives the sparse
+	// presence checkpoint cadence for connections without traffic.
+	LastDurableEvidenceAt  time.Time
+	PreexistingAtStart     bool
+	PossibleUnobservedTail bool
+	Route                  types.RouteType
+	AttributionClass       types.AttributionClass
+	QualityFlags           types.QualityFlags
 }
 
 // EngineOptions 配置状态机参数
@@ -102,6 +108,16 @@ func (e *StateEngine) emitEvent(event *types.CollectorEvent) error {
 // bootstrap delays are not recorded as gaps.
 const controllerUnreachableGapMinDuration = 2 * time.Second
 
+// presenceCheckpointInterval bounds how long an active connection may remain
+// without any durable observation evidence. Connections that transfer no bytes
+// still emit one lightweight ConnectionPresenceCheckpoint per interval so
+// liveness, last-observed facts and relay overlap windows stay correct while
+// zero-byte ConnectionDelta rows are suppressed.
+const presenceCheckpointInterval = 30 * time.Second
+
+// connectionPresencePrecision marks presence checkpoint events in storage.
+const connectionPresencePrecision = "presence_checkpoint"
+
 const controllerUnreachableGapReason = "controller_unreachable_since_session_start"
 
 // emitUnobservedIntervalGap records [start, end] as a closed controller_stream
@@ -152,6 +168,46 @@ func (e *StateEngine) EmitUnobservedSessionGap(shutdownAt time.Time) error {
 		return nil
 	}
 	return e.emitUnobservedIntervalGap(e.createdAt, shutdownAt)
+}
+
+// emitDeltaOrPresence is the single shared durable-evidence decision contract
+// for existing connections, applied identically by the steady-state path and
+// the reconnect-recovery path. A positive traffic delta always emits a full
+// ConnectionDelta built by buildDelta. A zero-byte frame emits no Delta; it
+// emits one lightweight ConnectionPresenceCheckpoint only when the connection
+// has had no durable evidence for presenceCheckpointInterval, so liveness and
+// last-observed facts stay durably observable while raw evidence density is
+// bounded. Delta and presence are never emitted at the same instant. The
+// caller always updates in-memory state first; only durable density differs.
+func (e *StateEngine) emitDeltaOrPresence(
+	prev *ActiveConnectionState,
+	c types.ConnectionSnapshot,
+	frameTs time.Time,
+	deltaUp, deltaDown int64,
+	buildDelta func() *types.CollectorEvent,
+) error {
+	if deltaUp > 0 || deltaDown > 0 {
+		if err := e.emitEvent(buildDelta()); err != nil {
+			return err
+		}
+		prev.LastDurableEvidenceAt = frameTs
+		return nil
+	}
+	if frameTs.Sub(prev.LastDurableEvidenceAt) < presenceCheckpointInterval {
+		return nil
+	}
+	if err := e.emitEvent(&types.CollectorEvent{
+		Type:                    types.EventConnectionPresenceCheckpoint,
+		Timestamp:               frameTs,
+		ConnectionID:            c.ID,
+		ObservedUploadCounter:   c.Upload,
+		ObservedDownloadCounter: c.Download,
+		Precision:               connectionPresencePrecision,
+	}); err != nil {
+		return err
+	}
+	prev.LastDurableEvidenceAt = frameTs
+	return nil
 }
 
 // ProcessIngestItem 统一处理有序通道中的项 (Frame, GapOpened, Health, Overload)
@@ -374,6 +430,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 						}
 						deltaUp = 0
 						deltaDown = 0
+						prev.LastDurableEvidenceAt = frameTs
 					}
 
 					prev.LastUploadCounter = c.Upload
@@ -382,28 +439,30 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 					prev.MonitoredCumulativeUpload += deltaUp
 					prev.MonitoredCumulativeDownload += deltaDown
 
-					if err := e.emitEvent(&types.CollectorEvent{
-						Type:                        types.EventConnectionDelta,
-						Timestamp:                   frameTs,
-						ConnectionID:                id,
-						Metadata:                    c.Metadata,
-						QualityFlags:                c.Metadata.DeriveQualityFlags(c.Rule, c.Chains),
-						Rule:                        c.Rule,
-						RulePayload:                 c.RulePayload,
-						Chains:                      c.Chains,
-						ProviderChains:              c.ProviderChains,
-						Route:                       prev.Route,
-						AttributionClass:            prev.AttributionClass,
-						ObservedUploadCounter:       c.Upload,
-						ObservedDownloadCounter:     c.Download,
-						DeltaUpload:                 deltaUp,
-						DeltaDownload:               deltaDown,
-						MonitoredCumulativeUpload:   prev.MonitoredCumulativeUpload,
-						MonitoredCumulativeDownload: prev.MonitoredCumulativeDownload,
-						BaselineUploadCounter:       prev.BaselineUploadCounter,
-						BaselineDownloadCounter:     prev.BaselineDownloadCounter,
-						AttributionInterval:         []string{gapStartStr, frameTsStr},
-						Precision:                   "interval_only",
+					if err := e.emitDeltaOrPresence(prev, c, frameTs, deltaUp, deltaDown, func() *types.CollectorEvent {
+						return &types.CollectorEvent{
+							Type:                        types.EventConnectionDelta,
+							Timestamp:                   frameTs,
+							ConnectionID:                id,
+							Metadata:                    c.Metadata,
+							QualityFlags:                c.Metadata.DeriveQualityFlags(c.Rule, c.Chains),
+							Rule:                        c.Rule,
+							RulePayload:                 c.RulePayload,
+							Chains:                      c.Chains,
+							ProviderChains:              c.ProviderChains,
+							Route:                       prev.Route,
+							AttributionClass:            prev.AttributionClass,
+							ObservedUploadCounter:       c.Upload,
+							ObservedDownloadCounter:     c.Download,
+							DeltaUpload:                 deltaUp,
+							DeltaDownload:               deltaDown,
+							MonitoredCumulativeUpload:   prev.MonitoredCumulativeUpload,
+							MonitoredCumulativeDownload: prev.MonitoredCumulativeDownload,
+							BaselineUploadCounter:       prev.BaselineUploadCounter,
+							BaselineDownloadCounter:     prev.BaselineDownloadCounter,
+							AttributionInterval:         []string{gapStartStr, frameTsStr},
+							Precision:                   "interval_only",
+						}
 					}); err != nil {
 						return err
 					}
@@ -439,6 +498,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 						BaselineDownloadCounter:     c.Download,
 						MonitoredCumulativeUpload:   0,
 						MonitoredCumulativeDownload: 0,
+						LastDurableEvidenceAt:       frameTs,
 						Route:                       route,
 						AttributionClass:            attrClass,
 						QualityFlags:                quality,
@@ -493,7 +553,10 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 					QualityFlags:           prev.QualityFlags,
 					PossibleUnobservedTail: true,
 					Details: map[string]any{
-						"disappearedDuringGap": true,
+						"disappearedDuringGap":        true,
+						"lastObservedAt":              prev.LastObservedAt.UTC().Format(time.RFC3339Nano),
+						"lastObservedUploadCounter":   prev.LastUploadCounter,
+						"lastObservedDownloadCounter": prev.LastDownloadCounter,
 					},
 				}); err != nil {
 					return err
@@ -558,6 +621,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				BaselineDownloadCounter:     c.Download,
 				MonitoredCumulativeUpload:   0,
 				MonitoredCumulativeDownload: 0,
+				LastDurableEvidenceAt:       frameTs,
 				PreexistingAtStart:          true,
 				Route:                       route,
 				AttributionClass:            attrClass,
@@ -671,6 +735,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 					return err
 				}
 				prev.Route = attribution.ClassifyRoute(c.Chains)
+				prev.LastDurableEvidenceAt = frameTs
 			}
 
 			if metaChanged {
@@ -690,6 +755,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				}); err != nil {
 					return err
 				}
+				prev.LastDurableEvidenceAt = frameTs
 			}
 
 			// 2. Per-connection 计数器回退防护
@@ -710,6 +776,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				}
 				prev.LastUploadCounter = c.Upload
 				prev.LastDownloadCounter = c.Download
+				prev.LastDurableEvidenceAt = frameTs
 				continue
 			}
 
@@ -732,6 +799,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				}); err != nil {
 					return err
 				}
+				prev.LastDurableEvidenceAt = frameTs
 			}
 
 			prev.LastUploadCounter = c.Upload
@@ -745,27 +813,29 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				uniqueObservedDownload += deltaDown
 			}
 
-			if err := e.emitEvent(&types.CollectorEvent{
-				Type:                        types.EventConnectionDelta,
-				Timestamp:                   frameTs,
-				ConnectionID:                id,
-				Metadata:                    c.Metadata,
-				QualityFlags:                quality,
-				Rule:                        c.Rule,
-				RulePayload:                 c.RulePayload,
-				Chains:                      c.Chains,
-				ProviderChains:              c.ProviderChains,
-				Route:                       prev.Route,
-				AttributionClass:            prev.AttributionClass,
-				ObservedUploadCounter:       c.Upload,
-				ObservedDownloadCounter:     c.Download,
-				DeltaUpload:                 deltaUp,
-				DeltaDownload:               deltaDown,
-				MonitoredCumulativeUpload:   prev.MonitoredCumulativeUpload,
-				MonitoredCumulativeDownload: prev.MonitoredCumulativeDownload,
-				BaselineUploadCounter:       prev.BaselineUploadCounter,
-				BaselineDownloadCounter:     prev.BaselineDownloadCounter,
-				Details:                     relayEvidence,
+			if err := e.emitDeltaOrPresence(prev, c, frameTs, deltaUp, deltaDown, func() *types.CollectorEvent {
+				return &types.CollectorEvent{
+					Type:                        types.EventConnectionDelta,
+					Timestamp:                   frameTs,
+					ConnectionID:                id,
+					Metadata:                    c.Metadata,
+					QualityFlags:                quality,
+					Rule:                        c.Rule,
+					RulePayload:                 c.RulePayload,
+					Chains:                      c.Chains,
+					ProviderChains:              c.ProviderChains,
+					Route:                       prev.Route,
+					AttributionClass:            prev.AttributionClass,
+					ObservedUploadCounter:       c.Upload,
+					ObservedDownloadCounter:     c.Download,
+					DeltaUpload:                 deltaUp,
+					DeltaDownload:               deltaDown,
+					MonitoredCumulativeUpload:   prev.MonitoredCumulativeUpload,
+					MonitoredCumulativeDownload: prev.MonitoredCumulativeDownload,
+					BaselineUploadCounter:       prev.BaselineUploadCounter,
+					BaselineDownloadCounter:     prev.BaselineDownloadCounter,
+					Details:                     relayEvidence,
+				}
 			}); err != nil {
 				return err
 			}
@@ -788,6 +858,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 				BaselineDownloadCounter:     0,
 				MonitoredCumulativeUpload:   deltaUp,
 				MonitoredCumulativeDownload: deltaDown,
+				LastDurableEvidenceAt:       frameTs,
 				Route:                       route,
 				AttributionClass:            initialClass,
 				QualityFlags:                quality,
@@ -845,6 +916,11 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			Metadata:               prev.Snapshot.Metadata,
 			QualityFlags:           prev.QualityFlags,
 			PossibleUnobservedTail: true,
+			Details: map[string]any{
+				"lastObservedAt":              prev.LastObservedAt.UTC().Format(time.RFC3339Nano),
+				"lastObservedUploadCounter":   prev.LastUploadCounter,
+				"lastObservedDownloadCounter": prev.LastDownloadCounter,
+			},
 		}); err != nil {
 			return err
 		}
