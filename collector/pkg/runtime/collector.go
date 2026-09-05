@@ -225,13 +225,12 @@ func (r *CollectorRunner) Run(ctx context.Context) (*CollectorResult, error) {
 	}
 	workerDone := make(chan struct{})
 
-	// The guard loop emits its trip evidence through the sink directly (Emit
-	// is mutex-guarded), then cancels the private run context: the stream
+	// The guard loop emits its trip evidence through the engine's ordered
+	// EmitSessionHealth, then cancels the private run context: the stream
 	// loop returns, the worker drains, and the session ends through the
-	// normal clean-shutdown path. The evidence event uses frame 0 / sequence
-	// 0, which the engine (sequences >= 1) never produces, so its
-	// deterministic event ID cannot collide with a traffic event. The stop
-	// decision never depends on the evidence write succeeding.
+	// normal clean-shutdown path. The evidence event inherits the current
+	// frame and monotonically ordered event sequence. The stop decision
+	// never depends on the evidence write succeeding.
 	if diskGuard != nil {
 		go diskGuard.TripLoop(runCtx, storage.DiskGuardInterval, func(status storage.DiskGuardStatus) {
 			details := map[string]any{

@@ -243,10 +243,6 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 		cancelCollector()
 		outcome = <-collectorDone
 	case outcome = <-collectorDone:
-		if outcome.result != nil && outcome.result.DiskGuardTripped {
-			diskTripped = true
-			r.logger("[runtime] collector stopped due to disk guard trip (mid-run breach) - write-quiescent shutdown engaged")
-		}
 		if outcome.err != nil {
 			r.logger("[runtime] collector fatal exit: %v", outcome.err)
 		} else {
@@ -257,6 +253,13 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 		cancelCollector()
 	}
 
+	// Unified check across both select exits: even if runtime ctx cancellation
+	// and disk guard trip occur concurrently, any CollectorResult indicating a
+	// trip engages write-quiescence and suppresses shutdown accounting/truncate.
+	if outcome.result != nil && outcome.result.DiskGuardTripped {
+		diskTripped = true
+		r.logger("[runtime] collector stopped due to disk guard trip (mid-run breach) - write-quiescent shutdown engaged")
+	}
 	// Final accounting flush: the collector writer has stopped, so the
 	// journal is stable. One chunk is not generally enough for zero lag, so
 	// the flush catches up in bounded cycles within a fixed shutdown budget
