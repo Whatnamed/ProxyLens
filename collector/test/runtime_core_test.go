@@ -231,3 +231,119 @@ func TestRuntimeCoreMockControllerAccountingAndReadonlyQuery(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeLowDiskModeIsWriteQuiescent(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/low-disk.db"
+
+	// Initialize a valid database.
+	initSink, err := storage.OpenSQLiteSink(context.Background(), dbPath, "sess-init", "v-init")
+	if err != nil {
+		t.Fatalf("OpenSQLiteSink failed: %v", err)
+	}
+	_ = initSink.EndSession(context.Background(), "sess-init", storage.SessionStatusClosedClean)
+	_ = initSink.Close()
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/connections" {
+			t.Errorf("collector MUST NOT connect to /connections in low-disk mode")
+		}
+		if r.URL.Path == "/version" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"version":"mock"}`))
+		}
+	}))
+	defer mockServer.Close()
+
+	var logs []string
+	var logsMu sync.Mutex
+	logger := func(format string, args ...any) {
+		logsMu.Lock()
+		logs = append(logs, strings.TrimSpace(format))
+		logsMu.Unlock()
+	}
+
+	readyCh := make(chan struct{})
+	rt, err := proxylensruntime.NewRuntime(proxylensruntime.RuntimeOptions{
+		DBPath: dbPath,
+		Collector: proxylensruntime.CollectorOptions{
+			ControllerURL: mockServer.URL,
+			SessionID:     "sess-low-disk",
+		},
+		Logger: logger,
+		OnReady: func(info proxylensruntime.RuntimeReadyInfo) {
+			close(readyCh)
+		},
+		DiskGuardCheck: func(dbPath string) storage.DiskGuardStatus {
+			return storage.DiskGuardStatus{
+				Tripped:     true,
+				FreeBytes:   100 << 20,
+				FloorBytes:  1 << 30,
+				DBSizeBytes: 10 << 20,
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		_, rerr := rt.Run(ctx)
+		runDone <- rerr
+	}()
+
+	// 1. Runtime must become READY for read-only queries despite degraded disk status.
+	select {
+	case <-readyCh:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("runtime did not become ready in low-disk mode")
+	}
+
+	// 2. Query service must work read-only.
+	roDB, err := storage.OpenReadOnlyDB(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnlyDB failed: %v", err)
+	}
+	meta, err := storage.NewAnalyticsService(roDB).GetAccountingFreshness(context.Background())
+	_ = roDB.Close()
+	if err != nil {
+		t.Fatalf("GetAccountingFreshness on low-disk DB failed: %v", err)
+	}
+	if meta == nil {
+		t.Fatal("expected non-nil freshness from read-only service")
+	}
+
+	// 3. Graceful shutdown.
+	cancel()
+	select {
+	case rerr := <-runDone:
+		if rerr != nil {
+			t.Fatalf("Run returned error on shutdown: %v", rerr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runtime did not shut down cleanly")
+	}
+
+	// 4. Verify log statements confirming write-quiescence.
+	logsMu.Lock()
+	defer logsMu.Unlock()
+	hasTrippedLog := false
+	hasSkippedFlushLog := false
+	for _, l := range logs {
+		if strings.Contains(l, "low-disk mode: collector and scheduler disabled, write-quiescent") {
+			hasTrippedLog = true
+		}
+		if strings.Contains(l, "low-disk mode: skipped shutdown accounting flush and truncate") {
+			hasSkippedFlushLog = true
+		}
+	}
+	if !hasTrippedLog {
+		t.Errorf("missing degraded start log in logs: %v", logs)
+	}
+	if !hasSkippedFlushLog {
+		t.Errorf("missing skipped flush log in logs: %v", logs)
+	}
+}

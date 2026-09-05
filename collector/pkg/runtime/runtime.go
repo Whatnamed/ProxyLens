@@ -24,6 +24,7 @@ type RuntimeOptions struct {
 	AccountingNotes    string
 	Logger             LogFunc
 	OnReady            RuntimeReadyCallback
+	DiskGuardCheck     func(dbPath string) storage.DiskGuardStatus
 }
 
 type Runtime struct {
@@ -33,6 +34,7 @@ type Runtime struct {
 	accountingNotes    string
 	logger             LogFunc
 	onReady            RuntimeReadyCallback
+	diskGuardCheck     func(dbPath string) storage.DiskGuardStatus
 	readyOnce          sync.Once
 }
 
@@ -94,6 +96,7 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 		accountingNotes:    notes,
 		logger:             logger,
 		onReady:            opts.OnReady,
+		diskGuardCheck:     opts.DiskGuardCheck,
 	}, nil
 }
 
@@ -180,14 +183,22 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 	}
 
 	// Pre-start capacity check: refuse to launch a collector session onto a
-	// volume already below the disk-guard floor. The scheduler still runs so
-	// accounting catch-up continues; ingestion stays off until space
-	// recovers. A fresh measurement (not a sticky guard) is used here — each
-	// runtime start re-evaluates current reality.
+	// volume already below the disk-guard floor. When tripped, low-disk mode is
+	// strictly write-quiescent: neither collector nor scheduler are started,
+	// and shutdown flush is omitted. Runtime availability (READY) is preserved
+	// so read-only queries continue to serve existing data.
 	collectorStarted := true
-	if status := storage.NewDiskGuard(r.dbPath).Check(); status.Tripped {
+	diskTripped := false
+	var status storage.DiskGuardStatus
+	if r.diskGuardCheck != nil {
+		status = r.diskGuardCheck(r.dbPath)
+	} else {
+		status = storage.NewDiskGuard(r.dbPath).Check()
+	}
+	if status.Tripped {
 		collectorStarted = false
-		r.logger("[runtime] disk guard floor breached before collector start (%s) - collector not started, scheduler only",
+		diskTripped = true
+		r.logger("[runtime] disk guard floor breached before collector start (%s) - low-disk mode: collector and scheduler disabled, write-quiescent (degraded)",
 			status.Describe())
 	}
 
@@ -237,19 +248,16 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 			cancelCollector()
 		}
 	} else {
+		// Low-disk mode: strictly write-quiescent.
+		// Neither collector nor scheduler run, preserving disk space.
+		// Runtime reports READY so read-only queries can still inspect existing data.
 		r.readyOnce.Do(func() {
 			if r.onReady != nil {
 				r.onReady(RuntimeReadyInfo{RuntimeVersion: RuntimeVersion})
 			}
 		})
-		schedulerDone := make(chan error, 1)
-		go func() {
-			schedulerDone <- scheduler.Run(schedulerCtx)
-		}()
 		<-ctx.Done()
-		r.logger("[runtime] graceful shutdown requested")
-		cancelScheduler()
-		<-schedulerDone
+		r.logger("[runtime] low-disk mode: graceful shutdown requested")
 	}
 
 	// Final accounting flush: the collector writer has stopped, so the
@@ -259,55 +267,38 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 	// completion). If the budget expires the stop stays clean: the remaining
 	// lag is explicit health evidence and resumes on next start — the runtime
 	// never blocks shutdown indefinitely on accounting.
-	flushCtx, flushCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	flushStart := time.Now()
-	flushCycles := 0
-	var flushErr error
-	for {
-		if flushCtx.Err() != nil {
-			flushErr = flushCtx.Err()
-			break
-		}
-		if _, err := storage.AdvanceAccountingV2(flushCtx, db, "runtime shutdown flush", 0); err != nil {
-			flushErr = err
-			break
-		}
-		flushCycles++
-		fresh, ferr := storage.NewAnalyticsService(db).GetAccountingFreshness(flushCtx)
-		if ferr != nil {
-			flushErr = ferr
-			break
-		}
-		if fresh.LagEvents == 0 || flushCycles >= 64 {
-			// The 64-cycle cap only guards against a pathological no-progress
-			// inconsistency between publish and freshness; every cycle is
-			// itself bounded by the chunk budget.
-			break
-		}
-	}
-	flushCancel()
-	if flushErr != nil {
-		r.logger("[runtime] shutdown accounting flush incomplete after %d cycles in %.1fs (resumes next start): %v",
-			flushCycles, time.Since(flushStart).Seconds(), flushErr)
-	} else {
-		r.logger("[runtime] shutdown accounting flush fresh after %d cycles (%.1fs)",
-			flushCycles, time.Since(flushStart).Seconds())
-	}
+	if !diskTripped {
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_, _, _ = runShutdownAccountingFlush(
+			flushCtx,
+			func(ctx context.Context) error {
+				_, err := storage.AdvanceAccountingV2(ctx, db, "runtime shutdown flush", 0)
+				return err
+			},
+			func(ctx context.Context) (*storage.AccountingFreshness, error) {
+				return storage.NewAnalyticsService(db).GetAccountingFreshness(ctx)
+			},
+			r.logger,
+		)
+		flushCancel()
 
-	// Safe maintenance boundary: scheduler and collector writer have both
-	// stopped. TRUNCATE runs with a fresh, non-canceled context (the runtime
-	// ctx may already be canceled) and an incomplete result is reported as
-	// health evidence — a busy Query reader is never killed or blocked.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	cpRes, cpErr := storage.CheckpointWAL(shutdownCtx, db, storage.WALCheckpointTruncateMode)
-	shutdownCancel()
-	if cpErr != nil {
-		r.logger("[runtime] wal shutdown checkpoint failed: %v", cpErr)
-	} else if cpRes.Busy || cpRes.LogFrames != cpRes.CheckpointedFrames {
-		r.logger("[runtime] wal shutdown checkpoint incomplete busy=%v logFrames=%d checkpointed=%d",
-			cpRes.Busy, cpRes.LogFrames, cpRes.CheckpointedFrames)
+		// Safe maintenance boundary: scheduler and collector writer have both
+		// stopped. TRUNCATE runs with a fresh, non-canceled context (the runtime
+		// ctx may already be canceled) and an incomplete result is reported as
+		// health evidence — a busy Query reader is never killed or blocked.
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cpRes, cpErr := storage.CheckpointWAL(shutdownCtx, db, storage.WALCheckpointTruncateMode)
+		shutdownCancel()
+		if cpErr != nil {
+			r.logger("[runtime] wal shutdown checkpoint failed: %v", cpErr)
+		} else if cpRes.Busy || cpRes.LogFrames != cpRes.CheckpointedFrames {
+			r.logger("[runtime] wal shutdown checkpoint incomplete busy=%v logFrames=%d checkpointed=%d",
+				cpRes.Busy, cpRes.LogFrames, cpRes.CheckpointedFrames)
+		} else {
+			r.logger("[runtime] wal shutdown checkpoint complete checkpointed=%d", cpRes.CheckpointedFrames)
+		}
 	} else {
-		r.logger("[runtime] wal shutdown checkpoint complete checkpointed=%d", cpRes.CheckpointedFrames)
+		r.logger("[runtime] low-disk mode: skipped shutdown accounting flush and truncate (write-quiescent)")
 	}
 
 	if err := db.Close(); err != nil && outcome.err == nil {
@@ -318,4 +309,54 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 		return &RuntimeResult{DBPath: r.dbPath, Collector: outcome.result}, outcome.err
 	}
 	return &RuntimeResult{DBPath: r.dbPath, Collector: outcome.result}, nil
+}
+
+func runShutdownAccountingFlush(
+	flushCtx context.Context,
+	advance func(context.Context) error,
+	getFreshness func(context.Context) (*storage.AccountingFreshness, error),
+	logger func(format string, args ...any),
+) (cycles int, finalLag int64, err error) {
+	flushStart := time.Now()
+	finalLag = -1
+	for {
+		if flushCtx.Err() != nil {
+			err = flushCtx.Err()
+			break
+		}
+		if aerr := advance(flushCtx); aerr != nil {
+			err = aerr
+			break
+		}
+		cycles++
+		fresh, ferr := getFreshness(flushCtx)
+		if ferr != nil {
+			err = ferr
+			break
+		}
+		finalLag = fresh.LagEvents
+		if fresh.LagEvents == 0 || cycles >= 64 {
+			// The 64-cycle cap only guards against a pathological no-progress
+			// inconsistency between publish and freshness; every cycle is
+			// itself bounded by the chunk budget.
+			break
+		}
+	}
+	if err != nil {
+		if logger != nil {
+			logger("[runtime] shutdown accounting flush incomplete after %d cycles in %.1fs (resumes next start): %v",
+				cycles, time.Since(flushStart).Seconds(), err)
+		}
+	} else if finalLag > 0 {
+		if logger != nil {
+			logger("[runtime] shutdown accounting flush incomplete after %d cycles in %.1fs (lag=%d, resumes next start)",
+				cycles, time.Since(flushStart).Seconds(), finalLag)
+		}
+	} else {
+		if logger != nil {
+			logger("[runtime] shutdown accounting flush fresh after %d cycles (%.1fs)",
+				cycles, time.Since(flushStart).Seconds())
+		}
+	}
+	return cycles, finalLag, err
 }

@@ -3,11 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
 	"github.com/Whatnamed/ProxyLens/collector/pkg/storage"
 )
 
@@ -330,5 +331,77 @@ func TestAccountingSchedulerCheckpointFailureIsNonFatal(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("scheduler did not exit")
+	}
+}
+
+func TestShutdownFlushCycleCapReportsIncomplete(t *testing.T) {
+	var logs []string
+	logger := func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	// Case 1: Cycles hit 64 cap while lag remains 10. Must report incomplete, NOT fresh.
+	advanceCount := 0
+	cycles, lag, err := runShutdownAccountingFlush(
+		context.Background(),
+		func(ctx context.Context) error {
+			advanceCount++
+			return nil
+		},
+		func(ctx context.Context) (*storage.AccountingFreshness, error) {
+			return &storage.AccountingFreshness{LagEvents: 10, IsFresh: false}, nil
+		},
+		logger,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cycles != 64 {
+		t.Fatalf("expected 64 cycles, got %d", cycles)
+	}
+	if lag != 10 {
+		t.Fatalf("expected final lag 10, got %d", lag)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log line, got %d", len(logs))
+	}
+	if !strings.Contains(logs[0], "incomplete") || !strings.Contains(logs[0], "lag=10") {
+		t.Fatalf("log must report incomplete with remaining lag, got %q", logs[0])
+	}
+	if strings.Contains(logs[0], "fresh after") {
+		t.Fatalf("log must NOT report fresh when lag remains: %q", logs[0])
+	}
+
+	// Case 2: Clean flush reaching lag=0 on cycle 3. Must report fresh.
+	logs = nil
+	advanceCount = 0
+	cycles, lag, err = runShutdownAccountingFlush(
+		context.Background(),
+		func(ctx context.Context) error {
+			advanceCount++
+			return nil
+		},
+		func(ctx context.Context) (*storage.AccountingFreshness, error) {
+			if advanceCount >= 3 {
+				return &storage.AccountingFreshness{LagEvents: 0, IsFresh: true}, nil
+			}
+			return &storage.AccountingFreshness{LagEvents: int64(10 - advanceCount*3), IsFresh: false}, nil
+		},
+		logger,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cycles != 3 {
+		t.Fatalf("expected 3 cycles, got %d", cycles)
+	}
+	if lag != 0 {
+		t.Fatalf("expected final lag 0, got %d", lag)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log line, got %d", len(logs))
+	}
+	if !strings.Contains(logs[0], "fresh after 3 cycles") {
+		t.Fatalf("expected fresh after 3 cycles log, got %q", logs[0])
 	}
 }
