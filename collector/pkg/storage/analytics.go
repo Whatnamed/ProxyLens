@@ -22,6 +22,44 @@ func NewAnalyticsService(db *sql.DB) *AnalyticsService {
 	return &AnalyticsService{db: db}
 }
 
+// accountingScope resolves which derived accounting source queries should read:
+// the active incremental accounting v2 generation when one exists, otherwise
+// the latest completed legacy accounting run (Phase 3S fallback contract).
+type accountingScope struct {
+	useV2            bool
+	runID            string
+	generationID     string
+	algorithmVersion string
+}
+
+// accountedTable returns the derived traffic table and key predicate for the scope.
+func (s *accountingScope) accountedTable() (table string, keyCol string, keyVal string) {
+	if s.useV2 {
+		return "accounted_traffic_v2", "generation_id", s.generationID
+	}
+	return "accounted_traffic", "run_id", s.runID
+}
+
+func (a *AnalyticsService) resolveAccountingScope(ctx context.Context) (*accountingScope, error) {
+	gen, err := GetActiveAccountingGeneration(ctx, a.db)
+	if err != nil && !errors.Is(err, ErrNoActiveGeneration) && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if gen != nil {
+		return &accountingScope{
+			useV2:            true,
+			generationID:     gen.GenerationID,
+			runID:            gen.GenerationID,
+			algorithmVersion: gen.AlgorithmVersion,
+		}, nil
+	}
+	run, err := a.GetLatestCompletedAccountingRun(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &accountingScope{runID: run.RunID, algorithmVersion: run.AlgorithmVersion}, nil
+}
+
 // GetLatestCompletedAccountingRun 获取最新已完成的核算轮次
 func (a *AnalyticsService) GetLatestCompletedAccountingRun(ctx context.Context) (*AccountingRunRecord, error) {
 	row := a.db.QueryRowContext(ctx, `
@@ -66,12 +104,36 @@ func (a *AnalyticsService) GetLatestCompletedAccountingRun(ctx context.Context) 
 }
 
 // GetAccountingFreshness 获取最新核算轮次与当前底层 Journal 事实之间的落后差距 (F3)
+// 当存在 active 的 v2 generation 时以 published boundary 为准；否则回退到
+// 最新 legacy completed run。
 func (a *AnalyticsService) GetAccountingFreshness(ctx context.Context) (*AccountingFreshness, error) {
+	var currentMax int64
+	if err := a.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(journal_sequence), 0) FROM event_journal;").Scan(&currentMax); err != nil {
+		return nil, fmt.Errorf("failed to query current journal max sequence: %w", err)
+	}
+
+	gen, err := GetActiveAccountingGeneration(ctx, a.db)
+	if err != nil && !errors.Is(err, ErrNoActiveGeneration) && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if gen != nil {
+		lag := currentMax - gen.PublishedJournalSequence
+		if lag < 0 {
+			lag = 0
+		}
+		return &AccountingFreshness{
+			RunID:                     gen.GenerationID,
+			SourceJournalSequenceMax:  gen.PublishedJournalSequence,
+			CurrentJournalSequenceMax: currentMax,
+			LagEvents:                 lag,
+			IsFresh:                   lag == 0,
+			CompletedAt:               gen.ActivatedAt,
+		}, nil
+	}
+
 	run, err := a.GetLatestCompletedAccountingRun(ctx)
 	if err != nil {
 		if errors.Is(err, ErrNoCompletedAccountingRun) {
-			var currentMax int64
-			_ = a.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(journal_sequence), 0) FROM event_journal;").Scan(&currentMax)
 			return &AccountingFreshness{
 				RunID:                     "",
 				SourceJournalSequenceMax:  0,
@@ -81,11 +143,6 @@ func (a *AnalyticsService) GetAccountingFreshness(ctx context.Context) (*Account
 			}, nil
 		}
 		return nil, err
-	}
-
-	var currentMax int64
-	if err := a.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(journal_sequence), 0) FROM event_journal;").Scan(&currentMax); err != nil {
-		return nil, fmt.Errorf("failed to query current journal max sequence: %w", err)
 	}
 
 	sourceMax := int64(0)
@@ -110,25 +167,26 @@ func (a *AnalyticsService) GetAccountingFreshness(ctx context.Context) (*Account
 
 // GetUsageSummary 根据已发布的最新核算数据返回全局用量与质量摘要 (半开区间 [start, end)，错误向上传播)
 func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter AnalyticsFilter) (*UsageSummary, error) {
-	run, err := a.GetLatestCompletedAccountingRun(ctx)
+	scope, err := a.resolveAccountingScope(ctx)
 	if err != nil {
 		return nil, err
 	}
+	table, keyCol, keyVal := scope.accountedTable()
 
-	rows, err := a.db.QueryContext(ctx, `
+	rows, err := a.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT
 			observed_at, interval_start, interval_end, precision, route,
 			raw_upload, raw_download, accounted_upload, accounted_download, accounting_class
-		FROM accounted_traffic
-		WHERE run_id = ?;
-	`, run.RunID)
+		FROM %s
+		WHERE %s = ?;
+	`, table, keyCol), keyVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query accounted traffic: %w", err)
 	}
 	defer rows.Close()
 
 	var summary UsageSummary
-	summary.AccountingVersion = run.AlgorithmVersion
+	summary.AccountingVersion = scope.algorithmVersion
 
 	var qStart, qEnd *time.Time
 	if filter.StartTime != nil {
@@ -318,10 +376,11 @@ func (a *AnalyticsService) GetUsageSummary(ctx context.Context, filter Analytics
 
 // GetTopDimensions 通用多维聚合排行查询 (全窗口 Distinct 连接数与 IntervalAllocator 半开区间精确分摊)
 func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string, filter AnalyticsFilter) ([]TopDimensionItem, error) {
-	run, err := a.GetLatestCompletedAccountingRun(ctx)
+	scope, err := a.resolveAccountingScope(ctx)
 	if err != nil {
 		return nil, err
 	}
+	table, keyCol, keyVal := scope.accountedTable()
 
 	dimColumn := "process"
 	switch dimType {
@@ -349,9 +408,9 @@ func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string,
 			interval_start, interval_end, precision, route,
 			accounted_upload, accounted_download,
 			COALESCE(%s, '') AS dim_key
-		FROM accounted_traffic
-		WHERE run_id = ? AND %s IS NOT NULL AND %s != '';
-	`, dimColumn, dimColumn, dimColumn), run.RunID)
+		FROM %s
+		WHERE %s = ? AND %s IS NOT NULL AND %s != '';
+	`, dimColumn, table, keyCol, dimColumn, dimColumn), keyVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query top dimensions: %w", err)
 	}
@@ -512,21 +571,22 @@ func (a *AnalyticsService) GetTopRules(ctx context.Context, filter AnalyticsFilt
 
 // GetTopRulesDetailed 查询指定窗口内的规则使用排行（包含 (rule, rulePayload, route) + bytes + connectionCount）
 func (a *AnalyticsService) GetTopRulesDetailed(ctx context.Context, filter AnalyticsFilter) ([]TopRuleItem, error) {
-	run, err := a.GetLatestCompletedAccountingRun(ctx)
+	scope, err := a.resolveAccountingScope(ctx)
 	if err != nil {
 		return nil, err
 	}
+	table, keyCol, keyVal := scope.accountedTable()
 
-	rows, err := a.db.QueryContext(ctx, `
+	rows, err := a.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT
 			session_id, epoch_id, connection_id, observed_at,
 			interval_start, interval_end, precision, route,
 			accounted_upload, accounted_download,
 			COALESCE(rule, '') AS rule_name,
 			COALESCE(rule_payload, '') AS rule_payload_val
-		FROM accounted_traffic
-		WHERE run_id = ? AND rule IS NOT NULL AND rule != '';
-	`, run.RunID)
+		FROM %s
+		WHERE %s = ? AND rule IS NOT NULL AND rule != '';
+	`, table, keyCol), keyVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query top rules: %w", err)
 	}

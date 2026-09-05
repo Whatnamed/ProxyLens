@@ -306,248 +306,21 @@ func reconcileBoundedRelayRelations(ctx context.Context, db *sql.DB, runID strin
 		grouped[groupKey] = append(grouped[groupKey], c)
 	}
 
-	resultClasses := make(map[connKey]AccountingClass)
+	finalClasses := make(map[connKey]AccountingClass)
 	var relationsToInsert []RelayRelationRecord
 
 	for _, conns := range grouped {
-		var candidates []*connInfo
-		var logicals []*connInfo
-
-		for _, c := range conns {
-			hasProcess := strings.TrimSpace(c.process) != ""
-			hasRule := strings.TrimSpace(c.rule) != ""
-			hasProcessAndRule := hasProcess && hasRule
-
-			// 核心原则：如果 metadata 明确具备 process+rule (或显式为 KnownApplication)，绝对不是 Candidate！
-			isLogical := hasProcessAndRule || c.attributionClass == types.ClassKnownApplication
-
-			isCandidate := false
-			if !hasProcessAndRule {
-				if c.attributionClass == types.ClassRelayCandidate ||
-					c.attributionClass == types.ClassConfirmedRelayDuplicate ||
-					(!hasProcess && !hasRule && len(c.chains) > 0 && c.route == types.RouteProxy) {
-					isCandidate = true
-				}
-			}
-
-			if isLogical {
-				logicals = append(logicals, c)
-				resultClasses[c.key] = ClassUnique
-			} else if isCandidate {
-				candidates = append(candidates, c)
-			} else {
-				resultClasses[c.key] = ClassMissingAttribution
-			}
+		groupClasses, groupRelations := classifyConnectionGroup(conns)
+		for k, class := range groupClasses {
+			finalClasses[k] = class
 		}
-
-		candidateMatches := make(map[connKey][]*connInfo)
-		logicalMatches := make(map[connKey][]*connInfo)
-		matchEvidenceMap := make(map[string]map[string]any)
-
-		for _, cand := range candidates {
-			for _, log := range logicals {
-				candChains := cand.chains
-				logChains := log.chains
-
-				if len(candChains) == 0 || len(logChains) <= 1 {
-					continue
-				}
-				if candChains[0] != logChains[0] {
-					continue
-				}
-
-				var sharedHops []string
-				logHopMap := make(map[string]bool, len(logChains))
-				for _, hop := range logChains {
-					logHopMap[hop] = true
-				}
-				for _, hop := range candChains {
-					if logHopMap[hop] {
-						sharedHops = append(sharedHops, hop)
-					}
-				}
-				if len(sharedHops) == 0 {
-					continue
-				}
-
-				if cand.lastObs.Before(log.firstObs) || cand.firstObs.After(log.lastObs) {
-					continue
-				}
-				overlapStart := cand.firstObs
-				if log.firstObs.After(overlapStart) {
-					overlapStart = log.firstObs
-				}
-				overlapEnd := cand.lastObs
-				if log.lastObs.Before(overlapEnd) {
-					overlapEnd = log.lastObs
-				}
-				overlapMs := overlapEnd.Sub(overlapStart).Milliseconds()
-				if overlapMs < 0 {
-					continue
-				}
-
-				hasTraffic := cand.monitoredUp > 500 || cand.monitoredDown > 500 || log.monitoredUp > 500 || log.monitoredDown > 500
-				if !hasTraffic {
-					continue
-				}
-
-				upDiff := cand.monitoredUp - log.monitoredUp
-				if upDiff < 0 {
-					upDiff = -upDiff
-				}
-				downDiff := cand.monitoredDown - log.monitoredDown
-				if downDiff < 0 {
-					downDiff = -downDiff
-				}
-
-				maxUp := log.monitoredUp
-				if cand.monitoredUp > maxUp {
-					maxUp = cand.monitoredUp
-				}
-				maxDown := log.monitoredDown
-				if cand.monitoredDown > maxDown {
-					maxDown = cand.monitoredDown
-				}
-
-				upRatio := 1.0
-				if maxUp > 0 {
-					upRatio = float64(upDiff) / float64(maxUp)
-				}
-				downRatio := 1.0
-				if maxDown > 0 {
-					downRatio = float64(downDiff) / float64(maxDown)
-				}
-
-				upMatch := (maxUp > 0 && upRatio <= 0.05) || (upDiff < 2000 && upRatio < 0.20)
-				downMatch := (maxDown > 0 && downRatio <= 0.05) || (downDiff < 2000 && downRatio < 0.20)
-
-				var trafficMatch bool
-				if log.monitoredUp > 500 && log.monitoredDown > 500 {
-					trafficMatch = upMatch && downMatch
-				} else if log.monitoredDown > 2000 && log.monitoredUp <= 500 {
-					trafficMatch = downMatch && (upDiff < 2000 && upRatio < 0.20)
-				} else if log.monitoredUp > 2000 && log.monitoredDown <= 500 {
-					trafficMatch = upMatch && (downDiff < 2000 && downRatio < 0.20)
-				} else {
-					trafficMatch = upMatch && downMatch
-				}
-
-				if trafficMatch {
-					candidateMatches[cand.key] = append(candidateMatches[cand.key], log)
-					logicalMatches[log.key] = append(logicalMatches[log.key], cand)
-
-					pairKey := fmt.Sprintf("%s:%s", cand.key.connectionID, log.key.connectionID)
-					matchEvidenceMap[pairKey] = map[string]any{
-						"overlapMs":         overlapMs,
-						"sharedHops":        sharedHops,
-						"candidateChains":   cand.chains,
-						"logicalChains":     log.chains,
-						"candidateTotals":   map[string]int64{"upload": cand.monitoredUp, "download": cand.monitoredDown},
-						"logicalTotals":     map[string]int64{"upload": log.monitoredUp, "download": log.monitoredDown},
-						"uploadDiffRatio":   upRatio,
-						"downloadDiffRatio": downRatio,
-					}
-				}
-			}
-		}
-
-		for _, cand := range candidates {
-			matchedLogicals := candidateMatches[cand.key]
-
-			if len(matchedLogicals) == 0 {
-				resultClasses[cand.key] = ClassMissingAttribution
-				evidence := map[string]any{
-					"decisionReason":  "unpaired_no_matching_logical_connection",
-					"candidateChains": cand.chains,
-					"candidateTotals": map[string]int64{"upload": cand.monitoredUp, "download": cand.monitoredDown},
-					"candidateKey":    fmt.Sprintf("%s:%d:%s", cand.key.sessionID, cand.key.epochID, cand.key.connectionID),
-				}
-				evJSON, _ := json.Marshal(evidence)
-				relationsToInsert = append(relationsToInsert, RelayRelationRecord{
-					RunID:                 runID,
-					CandidateSessionID:    cand.key.sessionID,
-					CandidateEpochID:      cand.key.epochID,
-					CandidateConnectionID: cand.key.connectionID,
-					Status:                RelayUnpaired,
-					EvidenceJSON:          string(evJSON),
-					DerivationVersion:     AccountingAlgorithmVersion,
-				})
-			} else if len(matchedLogicals) == 1 {
-				singleLogical := matchedLogicals[0]
-				if len(logicalMatches[singleLogical.key]) == 1 {
-					resultClasses[cand.key] = ClassConfirmedRelayDuplicate
-					pairKey := fmt.Sprintf("%s:%s", cand.key.connectionID, singleLogical.key.connectionID)
-					evidence := matchEvidenceMap[pairKey]
-					if evidence == nil {
-						evidence = make(map[string]any)
-					}
-					evidence["decisionReason"] = "strict_1to1_structural_overlap_match"
-					evidence["candidateKey"] = fmt.Sprintf("%s:%d:%s", cand.key.sessionID, cand.key.epochID, cand.key.connectionID)
-					evidence["logicalKey"] = fmt.Sprintf("%s:%d:%s", singleLogical.key.sessionID, singleLogical.key.epochID, singleLogical.key.connectionID)
-					evJSON, _ := json.Marshal(evidence)
-
-					relationsToInsert = append(relationsToInsert, RelayRelationRecord{
-						RunID:                 runID,
-						CandidateSessionID:    cand.key.sessionID,
-						CandidateEpochID:      cand.key.epochID,
-						CandidateConnectionID: cand.key.connectionID,
-						LogicalSessionID:      singleLogical.key.sessionID,
-						LogicalEpochID:        singleLogical.key.epochID,
-						LogicalConnectionID:   singleLogical.key.connectionID,
-						Status:                RelayConfirmed,
-						EvidenceJSON:          string(evJSON),
-						DerivationVersion:     AccountingAlgorithmVersion,
-					})
-				} else {
-					resultClasses[cand.key] = ClassAmbiguousRelay
-					pairKey := fmt.Sprintf("%s:%s", cand.key.connectionID, singleLogical.key.connectionID)
-					evidence := matchEvidenceMap[pairKey]
-					if evidence == nil {
-						evidence = make(map[string]any)
-					}
-					evidence["decisionReason"] = "n_to_1_logical_ambiguity"
-					evidence["candidateKey"] = fmt.Sprintf("%s:%d:%s", cand.key.sessionID, cand.key.epochID, cand.key.connectionID)
-					evidence["logicalKey"] = fmt.Sprintf("%s:%d:%s", singleLogical.key.sessionID, singleLogical.key.epochID, singleLogical.key.connectionID)
-					evJSON, _ := json.Marshal(evidence)
-
-					relationsToInsert = append(relationsToInsert, RelayRelationRecord{
-						RunID:                 runID,
-						CandidateSessionID:    cand.key.sessionID,
-						CandidateEpochID:      cand.key.epochID,
-						CandidateConnectionID: cand.key.connectionID,
-						LogicalSessionID:      singleLogical.key.sessionID,
-						LogicalEpochID:        singleLogical.key.epochID,
-						LogicalConnectionID:   singleLogical.key.connectionID,
-						Status:                RelayAmbiguous,
-						EvidenceJSON:          string(evJSON),
-						DerivationVersion:     AccountingAlgorithmVersion,
-					})
-				}
-			} else {
-				resultClasses[cand.key] = ClassAmbiguousRelay
-				evidence := map[string]any{
-					"decisionReason":  "1_to_n_candidate_ambiguity",
-					"candidateChains": cand.chains,
-					"candidateTotals": map[string]int64{"upload": cand.monitoredUp, "download": cand.monitoredDown},
-					"matchedCount":    len(matchedLogicals),
-					"candidateKey":    fmt.Sprintf("%s:%d:%s", cand.key.sessionID, cand.key.epochID, cand.key.connectionID),
-				}
-				evJSON, _ := json.Marshal(evidence)
-
-				relationsToInsert = append(relationsToInsert, RelayRelationRecord{
-					RunID:                 runID,
-					CandidateSessionID:    cand.key.sessionID,
-					CandidateEpochID:      cand.key.epochID,
-					CandidateConnectionID: cand.key.connectionID,
-					Status:                RelayAmbiguous,
-					EvidenceJSON:          string(evJSON),
-					DerivationVersion:     AccountingAlgorithmVersion,
-				})
-			}
+		for _, rel := range groupRelations {
+			rel.RunID = runID
+			relationsToInsert = append(relationsToInsert, rel)
 		}
 	}
 
-	return resultClasses, relationsToInsert, nil
+	return finalClasses, relationsToInsert, nil
 }
 
 func batchWriteRelayRelations(ctx context.Context, db *sql.DB, relations []RelayRelationRecord) error {
@@ -608,6 +381,86 @@ func batchWriteRelayRelations(ctx context.Context, db *sql.DB, relations []Relay
 	return nil
 }
 
+// buildAccountedRecord is the single per-event accounted-row construction
+// contract shared by the legacy full rebuild and incremental accounting v2.
+// The raw event id/sequence identify the source journal row; the accounting
+// class comes from the caller's relay reconciliation.
+func buildAccountedRecord(sourceEventID string, sessID string, epochID int, obsAtStr string, ev *types.CollectorEvent, accClass AccountingClass) AccountedTrafficRecord {
+	if accClass == "" {
+		accClass = ClassUnique
+	}
+
+	route := ev.Route
+	if route == "" {
+		route = types.RouteUnknown
+	}
+
+	var accUp, accDown int64
+	if accClass == ClassConfirmedRelayDuplicate {
+		accUp = 0
+		accDown = 0
+	} else {
+		accUp = ev.DeltaUpload
+		accDown = ev.DeltaDownload
+	}
+
+	var finalProxy, topGroup string
+	if route == types.RouteDirect {
+		finalProxy = "DIRECT"
+	} else if len(ev.Chains) > 0 {
+		finalProxy = ev.Chains[0]
+		topGroup = ev.Chains[len(ev.Chains)-1]
+	}
+
+	obsTime, _ := time.Parse(time.RFC3339Nano, obsAtStr)
+	obsTime = obsTime.UTC()
+
+	var intS, intE *time.Time
+	if len(ev.AttributionInterval) >= 2 {
+		t1, err1 := time.Parse(time.RFC3339Nano, ev.AttributionInterval[0])
+		t2, err2 := time.Parse(time.RFC3339Nano, ev.AttributionInterval[1])
+		if err1 == nil && err2 == nil {
+			t1 = t1.UTC()
+			t2 = t2.UTC()
+			intS = &t1
+			intE = &t2
+		}
+	}
+
+	prec := ev.Precision
+	if prec == "" {
+		prec = "exact_snapshot"
+	}
+
+	return AccountedTrafficRecord{
+		SourceEventID:              sourceEventID,
+		SessionID:                  sessID,
+		EpochID:                    epochID,
+		ConnectionID:               ev.ConnectionID,
+		ObservedAt:                 obsTime,
+		IntervalStart:              intS,
+		IntervalEnd:                intE,
+		Precision:                  prec,
+		Route:                      route,
+		RawUpload:                  ev.DeltaUpload,
+		RawDownload:                ev.DeltaDownload,
+		AccountedUpload:            accUp,
+		AccountedDownload:          accDown,
+		AccountingClass:            accClass,
+		Process:                    ev.Metadata.Process,
+		ProcessPath:                ev.Metadata.ProcessPath,
+		Host:                       ev.Metadata.Host,
+		SniffHost:                  ev.Metadata.SniffHost,
+		DestinationIP:              ev.Metadata.DestinationIP,
+		Network:                    ev.Metadata.Network,
+		Rule:                       ev.Rule,
+		RulePayload:                ev.RulePayload,
+		FinalProxy:                 finalProxy,
+		TopPolicyGroup:             topGroup,
+		DimensionDerivationVersion: DimensionDerivationVersion,
+	}
+}
+
 func streamAndBatchWriteAccountedTraffic(ctx context.Context, db *sql.DB, runID string, boundarySeq int64, relayMap map[connKey]AccountingClass) error {
 	// 1. 先完全读取到内存切片并释放读锁 (避免与写事务产生内部死锁)
 	rows, err := db.QueryContext(ctx, `
@@ -622,8 +475,8 @@ func streamAndBatchWriteAccountedTraffic(ctx context.Context, db *sql.DB, runID 
 
 	type rawJournalItem struct {
 		eventID, sessID, eventType, obsAtStr, ej string
-		epochID                                 int
-		frameSeq, eventSeq                      int64
+		epochID                                  int
+		frameSeq, eventSeq                       int64
 	}
 	var rawItems []rawJournalItem
 
@@ -652,81 +505,9 @@ func streamAndBatchWriteAccountedTraffic(ctx context.Context, db *sql.DB, runID 
 		}
 
 		k := connKey{sessionID: it.sessID, epochID: it.epochID, connectionID: ev.ConnectionID}
-		accClass := relayMap[k]
-		if accClass == "" {
-			accClass = ClassUnique
-		}
-
-		route := ev.Route
-		if route == "" {
-			route = types.RouteUnknown
-		}
-
-		var accUp, accDown int64
-		if accClass == ClassConfirmedRelayDuplicate {
-			accUp = 0
-			accDown = 0
-		} else {
-			accUp = ev.DeltaUpload
-			accDown = ev.DeltaDownload
-		}
-
-		var finalProxy, topGroup string
-		if route == types.RouteDirect {
-			finalProxy = "DIRECT"
-		} else if len(ev.Chains) > 0 {
-			finalProxy = ev.Chains[0]
-			topGroup = ev.Chains[len(ev.Chains)-1]
-		}
-
-		obsTime, _ := time.Parse(time.RFC3339Nano, it.obsAtStr)
-		obsTime = obsTime.UTC()
-
-		var intS, intE *time.Time
-		if len(ev.AttributionInterval) >= 2 {
-			t1, err1 := time.Parse(time.RFC3339Nano, ev.AttributionInterval[0])
-			t2, err2 := time.Parse(time.RFC3339Nano, ev.AttributionInterval[1])
-			if err1 == nil && err2 == nil {
-				t1 = t1.UTC()
-				t2 = t2.UTC()
-				intS = &t1
-				intE = &t2
-			}
-		}
-
-		prec := ev.Precision
-		if prec == "" {
-			prec = "exact_snapshot"
-		}
-
-		allRecords = append(allRecords, AccountedTrafficRecord{
-			RunID:                      runID,
-			SourceEventID:              it.eventID,
-			SessionID:                  it.sessID,
-			EpochID:                    it.epochID,
-			ConnectionID:               ev.ConnectionID,
-			ObservedAt:                 obsTime,
-			IntervalStart:              intS,
-			IntervalEnd:                intE,
-			Precision:                  prec,
-			Route:                      route,
-			RawUpload:                  ev.DeltaUpload,
-			RawDownload:                ev.DeltaDownload,
-			AccountedUpload:            accUp,
-			AccountedDownload:          accDown,
-			AccountingClass:            accClass,
-			Process:                    ev.Metadata.Process,
-			ProcessPath:                ev.Metadata.ProcessPath,
-			Host:                       ev.Metadata.Host,
-			SniffHost:                  ev.Metadata.SniffHost,
-			DestinationIP:              ev.Metadata.DestinationIP,
-			Network:                    ev.Metadata.Network,
-			Rule:                       ev.Rule,
-			RulePayload:                ev.RulePayload,
-			FinalProxy:                 finalProxy,
-			TopPolicyGroup:             topGroup,
-			DimensionDerivationVersion: DimensionDerivationVersion,
-		})
+		rec := buildAccountedRecord(it.eventID, it.sessID, it.epochID, it.obsAtStr, &ev, relayMap[k])
+		rec.RunID = runID
+		allRecords = append(allRecords, rec)
 	}
 
 	// 2. 分批写入 accounted_traffic (短事务)
@@ -859,91 +640,23 @@ func rebuildHourlyAggregatesBatched(ctx context.Context, db *sql.DB, runID strin
 		obsTime, _ := time.Parse(time.RFC3339Nano, obsAtStr)
 		obsTime = obsTime.UTC()
 
-		type timeAllocation struct {
-			bucketStart time.Time
-			upBytes     int64
-			downBytes   int64
-			isExact     bool
+		var intStartPtr, intEndPtr *time.Time
+		if intStart.Valid {
+			if t, err := time.Parse(time.RFC3339Nano, intStart.String); err == nil {
+				t = t.UTC()
+				intStartPtr = &t
+			}
 		}
-		var allocations []timeAllocation
-
-		if prec == "exact_snapshot" || !intStart.Valid || !intEnd.Valid {
-			bucket := obsTime.Truncate(time.Hour)
-			allocations = append(allocations, timeAllocation{
-				bucketStart: bucket,
-				upBytes:     accUp,
-				downBytes:   accDown,
-				isExact:     true,
-			})
-		} else {
-			startTime, _ := time.Parse(time.RFC3339Nano, intStart.String)
-			endTime, _ := time.Parse(time.RFC3339Nano, intEnd.String)
-			startTime = startTime.UTC()
-			endTime = endTime.UTC()
-
-			if !endTime.After(startTime) {
-				bucket := obsTime.Truncate(time.Hour)
-				allocations = append(allocations, timeAllocation{
-					bucketStart: bucket, upBytes: accUp, downBytes: accDown, isExact: false,
-				})
-			} else {
-				allocUp := NewIntervalAllocator(startTime, endTime, accUp)
-				allocDown := NewIntervalAllocator(startTime, endTime, accDown)
-
-				curr := startTime
-				for curr.Before(endTime) {
-					bucket := curr.Truncate(time.Hour)
-					nextBucket := bucket.Add(time.Hour)
-					bucketEnd := nextBucket
-					if bucketEnd.After(endTime) {
-						bucketEnd = endTime
-					}
-
-					pUp := allocUp.Allocate(curr, bucketEnd)
-					pDown := allocDown.Allocate(curr, bucketEnd)
-
-					allocations = append(allocations, timeAllocation{
-						bucketStart: bucket,
-						upBytes:     pUp,
-						downBytes:   pDown,
-						isExact:     false,
-					})
-					curr = bucketEnd
-				}
+		if intEnd.Valid {
+			if t, err := time.Parse(time.RFC3339Nano, intEnd.String); err == nil {
+				t = t.UTC()
+				intEndPtr = &t
 			}
 		}
 
-		type dimPair struct {
-			dimType string
-			dimKey  string
-		}
-		dims := []dimPair{
-			{dimType: "total", dimKey: "total"},
-		}
-		if proc.Valid && proc.String != "" {
-			dims = append(dims, dimPair{dimType: "process", dimKey: proc.String})
-		}
-		if host.Valid && host.String != "" {
-			dims = append(dims, dimPair{dimType: "host", dimKey: host.String})
-		}
-		if destIP.Valid && destIP.String != "" {
-			dims = append(dims, dimPair{dimType: "destination_ip", dimKey: destIP.String})
-		}
-		if rule.Valid && rule.String != "" {
-			dims = append(dims, dimPair{dimType: "rule", dimKey: rule.String})
-		}
-		if rulePayload.Valid && rulePayload.String != "" {
-			dims = append(dims, dimPair{dimType: "rule_payload", dimKey: rulePayload.String})
-		}
-		if finalProxy.Valid && finalProxy.String != "" {
-			dims = append(dims, dimPair{dimType: "final_proxy", dimKey: finalProxy.String})
-		}
-		if topGroup.Valid && topGroup.String != "" {
-			dims = append(dims, dimPair{dimType: "top_policy_group", dimKey: topGroup.String})
-		}
-		if network.Valid && network.String != "" {
-			dims = append(dims, dimPair{dimType: "network", dimKey: network.String})
-		}
+		allocations := allocateAccountedRowBuckets(obsTime, intStartPtr, intEndPtr, prec, accUp, accDown)
+
+		dims := accountedDimensionPairs(proc, host, destIP, network, rule, rulePayload, finalProxy, topGroup)
 
 		for _, alloc := range allocations {
 			for _, d := range dims {
