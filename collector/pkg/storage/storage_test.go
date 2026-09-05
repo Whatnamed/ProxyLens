@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -805,8 +808,9 @@ func TestStorageStateEngineIntegration(t *testing.T) {
 	}
 }
 
-// TestSessionProgressMonotonicOnHealthEvent verifies that emitting a health event
-// with a zero or lower FrameSequence DOES NOT regress collector_sessions.last_frame_sequence.
+// TestSessionProgressMonotonicOnHealthEvent verifies that health events emitted
+// through the StateEngine maintain monotonic session progress and preserve complete
+// consistency between SQLite columns, raw event_json, and deterministic event_id.
 func TestSessionProgressMonotonicOnHealthEvent(t *testing.T) {
 	ctx := context.Background()
 	dbPath, cleanup := createTestDB(t)
@@ -819,60 +823,124 @@ func TestSessionProgressMonotonicOnHealthEvent(t *testing.T) {
 	}
 	defer sink.Close()
 
-	// 1. Emit an event with a high FrameSequence (e.g. 100).
-	ev1 := &types.CollectorEvent{
-		EventID:       "ev-high-frame",
-		SessionID:     sess,
-		EpochID:       1,
-		FrameSequence: 100,
-		EventSequence: 1,
-		Type:          types.EventConnectionBootstrap,
-		Timestamp:     time.Now().UTC(),
-		ConnectionID:  "conn-1",
-		Metadata: types.RawMetadata{
-			Process: "curl.exe",
-			Network: "tcp",
+	engine := state.NewStateEngine(state.EngineOptions{
+		Sink:      sink,
+		SessionID: sess,
+	})
+
+	// 1. Process a snapshot frame with a connection to establish a frame sequence.
+	ts1 := time.Date(2026, 9, 6, 10, 0, 0, 0, time.UTC)
+	if err := engine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: ts1.Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1000,
+			DownloadTotal: 2000,
+			Connections: []types.ConnectionSnapshot{
+				{
+					ID:       "conn-1",
+					Upload:   100,
+					Download: 200,
+					Metadata: types.RawMetadata{Process: "curl.exe", Network: "tcp"},
+					Chains:   []string{"DIRECT"},
+				},
+			},
 		},
-	}
-	if err := sink.Emit(ev1); err != nil {
-		t.Fatalf("Emit ev1 failed: %v", err)
+	}); err != nil {
+		t.Fatalf("ProcessFrame failed: %v", err)
 	}
 
-	// Verify last_frame_sequence is 100.
-	var seq int64
+	// Verify last_frame_sequence >= 1.
+	var seqBefore int64
 	if err := sink.db.QueryRowContext(ctx, `
 		SELECT last_frame_sequence FROM collector_sessions WHERE session_id = ?;
-	`, sess).Scan(&seq); err != nil {
+	`, sess).Scan(&seqBefore); err != nil {
 		t.Fatalf("failed to query last_frame_sequence: %v", err)
 	}
-	if seq != 100 {
-		t.Fatalf("expected last_frame_sequence=100, got %d", seq)
+	if seqBefore < 1 {
+		t.Fatalf("expected last_frame_sequence >= 1, got %d", seqBefore)
 	}
 
-	// 2. Emit a CollectorHealth event with FrameSequence = 0 (e.g. out-of-band disk guard trip).
-	healthEv := &types.CollectorEvent{
-		EventID:       "ev-health-zero-frame",
-		SessionID:     sess,
-		EpochID:       1,
-		FrameSequence: 0,
-		EventSequence: 0,
-		Type:          types.EventCollectorHealth,
-		Timestamp:     time.Now().UTC(),
-		Details: map[string]any{
-			"issue": "disk_guard_floor_breached",
-		},
+	// 2. Emit a session health event through the StateEngine (proper ordered path).
+	healthTS := ts1.Add(time.Second)
+	details := map[string]any{
+		"freeBytes":  int64(500 << 20),
+		"floorBytes": int64(1 << 30),
 	}
-	if err := sink.Emit(healthEv); err != nil {
-		t.Fatalf("Emit healthEv failed: %v", err)
+	if err := engine.EmitSessionHealth(healthTS, "disk_guard_floor_breached", "disk low", details); err != nil {
+		t.Fatalf("EmitSessionHealth failed: %v", err)
 	}
 
-	// 3. Verify last_frame_sequence DID NOT regress to 0, but remained 100!
+	// 3. Verify last_frame_sequence DID NOT regress.
+	var seqAfter int64
 	if err := sink.db.QueryRowContext(ctx, `
 		SELECT last_frame_sequence FROM collector_sessions WHERE session_id = ?;
-	`, sess).Scan(&seq); err != nil {
+	`, sess).Scan(&seqAfter); err != nil {
 		t.Fatalf("failed to query last_frame_sequence after health: %v", err)
 	}
-	if seq != 100 {
-		t.Fatalf("last_frame_sequence regressed to %d, want 100 (monotonic progress broken!)", seq)
+	if seqAfter < seqBefore {
+		t.Fatalf("last_frame_sequence regressed from %d to %d (monotonic progress broken!)", seqBefore, seqAfter)
+	}
+
+	// 4. Invariant assertion: SQLite columns, unmarshaled event_json, and
+	// recomputed deterministic EventID MUST be 100% consistent.
+	var colEventID, colJSON, colSHA string
+	var colEpoch, colFrame, colSeq int64
+	if err := sink.db.QueryRowContext(ctx, `
+		SELECT event_id, epoch_id, frame_sequence, event_sequence, event_json, event_sha256
+		FROM event_journal
+		WHERE session_id = ? AND event_type = 'CollectorHealth'
+		ORDER BY journal_sequence DESC LIMIT 1;
+	`, sess).Scan(&colEventID, &colEpoch, &colFrame, &colSeq, &colJSON, &colSHA); err != nil {
+		t.Fatalf("failed to query health event from journal: %v", err)
+	}
+
+	var jsonEv types.CollectorEvent
+	if err := json.Unmarshal([]byte(colJSON), &jsonEv); err != nil {
+		t.Fatalf("failed to unmarshal event_json: %v", err)
+	}
+
+	// Assert column sequence numbers match JSON sequence numbers exactly.
+	if colEpoch != int64(jsonEv.EpochID) {
+		t.Fatalf("epoch mismatch: column=%d, json=%d", colEpoch, jsonEv.EpochID)
+	}
+	if colFrame != jsonEv.FrameSequence {
+		t.Fatalf("frame sequence mismatch: column=%d, json=%d", colFrame, jsonEv.FrameSequence)
+	}
+	if colSeq != jsonEv.EventSequence {
+		t.Fatalf("event sequence mismatch: column=%d, json=%d", colSeq, jsonEv.EventSequence)
+	}
+
+	// Assert recomputed deterministic ID matches column event_id.
+	jsonEv.EventID = ""
+	jsonEv.GenerateDeterministicEventID()
+	if jsonEv.EventID != colEventID {
+		t.Fatalf("event ID mismatch: recomputed=%s, column=%s", jsonEv.EventID, colEventID)
+	}
+
+	// Assert recomputed SHA256 of JSON matches column event_sha256.
+	recomputedSHA := fmt.Sprintf("%x", sha256.Sum256([]byte(colJSON)))
+	if recomputedSHA != colSHA {
+		t.Fatalf("event SHA mismatch: recomputed=%s, column=%s", recomputedSHA, colSHA)
+	}
+
+	// 5. Duplicate emission of identical event must be idempotent (no collision error).
+	if err := sink.Emit(&jsonEv); err != nil {
+		t.Fatalf("idempotent re-emission failed: %v", err)
+	}
+
+	// 6. Distinct health event must produce distinct EventID without collision.
+	healthTS2 := healthTS.Add(time.Second)
+	if err := engine.EmitSessionHealth(healthTS2, "disk_guard_floor_breached", "disk still low", details); err != nil {
+		t.Fatalf("second distinct EmitSessionHealth failed: %v", err)
+	}
+	var countHealth int
+	if err := sink.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT event_id) FROM event_journal
+		WHERE session_id = ? AND event_type = 'CollectorHealth';
+	`, sess).Scan(&countHealth); err != nil {
+		t.Fatal(err)
+	}
+	if countHealth != 2 {
+		t.Fatalf("expected 2 distinct health events in journal, got %d", countHealth)
 	}
 }

@@ -46,8 +46,12 @@ type CollectorOptions struct {
 	// OnControllerStatus receives redacted lifecycle states only. It must not
 	// be used to pass credentials or controller payloads to a logger.
 	OnControllerStatus func(status string)
-}
 
+	// DiskGuard optionally injects or overrides the capacity guard.
+	DiskGuard *storage.DiskGuard
+
+	Logger LogFunc
+}
 // CollectorResult describes the completed runner without exposing any secret
 // or controller payload. A context cancellation is a normal closed_clean run.
 type CollectorResult struct {
@@ -56,6 +60,7 @@ type CollectorResult struct {
 	CleanShutdown     bool
 	QueueMetrics      queue.Metrics
 	ActiveConnections int
+	DiskGuardTripped  bool
 	Summary           map[string]any
 }
 
@@ -66,6 +71,7 @@ type CollectorRunner struct {
 	options          CollectorOptions
 	sessionID        string
 	collectorVersion string
+	logger           LogFunc
 	started          atomic.Bool
 }
 
@@ -125,12 +131,17 @@ func NewCollectorRunner(opts CollectorOptions) (*CollectorRunner, error) {
 	if collectorVersion == "" {
 		collectorVersion = DefaultCollectorVersion
 	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = func(string, ...any) {}
+	}
 
 	return &CollectorRunner{
 		config:           &cfg,
 		options:          opts,
 		sessionID:        sessionID,
 		collectorVersion: collectorVersion,
+		logger:           logger,
 	}, nil
 }
 
@@ -187,7 +198,9 @@ func (r *CollectorRunner) Run(ctx context.Context) (*CollectorResult, error) {
 	// evidence instead of running into disk-full. The guard never deletes
 	// anything; recovery is a later runtime start with more free space.
 	var diskGuard *storage.DiskGuard
-	if r.options.DBPath != "" && sqliteSink != nil {
+	if r.options.DiskGuard != nil {
+		diskGuard = r.options.DiskGuard
+	} else if r.options.DBPath != "" && sqliteSink != nil {
 		diskGuard = storage.NewDiskGuard(r.options.DBPath)
 	}
 
@@ -228,20 +241,7 @@ func (r *CollectorRunner) Run(ctx context.Context) (*CollectorResult, error) {
 			}
 			desc := "free space on the DB volume fell below the stop floor; ingestion stopped cleanly"
 			if err := engine.EmitSessionHealth(status.CheckedAt, "disk_guard_floor_breached", desc, details); err != nil {
-				ev := &types.CollectorEvent{
-					SessionID: r.sessionID,
-					Timestamp: status.CheckedAt,
-					Type:      types.EventCollectorHealth,
-					Details: map[string]any{
-						"issue":       "disk_guard_floor_breached",
-						"description": desc,
-						"freeBytes":   int64(status.FreeBytes),
-						"floorBytes":  int64(status.FloorBytes),
-						"dbSizeBytes": int64(status.DBSizeBytes),
-					},
-				}
-				ev.GenerateDeterministicEventID()
-				_ = sqliteSink.Emit(ev)
+				r.logger("[runtime] failed to emit disk guard health event: %v", err)
 			}
 			cancel()
 		})
@@ -328,12 +328,14 @@ func (r *CollectorRunner) Run(ctx context.Context) (*CollectorResult, error) {
 		}
 	}
 
+	isTripped := diskGuard != nil && diskGuard.Tripped()
 	result := &CollectorResult{
 		SessionID:         r.sessionID,
 		Status:            string(status),
 		CleanShutdown:     fatalErr == nil,
 		QueueMetrics:      metrics,
 		ActiveConnections: engine.GetActiveConnectionsCount(),
+		DiskGuardTripped:  isTripped,
 		Summary:           summary,
 	}
 	if fatalErr != nil {
