@@ -73,7 +73,13 @@ Presence checkpoints update durable liveness facts only
 `connection_traffic` rows.
 
 Measured effect (scale acceptance, 50 connections / 4800 frames / 20 min):
-**97.62% durable delta-row reduction, byte totals exactly equal to input.**
+**97.62% of durable `ConnectionDelta` rows eliminated (they were
+zero-increment duplicates); byte totals exactly equal to input.** Scope of
+this number: it is a reduction in per-connection delta rows, **not** in
+overall journal rows — the journal still gains one `SamplingResidual` row per
+frame plus presence checkpoints at their (much sparser) cadence. The
+measured production revalidation window (§2.8) shows the post-fix journal
+composition directly.
 
 Historical raw rows are never deleted; the correction is forward-looking.
 
@@ -102,10 +108,21 @@ performs one final bounded flush after the collector writer has stopped, so a
 clean stop leaves zero accounting lag (session-end disappearances included)
 instead of deferring the last interval to the next start.
 
-Full-history work is limited to the explicit, resumable, chunked seed that
-activates a new generation (fresh databases seed automatically; an existing
-database seeds once via `collector storage seed-v2`), plus explicit repair or
-algorithm migration (`--force` supersedes the active generation).
+Full-history work is limited to the resumable, chunked seed that activates a
+new generation, plus explicit repair or algorithm migration (`--force`
+supersedes the active generation). The seed is **automatic for both fresh and
+existing databases**: whenever the runtime starts and no active v2 generation
+exists, the accounting scheduler seeds in the background — one bounded,
+resumable chunk per tick (duty-cycled; the 1.55M-event production seed took
+61–63 chunks) — and the shutdown flush drives an in-progress seed toward
+completion. Safety boundaries: a disk preflight refuses to start a seed when
+the DB volume has less than max(512 MiB, 15% of the DB file size) free
+(fails closed only on positive evidence of insufficient space; unknown
+platforms proceed); migration 009's partial unique invariant guarantees at
+most one seeding/materializing/active generation at any time; the legacy
+Query fallback stays in force until the generation activates. An interrupted
+seed resumes on the next start; `collector storage seed-v2` remains available
+for explicit manual invocation and `--force` reseeds.
 
 Relay reconciliation semantics are shared verbatim with the legacy rebuild
 (one extracted classification contract, `classifyConnectionGroup`), so v2 and
@@ -196,6 +213,79 @@ Ingestion is never killed by maintenance: the sink emit budget was raised
 collector queue buffers ~50 s), and the deadline only bounds a genuine hang.
 The small-database tests could never catch the snapshot defect because their
 read phases always won the upgrade race.
+
+### 2.8 Recurring capacity evidence and the disk-guard fail-safe
+
+Production revalidation window (2026-09-05 11:16:42–12:21:57Z, ~1.09h of live
+collection; read-only 30s sampling plus one read-only aggregate query over
+the window's journal range):
+
+- `event_journal` +52,521 rows ≈ **48,295 events/h**. Composition:
+  ConnectionDelta 27,646/h, SamplingResidual 13,132/h,
+  ConnectionPresenceCheckpoint 2,642/h, ConnectionDisappeared 2,276/h,
+  ConnectionNew 2,227/h, ConnectionBootstrap 244/h.
+- `connection_traffic` (per-event projection) +32,568 rows ≈ **29,868/h**
+  (Delta + New + Bootstrap, matching the journal composition).
+- SamplingResidual rows are 27.3% of journal rows and **81.6% of them carry a
+  zero residual in both directions**; nonzero residual bytes are 1.54% (up) /
+  6.15% (down) of the window's global counter deltas. Their physical share is
+  nonetheless <2% of window growth (~230 B/event JSON vs a ~3.9 KB/event
+  average physical row cost): zero-residual rows are a row-count redundancy,
+  **not a capacity driver**. A sparse zero-residual design is therefore
+  deferred with this evidence — these rows double as the per-frame
+  health/boundary evidence that frame-aligned chunking and the authoritative
+  boundary frame time rely on. Revisit only if row count (not bytes) becomes
+  a measured problem.
+- **Recurring physical growth** (db + WAL combined over the window, with the
+  one-time v2 historical-seed derived write ≈ +32 MB excluded — the same
+  delta the E-copy seed produced): ~**150–190 MiB/h** during active
+  collection. This is the honest recurring number; it is driven by per-event
+  evidence across journal + projections + v2 derived rows, not by the
+  density-affected delta rows alone.
+
+At 24/7 operation that is ~3.6–4.6 GB/day — material on the default C:
+install path (21.3–22.6 GB free during the window), so Phase 3S adds a
+**fail-safe disk guard** (V1 requirement): the collector checks free space on
+its DB volume every 30s (floor = max(1 GiB, 15% of current DB size)); a
+breach emits an explicit `CollectorHealth(disk_guard_floor_breached)` journal
+event and stops the session cleanly, and the runtime refuses to start new
+collector sessions below the same floor (scheduler-only mode, accounting
+catch-up continues). The guard never deletes, compacts, or rewrites
+anything — raw authority retention is never an automatic decision; recovery
+is the operator freeing space, after which the next runtime start proceeds
+normally.
+
+### 2.9 Classifier/lifecycle repair is result-neutral on production history (controlled supersede/reseed procedure)
+
+The Phase 3S correctness closure (lifecycle-explicit `lastObs`, authoritative
+boundary frame time, bounded dirty closure, migration 009 single-live
+invariant) changes incremental *mechanics*; the question is whether it
+changes *historical results* of an already-active generation seeded by the
+pre-fix code. Verified on E: workspace copies of the real production DB with
+the sanctioned procedure — `collector storage seed-v2 --db <copy> --force`
+(marks the active generation `superseded`, never deletes it, then reseeds
+1→boundary in resumable chunks):
+
+- E: real-copy (journal 1,579,954): pre-fix active generation vs post-fix
+  reseed — identical class distribution (missing_attribution 5,273 rows
+  7,681,945/13,556,146 B; unique 60,812 rows 839,976,374/758,005,188 B),
+  identical relay relations (731 unpaired, 0 confirmed), identical published
+  totals, stale-active marker check 0, `quick_check ok`, journal rows
+  unchanged, migration 009 applied.
+- Fresh copy of the current production DB (journal 1,602,541, i.e. including
+  the revalidation window processed incrementally by the pre-fix binary):
+  identical again — missing_attribution 7,018 rows 8,468,172/15,134,216 B;
+  unique 61,578 rows 919,246,775/1,194,570,548 B; relations 1,040 unpaired;
+  lifecycle 5,008 terminal / 1,445 active; published totals
+  927,714,947/1,209,704,764 B exactly equal to the superseded generation.
+
+Conclusion: the production active generation is **not result-tainted**; no
+urgent production repair is required. If a future algorithm change does alter
+results, the same procedure applies in a controlled window: copy to E:,
+reseed, compare per-class/totals read-only, then (and only then) run
+`--force` on production during stopped collection, with the legacy fallback
+covering Query reads for the seed duration and raw authority untouched
+throughout.
 
 ## 3. Validation evidence (E: drive, 2026-09-05)
 

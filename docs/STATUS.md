@@ -63,14 +63,27 @@
 
 ### Phase 3S — Production Storage & Accounting Scale Closure (Complete)
 
-- 只读 root-cause measurement（EQP 验证、SHA256 前后一致、production 停止）确认真实生产库（~5.2GB / ~1.55M journal events）97.63% 的 `ConnectionDelta` raw 行为零增量重复证据（wall-clock 口径），且常规核算 tick 在 stale 时触发全历史重建；
+- 只读 root-cause measurement（EQP 验证、SHA256 前后一致、production 停止）确认真实生产库（~5.2GB / ~1.55M journal events）97.63% 的 `ConnectionDelta` raw 行为零增量重复证据（wall-clock 口径；该比例仅针对 ConnectionDelta 行，不是整体 journal 行数削减比例），且常规核算 tick 在 stale 时触发全历史重建；
 - S1 Raw density：StateEngine 以共享 emission contract（steady-state 与 reconnect-recovery 同路径）抑制零字节 `ConnectionDelta` 的持久化，改为 `ConnectionPresenceCheckpoint` 稀疏在场证据（30s/active connection）；非零 delta、metadata/rule/chain/counter/relay/gap 证据语义不变；`ConnectionDisappeared` 携带精确 final presence；零删除历史 raw 行；
 - S2 Incremental Accounting v2（migration 008 additive）：generation-based 增量核算，常规 tick 只处理 `(publishedBoundary, newBoundary]` frame-aligned 有界区间并在单事务内原子发布派生行与 boundary（失败/取消零残留、幂等）；full rebuild 仅限显式 seed/repair（`collector storage seed-v2`）；v2 未激活时 analytics/Query 回退 legacy；relay/dedup 分类、区间分配与行构造与 legacy 共享同一代码路径（`classifyConnectionGroup` / allocation helpers）；
 - S3 WAL / failed-run hygiene：取代 `2bfd8c5` 每 tick TRUNCATE；稳态 PASSIVE checkpoint + 结构化 `WALCheckpointResult` 遥测；TRUNCATE 仅在 shutdown/maintenance 安全边界以 fresh non-canceled context 执行；Runtime shutdown 检查点不杀 busy reader；
 - 重观测契约修复（soak 暴露的真实投影缺陷）：同一 epoch 内连接 ID 在 Disappeared 后重新被观测时，`ConnectionNew` 以 upsert 重开既有行（保留原始 `first_observed_at`，清除 disappearance/observation-end 事实，journal 双事件保留，`RebuildProjections` 重放确定性一致）；`ConnectionNew` 现在与 Bootstrap 一致绑定事件 baseline 计数器；
-- S4 E: 盘生产规模验收（`collector/cmd/proxylens-scale-acceptance`，全部 PASS）：density 97.62% 行削减且字节和精确；真实生产库 E-copy 迁移+seed（61 chunks / 456.6s / WAL 峰值 8.5MB / DB +32MB / quick_check ok / authority 字节不变 / published 字节和与直接测量一致）；crash/cancel/publish-boundary/checkpoint 竞争/失败 generation 清理有界；常数成本 0.42s@50K vs 0.34s@1.57M（`INDEXED BY` 修正 planner 误选后无历史规模缩放）；30min 连续 soak（Collector+增量核算+只读 Query 负载）通过全部门限；
+- S4 E: 盘生产规模验收（`collector/cmd/proxylens-scale-acceptance`，全部 PASS）：density 97.62% `ConnectionDelta` 零增量行削减（journal 总行数不按此比例削减）且字节和精确；真实生产库 E-copy 迁移+seed（61 chunks / 456.6s / WAL 峰值 8.5MB / DB +32MB / quick_check ok / authority 字节不变 / published 字节和与直接测量一致）；crash/cancel/publish-boundary/checkpoint 竞争/失败 generation 清理有界；常数成本 0.42s@50K vs 0.34s@1.57M（`INDEXED BY` 修正 planner 误选后无历史规模缩放）；30min 连续 soak（Collector+增量核算+只读 Query 负载）通过全部门限；
 - 生产 C: 库短时 revalidation 完成：migration 008 打开即应用；runtime 对 1.55M 事件 journal 自动 seed（63 个 seed chunk 完成）并激活 v2 generation，随后对真实流量执行 21 个增量 chunk（零失败）；最终 published boundary == journal max（shutdown flush 后 **lag 0**）、accounted==raw 字节和（927,714,947 / 1,209,704,764）、`quick_check ok`、shutdown TRUNCATE 后 **WAL 0 字节**、DB +205MB（v2 派生行 + revalidation 窗口 raw 证据）；FLClash/FlClashCore PIDs 全程不变，只读 Query API 提供 v2 读取；结束后 collection 再次停止（autostart=false、无 Task owner），未恢复 24/7 常驻；
 - ADR 0010 记录全部决策与证据（`docs/decisions/0010-production-scale-storage-and-incremental-accounting.md`）。
+
+### Phase 3S — Correctness Closure（独立 review 11 blocker 收口，Complete）
+
+- **B1 重观测续算**：StateEngine bounded disappeared-tombstone（FIFO 4096）：同 ID + 同 Mihomo Start 短暂漏帧后重现 → counter-difference continuation（accounted 只增差值，如 300/600→消失→350/650 仅 +50/+50，全链路真实 pipeline 回归）；不同 Start → 新 incarnation；raw journal 保留全部证据。
+- **B2 lifecycle/temporal overlap**：v2 `lastObs` 统一契约（active → 当前 chunk authoritative boundary frame time；terminal → disappearance 时刻，同 chunk 显式 New 可清除 terminal marker）；boundary frame time 取自当前 session/epoch 最新 frame 证据（含 SamplingResidual-only frames）；A（00:00–00:05 消失）与 B（01:00–01:05）不再被误判 relay duplicate（seed 与 incremental 双路径回归）。
+- **B3 高基数规模门**：新增 `cardinality` phase（1k vs 10k 历史 connection + 同批增量，同 session/epoch）：writer-hold 7.4ms→38.7ms（<2s 绝对门限、<250ms ratio 噪声底）；prep off-lock 10.1ms→71.0ms；bounded dirty closure 下 legacy relay 语义等价，lag=0。
+- **B4 writer-lock 契约**：两阶段 chunk —— 区间读/分类/闭包构建在 prep（off-lock），writer tx 内 recheck published boundary 后做有界 mutation + 原子发布；boundary 被并发推进时返回真实 boundary（`skipped`），不产虚假 completed；`IncrementalChunkTelemetry` 固化证据；emit timeout 维持 30s。
+- **B5 generation invariant**：migration 009 partial unique index 至多一个 live generation；并发 boundary race 修复 + invariant 回归。
+- **B6/B7**：equivalence 测试 typo（DirectUpload↔DirectUpload）+ fixture 真实非零 DIRECT；shutdown flush 改为 30s 预算内有界 catch-up 循环直至 lag=0（或如实记录 incomplete）。
+- **B8**：scale harness fail-closed 卷位守卫（默认仅 E:，`PROXYLENS_SCALE_ALLOWED_VOLUMES` 可加白但永不 C:；SQLite temp 指向 acceptance workspace）。
+- **B9 容量证据（只读）**：reval 窗口（1.09h）journal +52,521 rows（48,295/h：Delta 27,646/h、SamplingResidual 13,132/h、PresenceCheckpoint 2,642/h、Disappeared 2,276/h、New 2,227/h、Bootstrap 244/h）；`connection_traffic` 29,868/h；SamplingResidual 占 27.3% 行数但 81.6% 零残差、物理占比 <2% → sparse 设计按证据暂缓；recurring 物理增长 ~150–190 MiB/h（剔除一次性 seed ≈+32MB）→ 24/7 约 3.6–4.6 GB/day，对默认 C: 路径 material → **新增 disk guard fail-safe**（30s 检查；floor=max(1GiB, 15% DB size)；breach → 显式 `CollectorHealth(disk_guard_floor_breached)` journal 证据 + clean stop；Runtime 同 floor 拒绝启动 collector，scheduler-only；永不删除/压缩）。density 文案全面修正为「`ConnectionDelta` 零增量行削减」，非整体 journal 行数削减。
+- **B10 seed contract**：文档化 automatic background seed —— Runtime 无 active generation 即自动 seed（disk preflight ≥ max(512MB, 15% DB size)、resumable chunk duty cycle、009 单活跃不变量、legacy Query fallback 全程保持；`collector storage seed-v2 [--force]` 为显式路径）。
+- **B11 生产 generation 修复评估**：两份 production E: copy 受控 `seed-v2 --force`（supersede + reseed + migration 009）→ 修复前后历史结果**逐字节一致**（1,579,954 与当前生产边界 1,602,541 均验证：class 分布/relay relations/lifecycle 计数/published totals 完全一致、stale-active=0、quick_check ok、raw journal 未动）→ 生产 active generation 非 result-tainted，无需紧急 repair；受控 repair 程序记录于 ADR 0010 §2.9。
 
 ### 已实现的正式 UI
 
@@ -130,7 +143,8 @@
 - Phase 3E-1 Go runtime/scheduler mock E2E、Tauri path unit tests、双 binary build 与 Tauri release build 均已完成本地验证；Phase 3E-2A 与 3E-2B1 的 Go ownership/config/protocol/Supervisor tests、Rust parser/path tests、UI tests、三 binary build、Tauri release build、Go subprocess acceptance 与 mock-only Supervisor lifecycle smoke 也已完成本地验证；这些结果不是 GitHub CI PASS。
 - Phase 3E-2B2A：`go test` affected packages、`go vet` affected packages、Rust `cargo fmt --check` / `cargo test`、UI/build 与 Windows NSIS build；`node tools/runtime/run-phase3e2b2a-task-owner.mjs` 与 `node tools/runtime/run-phase3e2b2a-installed-lifecycle.mjs` 均为 PASS，均使用随机 mock/temp identities；这些结果不是 GitHub CI PASS。
 - Phase 3E-2B2B：affected Go tests / `go vet`、Rust tests、90 UI tests、TypeScript/Vite build、Windows NSIS installed product build 与 `node tools/runtime/run-phase3e2b2b-settings-product.mjs` 均为 PASS；acceptance 使用随机 mock/temp identities，输出确认 Secret A → Secret B、autostart false → true、UI-close survival 与 DB preservation；这些结果不是 GitHub CI PASS。
-- Phase 3S：E: 盘生产规模验收全部 PASS（density 97.62% 行削减/字节精确；真实库 seed WAL 峰值 8.5MB、authority 字节不变；crash/cancel/bounded；常数成本 0.42s@50K vs 0.34s@1.57M；30min soak FinalLag=0、LegacyRuns=0、QueueOverload=0、MaxIncremental ~0.14s、WAL 峰值 ~5MB）；生产 C: 库短时 revalidation 完成后 collection 再次停止；Go 全量测试 + vet、UI 90 tests + build、cargo 19 tests、`git diff --check` 本地 PASS；这些结果不是 GitHub CI PASS。
+- Phase 3S：E: 盘生产规模验收全部 PASS（density 97.62% `ConnectionDelta` 零增量行削减/字节精确；真实库 seed WAL 峰值 8.5MB、authority 字节不变；crash/cancel/bounded；常数成本 0.42s@50K vs 0.34s@1.57M；30min soak FinalLag=0、LegacyRuns=0、QueueOverload=0、MaxIncremental ~0.14s、WAL 峰值 ~5MB）；生产 C: 库短时 revalidation 完成后 collection 再次停止；Go 全量测试 + vet、UI 90 tests + build、cargo 19 tests、`git diff --check` 本地 PASS；这些结果不是 GitHub CI PASS。
+- Phase 3S Correctness Closure：`go vet ./...` + `go test ./pkg/... ./test/...` 全部 PASS（新增 reobservation pipeline / lifecycle / generation invariant / disk guard 回归）；E: cardinality gate PASS（1k→10k writer-hold 7.4→38.7ms 有界、prep off-lock 10.1→71.0ms、lag=0）；10min focused concurrency soak PASS（20 incremental runs、FinalLag=0、LegacyRuns=0、QueueOverload=0、WAL 峰值 4.6MB、max incremental 0.020s）；两份 production E: copy 受控 `seed-v2 --force` reseed 与 pre-fix generation 历史结果逐字节一致（1,579,954 / 1,602,541 边界均验证）；这些结果不是 GitHub CI PASS。
 - 本任务正式 runtime 测试使用 `httptest` / mock WebSocket 与隔离临时 SQLite DB；真实 FLClash/Mihomo lifecycle 与 real-data validation 未纳入本阶段正式验收。
 - `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
 - 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller；AST 守卫递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；lifecycle tooling 另有随机 mock URL、temp-dir、E2E-only status file 与 exact-PID cleanup guard。3E-2B1 验收未启动或修改真实 FLClash/Mihomo，未发生真实网络生命周期或 Mihomo 写操作。
@@ -203,4 +217,4 @@
 
 1. 待完整桌面 runtime 条件具备且用户明确安排真实环境后，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
 2. 在完整桌面视觉验收前，UI Design System 继续保持 Draft；之后再按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence。
-3. Phase 3S 已完成生产库迁移与短时 revalidation；如恢复长期常驻采集，由用户明确决定，不自行动恢复。
+3. Phase 3S 正确性收口（11 blocker）已完成并提交；生产库迁移/revalidation 结果保持有效，生产 active generation 无需 repair。如恢复长期常驻采集，由用户明确决定，不自行动恢复。

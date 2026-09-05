@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-09-05 — Phase 3S Correctness Closure (11-blocker review closure)
+
+**Scope:** 独立 review 提出的 11 项 Phase 3S 正确性 blocker 收口：重观测续算、
+v2 lifecycle/temporal-overlap 契约、高基数规模门、writer-lock 契约、generation
+invariant、equivalence 修正、shutdown flush、harness 卷位守卫、只读容量证据与
+disk guard fail-safe、seed 契约文档化、生产 generation 受控修复验证。不恢复
+production collection，不动 Final Visual Acceptance，不启动 Phase 4。
+
+**Completed:**
+
+- B1 tombstone continuation（同 ID+同 Mihomo Start → counter-diff，不同 Start →
+  新 incarnation，全链路 pipeline 回归）；B2 lifecycle 显式 lastObs/terminal
+  契约 + authoritative boundary frame time + relay temporal overlap 修复；
+- B3 cardinality phase（1k vs 10k：writer-hold 7.4→38.7ms 有界 / prep off-lock）；
+  B4 两阶段 chunk + 真实 boundary 返回；B5 migration 009 单活跃 invariant；
+  B6 equivalence fixture 真实非零 DIRECT；B7 shutdown flush 有界 catch-up；
+  B8 harness fail-closed 卷位守卫（永不 C:）；
+- B9 只读容量证据（recurring ~150–190 MiB/h；SamplingResidual 零残差占行数
+  81.6% 但物理 <2%，sparse 设计按证据暂缓）→ 新增 disk guard fail-safe
+  （floor=max(1GiB,15% DB size)，breach 显式 CollectorHealth 证据 + clean stop，
+  Runtime 拒绝低盘启动，永不删除）；density 文案修正为 ConnectionDelta 行削减；
+- B10 automatic background seed 契约（preflight/duty cycle/009 invariant/legacy
+  fallback）文档化；B11 两份 production E: copy 受控 supersede/reseed（含 009）
+  → 修复前后历史结果逐字节一致 → 生产 active generation 无需 repair（ADR 0010 §2.9）。
+
+**Validation state:**
+
+- `go vet` + `go test ./pkg/... ./test/...` 全部 PASS（含新增 reobservation/
+  lifecycle/invariant/disk-guard/cardinality 回归）；E: cardinality gate PASS；
+  受控 reseed `quick_check ok`、journal rows 不变；非 GitHub CI PASS。
+- 10min focused concurrency soak PASS（FinalLag=0、writer-hold 有界、
+  WAL 有界、shutdown flush fresh）。
+
+---
+
 ## 2026-09-05 — Phase 3S Production Storage & Accounting Scale Closure
 
 **Scope:** 在只读 root-cause measurement 确认生产库 97.63% 零增量 delta 行、
@@ -32,8 +67,9 @@
 
 **Validation state:**
 
-- E: 盘（`proxylens-scale-acceptance`）全部 PASS：density 97.62% 行削减且
-  字节和精确；真实生产库 E-copy seed（1.55M events / 61 chunks / 456.6s /
+- E: 盘（`proxylens-scale-acceptance`）全部 PASS：density 97.62% `ConnectionDelta`
+  零增量行削减（非整体 journal 行数削减比例）且字节和精确；真实生产库 E-copy seed
+  （1.55M events / 61 chunks / 456.6s /
   WAL 峰值 8.5MB / authority 字节不变）；crash/cancel/boundary/checkpoint
   竞争/失败清理有界；常数成本 0.42s@50K vs 0.34s@1.57M；30min soak 全门限
   PASS（FinalLag=0、LegacyRuns=0、QueueOverload=0、MaxIncremental ~0.14s、
