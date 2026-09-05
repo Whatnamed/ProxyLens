@@ -334,20 +334,19 @@ func advanceSeed(ctx context.Context, db *sql.DB, notes string, maxEvents int64)
 	}
 }
 
-// seedPreflightFreeFloor is the absolute minimum free space required for a
-// full v2 seed regardless of database size.
-const seedPreflightFreeFloor = 512 << 20
+// seedPreflightFreeFloor is the absolute minimum free space required before
+// writing derived state, aligned with the DiskGuard stop floor.
+const seedPreflightFreeFloor = DiskGuardStopFloorBytes
 
-// seedPreflightDBSizeRatio is the estimated derived-state growth of a full
-// seed relative to the database file size. Production measurement (Phase 3S
-// revalidation: +205MB derived on a 5.2GB authority DB) observed ~4%; the
-// estimate keeps a safety factor of roughly 3.75x.
-const seedPreflightDBSizeRatio = 15
+// seedPreflightDBSizeRatio is the estimated derived-state growth relative to
+// the database file size, aligned with the DiskGuard ratio floor.
+const seedPreflightDBSizeRatio = DiskGuardDBSizeRatioFloor
 
 // checkSeedDiskPreflight verifies the volume holding the database can absorb
-// the derived-state growth of a full seed: free space must be at least
-// max(512MB, 15% of the current database file size). Unknown free space
-// (non-Windows platform, unstatable path) never blocks the seed.
+// the derived-state growth of accounting: free space must be at least
+// max(DiskGuardStopFloorBytes, 15% of the current database file size).
+// Unknown free space (non-Windows platform, unstatable path) never blocks
+// accounting.
 func checkSeedDiskPreflight(ctx context.Context, db *sql.DB) error {
 	var file sql.NullString
 	if err := db.QueryRowContext(ctx, `PRAGMA database_list;`).Scan(new(any), new(any), &file); err != nil || !file.Valid || file.String == "" {
@@ -694,13 +693,14 @@ type classChange struct {
 
 // incrementalPrep is the read-only result of one chunk's preparation phase.
 type incrementalPrep struct {
-	processed      int64
-	updates        map[connKey]*connStateUpdate
-	affectedGroups []connGroup
-	classChanges   []classChange
-	relations      []RelayRelationRecord
-	closureConns   int
-	accounted      *accountedPlan
+	processed           int64
+	updates             map[connKey]*connStateUpdate
+	affectedGroups      []connGroup
+	classChanges        []classChange
+	relations           []RelayRelationRecord
+	relationRefreshKeys []connKey
+	closureConns        int
+	accounted           *accountedPlan
 }
 
 func advanceIncrementalChunk(ctx context.Context, db *sql.DB, gen *AccountingGeneration, notes string, maxEvents int64) (*AccountingRunRecord, error) {
@@ -720,6 +720,10 @@ func advanceIncrementalChunk(ctx context.Context, db *sql.DB, gen *AccountingGen
 			SourceJournalSequenceMax: &from, Notes: notes + " (no new evidence)",
 		}, nil
 	}
+	if err := checkSeedDiskPreflight(ctx, db); err != nil {
+		return nil, fmt.Errorf("incremental advance aborted: %w", err)
+	}
+
 
 	prepStart := time.Now()
 	prep, err := prepareIncrementalChunk(ctx, db, gen.GenerationID, from, to)
@@ -775,7 +779,7 @@ func advanceIncrementalChunk(ctx context.Context, db *sql.DB, gen *AccountingGen
 		}
 
 		// 3. Persist the closure candidates' relay relation decisions.
-		if err := applyRelayRelationsV2(ctx, tx, gen.GenerationID, prep.relations); err != nil {
+		if err := applyRelayRelationsV2(ctx, tx, gen.GenerationID, prep.relationRefreshKeys, prep.relations); err != nil {
 			return err
 		}
 
@@ -966,6 +970,27 @@ func prepareIncrementalChunk(ctx context.Context, db *sql.DB, generationID strin
 		classMap[k] = class
 	}
 
+	// Bounded relation-refresh key set: connections in the closure that were
+	// previously candidates (may hold stale relation records) or are candidates
+	// in this chunk's new relation decisions.
+	refreshKeyMap := make(map[connKey]struct{})
+	for _, rel := range prep.relations {
+		refreshKeyMap[connKey{
+			sessionID:    rel.CandidateSessionID,
+			epochID:      rel.CandidateEpochID,
+			connectionID: rel.CandidateConnectionID,
+		}] = struct{}{}
+	}
+	for k := range closure {
+		if old, hasPrior := priorClass[k]; hasPrior && old != ClassUnique {
+			refreshKeyMap[k] = struct{}{}
+		}
+	}
+	prep.relationRefreshKeys = make([]connKey, 0, len(refreshKeyMap))
+	for k := range refreshKeyMap {
+		prep.relationRefreshKeys = append(prep.relationRefreshKeys, k)
+	}
+
 	// Accounted insert plan for the range's nonzero traffic evidence.
 	prep.accounted, err = buildAccountedPlan(trafficItems, classMap)
 	if err != nil {
@@ -1045,7 +1070,14 @@ func frameAlignedCut(ctx context.Context, db *sql.DB, from, boundary, maxEvents 
 	if candidate <= from {
 		return from, nil
 	}
-	return extendCutToFrameEnd(ctx, db, candidate, boundary)
+	to, err := extendCutToFrameEnd(ctx, db, candidate, boundary)
+	if err != nil {
+		return 0, err
+	}
+	if to < from {
+		return from, nil
+	}
+	return to, nil
 }
 
 // frameAlignedIncrementalCut captures the current journal max and extends the
@@ -1081,10 +1113,78 @@ func extendCutToFrameEnd(ctx context.Context, db *sql.DB, candidate, boundary in
 	`, candidate, sessID, frameSeq).Scan(&frameEnd); err != nil {
 		return 0, err
 	}
+
+	// Verify whether the candidate frame has completed emitting all its events.
+	// If the cut lands on an in-progress frame whose completion evidence has
+	// not yet committed, do not publish into the middle of the frame; step back
+	// to before this frame so the frame is published atomically when complete.
+	complete, err := isFrameComplete(ctx, db, sessID, frameSeq, frameEnd)
+	if err != nil {
+		return 0, fmt.Errorf("failed to verify frame completion: %w", err)
+	}
+	if !complete {
+		var frameStart int64
+		if err := db.QueryRowContext(ctx, `
+			SELECT COALESCE(MIN(journal_sequence), ?) FROM event_journal
+			WHERE session_id = ? AND frame_sequence = ?;
+		`, candidate, sessID, frameSeq).Scan(&frameStart); err != nil {
+			return 0, err
+		}
+		safeEnd := frameStart - 1
+		if safeEnd < 0 {
+			safeEnd = 0
+		}
+		return safeEnd, nil
+	}
+
 	if frameEnd > boundary {
 		frameEnd = boundary
 	}
 	return frameEnd, nil
+}
+
+// isFrameComplete determines whether a journal frame (identified by sessionID and frameSeq)
+// has finished emitting all its events. A frame is complete if:
+// 1. A newer frame exists in the same session, or an event from a later session exists.
+// 2. The session itself is no longer running (closed or interrupted).
+// 3. The frame contains definitive completion evidence: SamplingResidual (steady-state frames),
+//    or frame/gap closure markers (MonitoringGapClosed, MonitoringGapOpened).
+func isFrameComplete(ctx context.Context, db *sql.DB, sessID string, frameSeq int64, frameEnd int64) (bool, error) {
+	// 1. Has a newer frame in the same session or a later session started?
+	var hasNewer int
+	if err := db.QueryRowContext(ctx, `
+		SELECT 1 FROM event_journal
+		WHERE (session_id = ? AND frame_sequence > ?) OR journal_sequence > ?
+		LIMIT 1;
+	`, sessID, frameSeq, frameEnd).Scan(&hasNewer); err == nil && hasNewer == 1 {
+		return true, nil
+	}
+
+	// 2. If the session is NOT actively running (e.g. closed, interrupted, or an
+	// offline/fixture session with no collector_sessions record), there is no live
+	// writer in flight; all recorded events are complete.
+	var status string
+	err := db.QueryRowContext(ctx, `
+		SELECT status FROM collector_sessions WHERE session_id = ?;
+	`, sessID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && status != string(SessionStatusRunning)) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to query session status: %w", err)
+	}
+	// 3. Check for completion evidence within this frame.
+	var hasCompletion int
+	if err := db.QueryRowContext(ctx, `
+		SELECT 1 FROM event_journal
+		WHERE session_id = ? AND frame_sequence = ?
+		  AND event_type IN ('SamplingResidual', 'MonitoringGapClosed', 'MonitoringGapOpened')
+		LIMIT 1;
+	`, sessID, frameSeq).Scan(&hasCompletion); err == nil && hasCompletion == 1 {
+		return true, nil
+	}
+
+	return false, nil
 }
 
 // rowQuerier abstracts *sql.DB and *sql.Tx for read-only helpers so the same
@@ -1413,7 +1513,7 @@ func loadConnStateClosure(ctx context.Context, db *sql.DB, generationID string, 
 	out := make(map[connKey]*connStateRow)
 	for _, g := range groups {
 		rows, err := db.QueryContext(ctx, `
-			SELECT connection_id, `+connStateRowColumns+`
+			SELECT session_id, epoch_id, connection_id, `+connStateRowColumns+`
 			FROM accounting_conn_state_v2
 			WHERE generation_id = ? AND session_id = ? AND epoch_id = ?
 			  AND (disappeared_at IS NULL OR disappeared_at >= ? OR last_event_at >= ?
@@ -1422,23 +1522,9 @@ func loadConnStateClosure(ctx context.Context, db *sql.DB, generationID string, 
 		if err != nil {
 			return nil, err
 		}
-		for rows.Next() {
-			var sessID, connID string
-			var epochID int
-			var r connStateRow
-			if err := rows.Scan(&connID, &r.firstObservedAt, &r.lastEventAt, &r.disappearedAt,
-				&r.route, &r.attr, &r.process, &r.host, &r.destIP, &r.rule, &r.rulePayload, &r.chainsJSON,
-				&r.monUp, &r.monDown, &r.accountingClass); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			out[connKey{sessionID: sessID, epochID: epochID, connectionID: connID}] = &r
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
+		if err := collectConnStateRows(rows, out); err != nil {
 			return nil, err
 		}
-		rows.Close()
 	}
 	return out, nil
 }
@@ -1740,9 +1826,13 @@ func applyClassChanges(ctx context.Context, tx *sql.Tx, generationID string, cha
 	defer stmt.Close()
 	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, ch := range changes {
-		if _, err := stmt.ExecContext(ctx, string(ch.newClass), nowStr, generationID,
-			ch.key.sessionID, ch.key.epochID, ch.key.connectionID); err != nil {
+		res, err := stmt.ExecContext(ctx, string(ch.newClass), nowStr, generationID,
+			ch.key.sessionID, ch.key.epochID, ch.key.connectionID)
+		if err != nil {
 			return fmt.Errorf("failed to persist class change for %s: %w", ch.key.connectionID, err)
+		}
+		if ra, err := res.RowsAffected(); err == nil && ra == 0 {
+			return fmt.Errorf("class change affected 0 rows for key %v (generation %s)", ch.key, generationID)
 		}
 	}
 	return nil
@@ -1751,8 +1841,8 @@ func applyClassChanges(ctx context.Context, tx *sql.Tx, generationID string, cha
 // applyRelayRelationsV2 replaces the relay relation records of the closure
 // candidates. Non-closure candidates keep their previous records, so the write
 // scope stays bounded.
-func applyRelayRelationsV2(ctx context.Context, tx *sql.Tx, generationID string, relations []RelayRelationRecord) error {
-	if len(relations) == 0 {
+func applyRelayRelationsV2(ctx context.Context, tx *sql.Tx, generationID string, refreshKeys []connKey, relations []RelayRelationRecord) error {
+	if len(refreshKeys) == 0 && len(relations) == 0 {
 		return nil
 	}
 	delStmt, err := tx.PrepareContext(ctx, `
@@ -1763,6 +1853,20 @@ func applyRelayRelationsV2(ctx context.Context, tx *sql.Tx, generationID string,
 		return err
 	}
 	defer delStmt.Close()
+
+	// 1. Clear previous relation records for candidates in the closure refresh set.
+	for _, k := range refreshKeys {
+		if _, err := delStmt.ExecContext(ctx, generationID,
+			k.sessionID, k.epochID, k.connectionID); err != nil {
+			return err
+		}
+	}
+
+	if len(relations) == 0 {
+		return nil
+	}
+
+	// 2. Insert current relation decisions.
 	insStmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO relay_relations_v2 (
 			generation_id, candidate_session_id, candidate_epoch_id, candidate_connection_id,
@@ -1776,10 +1880,6 @@ func applyRelayRelationsV2(ctx context.Context, tx *sql.Tx, generationID string,
 	defer insStmt.Close()
 
 	for _, rel := range relations {
-		if _, err := delStmt.ExecContext(ctx, generationID,
-			rel.CandidateSessionID, rel.CandidateEpochID, rel.CandidateConnectionID); err != nil {
-			return err
-		}
 		rel.RunID = generationID
 		var logSess, logConn sql.NullString
 		var logEpoch sql.NullInt64

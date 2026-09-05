@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
 )
 
 // bulkInsertJournalRows appends n synthetic nonzero ConnectionDelta journal
@@ -390,5 +391,364 @@ func TestIncrementalConstantCost(t *testing.T) {
 	t.Logf("incremental duration: small-history(10k)=%v large-history(300k)=%v ratio=%.1fx", small, large, ratio)
 	if ratio >= 20 {
 		t.Fatalf("large history made a small incremental batch %.0fx slower (small=%v large=%v)", ratio, small, large)
+	}
+}
+
+// TestIncrementalRelayMatchViaHistoricalClosure proves the historical closure
+// contract: a previously seeded, still-active connection A (silent in the
+// current chunk) is paired with a newly dirty connection B via closure
+// loading, without requiring A to be dirty in this chunk.
+func TestIncrementalRelayMatchViaHistoricalClosure(t *testing.T) {
+	ctx := context.Background()
+	base := fixtureBase()
+	dbPath, cleanup := createAccountingTestDB(t)
+	defer cleanup()
+	db, closeDB := runEquivalenceDB(t, dbPath)
+	defer closeDB()
+
+	const sess = "sess-closure-match"
+	s, err := OpenSQLiteSink(ctx, dbPath, sess, "v-closure")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyChains := []string{"NodeA", "GroupX"}
+
+	// Frame 1: Seed candidate A alone.
+	ts1 := base.Add(time.Second)
+	emitEquivalenceFrame(t, s, 1, ts1, func(f, e int64) []*types.CollectorEvent {
+		return []*types.CollectorEvent{
+			evNew("cand-A", 1000, 2000, 1000, 2000, types.RouteProxy, types.ClassRelayCandidate, fixtureCandMeta, "", proxyChains),
+		}
+	})
+
+	// Seed the generation up to frame 1.
+	if _, err := AdvanceAccountingV2(ctx, db, "seed A", 0); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	// Verify candidate A is initial missing attribution in state table.
+	var classA string
+	if err := db.QueryRowContext(ctx, `
+		SELECT accounting_class FROM accounting_conn_state_v2
+		WHERE connection_id = 'cand-A';
+	`).Scan(&classA); err != nil {
+		t.Fatalf("failed to query cand-A class: %v", err)
+	}
+	if classA != string(ClassMissingAttribution) {
+		t.Fatalf("expected cand-A to start as missing_attribution, got %s", classA)
+	}
+
+	// Frame 2: Incremental chunk with logical B ONLY.
+	// Candidate A is completely silent (no delta, no presence, no events).
+	ts2 := base.Add(2 * time.Second)
+	emitEquivalenceFrame(t, s, 2, ts2, func(f, e int64) []*types.CollectorEvent {
+		return []*types.CollectorEvent{
+			evNew("log-B", 1000, 2000, 1000, 2000, types.RouteProxy, types.ClassKnownApplication, fixtureProxyMeta, "MATCH", proxyChains),
+		}
+	})
+
+	// Run incremental accounting.
+	if _, err := AdvanceAccountingV2(ctx, db, "incremental B", 0); err != nil {
+		t.Fatalf("incremental failed: %v", err)
+	}
+
+	// A must now be reclassified as confirmed_relay_duplicate via historical closure.
+	if err := db.QueryRowContext(ctx, `
+		SELECT accounting_class FROM accounting_conn_state_v2
+		WHERE connection_id = 'cand-A';
+	`).Scan(&classA); err != nil {
+		t.Fatalf("failed to query updated cand-A class: %v", err)
+	}
+	if classA != string(ClassConfirmedRelayDuplicate) {
+		t.Fatalf("cand-A should have been reclassified as confirmed_relay_duplicate, got %s", classA)
+	}
+
+	// A relation must be recorded in relay_relations_v2 pairing cand-A to log-B.
+	var relLogID, relStatus string
+	if err := db.QueryRowContext(ctx, `
+		SELECT logical_connection_id, status FROM relay_relations_v2
+		WHERE candidate_connection_id = 'cand-A';
+	`).Scan(&relLogID, &relStatus); err != nil {
+		t.Fatalf("expected relay relation for cand-A: %v", err)
+	}
+	if relLogID != "log-B" || relStatus != "confirmed" {
+		t.Fatalf("unexpected relay relation: logical=%s status=%s", relLogID, relStatus)
+	}
+}
+
+// TestIncrementalStaleRelayRelationClearedOnClassChange verifies that when a
+// candidate connection X becomes logical/unique in a later incremental chunk
+// (e.g. via MetadataUpdated), its prior row in relay_relations_v2 is cleared
+// and historical accounted bytes are corrected back to unique.
+func TestIncrementalStaleRelayRelationClearedOnClassChange(t *testing.T) {
+	ctx := context.Background()
+	base := fixtureBase()
+	dbPath, cleanup := createAccountingTestDB(t)
+	defer cleanup()
+	db, closeDB := runEquivalenceDB(t, dbPath)
+	defer closeDB()
+
+	const sess = "sess-stale-relation"
+	s, err := OpenSQLiteSink(ctx, dbPath, sess, "v-stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyChains := []string{"NodeA", "GroupX"}
+
+	// Frame 1: Candidate X and Logical L appear together.
+	ts1 := base.Add(time.Second)
+	emitEquivalenceFrame(t, s, 1, ts1, func(f, e int64) []*types.CollectorEvent {
+		return []*types.CollectorEvent{
+			evNew("cand-X", 1000, 2000, 1000, 2000, types.RouteProxy, types.ClassRelayCandidate, fixtureCandMeta, "", proxyChains),
+			evNew("log-L", 1000, 2000, 1000, 2000, types.RouteProxy, types.ClassKnownApplication, fixtureProxyMeta, "MATCH", proxyChains),
+		}
+	})
+
+	// Seed initial generation.
+	if _, err := AdvanceAccountingV2(ctx, db, "seed X and L", 0); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	// Candidate X must be classified as confirmed_relay_duplicate.
+	var classX string
+	if err := db.QueryRowContext(ctx, `SELECT accounting_class FROM accounting_conn_state_v2 WHERE connection_id = 'cand-X';`).Scan(&classX); err != nil {
+		t.Fatal(err)
+	}
+	if classX != string(ClassConfirmedRelayDuplicate) {
+		t.Fatalf("expected cand-X to be confirmed_relay_duplicate initially, got %s", classX)
+	}
+
+	// relay_relations_v2 must have an entry for cand-X.
+	var relCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM relay_relations_v2 WHERE candidate_connection_id = 'cand-X';`).Scan(&relCount); err != nil {
+		t.Fatal(err)
+	}
+	if relCount != 1 {
+		t.Fatalf("expected 1 relay relation for cand-X, got %d", relCount)
+	}
+
+	// Record generation's published accounted totals before the change.
+	var genBefore AccountingGeneration
+	if err := db.QueryRowContext(ctx, `
+		SELECT published_accounted_upload, published_accounted_download
+		FROM accounting_generations WHERE status = 'active';
+	`).Scan(&genBefore.PublishedAccountedUpload, &genBefore.PublishedAccountedDownload); err != nil {
+		t.Fatal(err)
+	}
+	// Because cand-X was confirmed duplicate, only log-L (1000 / 2000) was accounted.
+	if genBefore.PublishedAccountedUpload != 1000 || genBefore.PublishedAccountedDownload != 2000 {
+		t.Fatalf("unexpected accounted totals before change: up=%d down=%d",
+			genBefore.PublishedAccountedUpload, genBefore.PublishedAccountedDownload)
+	}
+
+	// Frame 2: cand-X receives MetadataUpdated providing process + rule,
+	// promoting it to an independent logical connection (unique).
+	ts2 := base.Add(2 * time.Second)
+	emitEquivalenceFrame(t, s, 2, ts2, func(f, e int64) []*types.CollectorEvent {
+		return []*types.CollectorEvent{
+			{
+				Type:         types.EventConnectionMetadataUpdated,
+				Timestamp:    ts2,
+				ConnectionID: "cand-X",
+				Metadata: types.RawMetadata{
+					Network: "tcp",
+					Process: "promoted.exe",
+					Host:    "promoted.example.com",
+				},
+				Rule:        "DOMAIN-KEYWORD,promoted",
+				RulePayload: "promoted",
+				Chains:      proxyChains,
+				Route:       types.RouteProxy,
+			},
+		}
+	})
+
+	// Run incremental accounting chunk.
+	if _, err := AdvanceAccountingV2(ctx, db, "incremental promote X", 0); err != nil {
+		t.Fatalf("incremental chunk failed: %v", err)
+	}
+
+	// cand-X must now be unique.
+	if err := db.QueryRowContext(ctx, `SELECT accounting_class FROM accounting_conn_state_v2 WHERE connection_id = 'cand-X';`).Scan(&classX); err != nil {
+		t.Fatal(err)
+	}
+	if classX != string(ClassUnique) {
+		t.Fatalf("expected cand-X to become unique after MetadataUpdated, got %s", classX)
+	}
+
+	// The stale relay_relations_v2 entry for cand-X MUST be gone.
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM relay_relations_v2 WHERE candidate_connection_id = 'cand-X';`).Scan(&relCount); err != nil {
+		t.Fatal(err)
+	}
+	if relCount != 0 {
+		t.Fatalf("expected stale relay_relations_v2 entry for cand-X to be deleted, got %d rows", relCount)
+	}
+
+	// Historical accounted totals must now include cand-X's 1000/2000 bytes.
+	var genAfter AccountingGeneration
+	if err := db.QueryRowContext(ctx, `
+		SELECT published_accounted_upload, published_accounted_download
+		FROM accounting_generations WHERE status = 'active';
+	`).Scan(&genAfter.PublishedAccountedUpload, &genAfter.PublishedAccountedDownload); err != nil {
+		t.Fatal(err)
+	}
+	if genAfter.PublishedAccountedUpload != 2000 || genAfter.PublishedAccountedDownload != 4000 {
+		t.Fatalf("expected accounted totals to be corrected to 2000/4000, got up=%d down=%d",
+			genAfter.PublishedAccountedUpload, genAfter.PublishedAccountedDownload)
+	}
+}
+
+// TestIncrementalBoundaryRefusesIncompleteFrame verifies that when an in-progress
+// frame has committed some events but its completion evidence (SamplingResidual)
+// has not yet committed, incremental boundary selection refuses to advance into
+// the middle of the incomplete frame. Once the frame completes, the boundary
+// advances to cover the whole frame.
+func TestIncrementalBoundaryRefusesIncompleteFrame(t *testing.T) {
+	ctx := context.Background()
+	base := fixtureBase()
+	dbPath, cleanup := createAccountingTestDB(t)
+	defer cleanup()
+	db, closeDB := runEquivalenceDB(t, dbPath)
+	defer closeDB()
+
+	sess := equivalenceFixtureSession
+	s, err := OpenSQLiteSink(ctx, dbPath, sess, "v-boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyChains := []string{"NodeA", "GroupX"}
+
+	// Frame 1: Complete frame with ConnectionBootstrap and SamplingResidual.
+	ts1 := base.Add(time.Second)
+	emitEquivalenceFrame(t, s, 1, ts1, func(f, e int64) []*types.CollectorEvent {
+		return []*types.CollectorEvent{
+			evNew("conn-1", 100, 200, 100, 200, types.RouteProxy, types.ClassKnownApplication, fixtureProxyMeta, "MATCH", proxyChains),
+			{
+				Type:      types.EventSamplingResidual,
+				Timestamp: ts1,
+				Details: map[string]any{
+					"residualUpload":   int64(0),
+					"residualDownload": int64(0),
+				},
+			},
+		}
+	})
+
+	// Seed initial generation to publish frame 1.
+	for {
+		gen, genErr := GetActiveAccountingGeneration(ctx, db)
+		if genErr == nil && gen != nil {
+			break
+		}
+		if _, err := AdvanceAccountingV2(ctx, db, "seed frame 1", 0); err != nil {
+			t.Fatalf("seed failed: %v", err)
+		}
+	}
+
+	gen, err := GetActiveAccountingGeneration(ctx, db)
+	if err != nil || gen == nil {
+		t.Fatalf("expected active generation, got gen=%v err=%v", gen, err)
+	}
+	p1 := gen.PublishedJournalSequence
+	if p1 <= 0 {
+		t.Fatalf("expected positive published sequence, got %d", p1)
+	}
+
+	// Frame 2: Partially emitted frame.
+	// Commit a ConnectionDelta event, but DO NOT commit the SamplingResidual yet.
+	ts2 := base.Add(2 * time.Second)
+	evIncomplete := &types.CollectorEvent{
+		EventID:                 "ev-f2-delta",
+		SessionID:               sess,
+		EpochID:                 1,
+		FrameSequence:           2,
+		EventSequence:           1,
+		Type:                    types.EventConnectionDelta,
+		Timestamp:               ts2,
+		ConnectionID:            "conn-1",
+		ObservedUploadCounter:   200,
+		ObservedDownloadCounter: 400,
+		DeltaUpload:             100,
+		DeltaDownload:           200,
+		Route:                   types.RouteProxy,
+		AttributionClass:        types.ClassKnownApplication,
+		Metadata:                fixtureProxyMeta,
+		Rule:                    "MATCH",
+		Chains:                  proxyChains,
+	}
+	if err := s.Emit(evIncomplete); err != nil {
+		t.Fatalf("failed to emit incomplete frame event: %v", err)
+	}
+
+	// 1. Calling frameAlignedIncrementalCut must refuse to advance into Frame 2!
+	cutTo, currentMax, err := frameAlignedIncrementalCut(ctx, db, p1, 50000)
+	if err != nil {
+		t.Fatalf("frameAlignedIncrementalCut failed: %v", err)
+	}
+	if currentMax <= p1 {
+		t.Fatalf("expected currentMax (%d) > p1 (%d)", currentMax, p1)
+	}
+	if cutTo != p1 {
+		t.Fatalf("cutTo advanced into incomplete Frame 2: got %d, want %d (p1)", cutTo, p1)
+	}
+
+	// 2. AdvanceAccountingV2 must report a no-op (no new evidence) and NOT advance published boundary.
+	run, err := AdvanceAccountingV2(ctx, db, "tick during incomplete frame", 0)
+	if err != nil {
+		t.Fatalf("AdvanceAccountingV2 failed: %v", err)
+	}
+	if *run.SourceJournalSequenceMax != p1 {
+		t.Fatalf("published boundary advanced into incomplete frame: got %d, want %d",
+			*run.SourceJournalSequenceMax, p1)
+	}
+
+	// 3. Now complete Frame 2 by emitting its final SamplingResidual evidence.
+	evResidual := &types.CollectorEvent{
+		EventID:       "ev-f2-residual",
+		SessionID:     sess,
+		EpochID:       1,
+		FrameSequence: 2,
+		EventSequence: 2,
+		Type:          types.EventSamplingResidual,
+		Timestamp:     ts2,
+		Details: map[string]any{
+			"globalUploadDelta":      int64(100),
+			"globalDownloadDelta":    int64(200),
+			"uniqueObservedUpload":   int64(100),
+			"uniqueObservedDownload": int64(200),
+			"residualUpload":         int64(0),
+			"residualDownload":       int64(0),
+		},
+	}
+	if err := s.Emit(evResidual); err != nil {
+		t.Fatalf("failed to emit completion evidence: %v", err)
+	}
+
+	// 4. Now frameAlignedIncrementalCut must advance to the complete Frame 2 end!
+	var f2MaxSeq int64
+	if err := db.QueryRowContext(ctx, `
+		SELECT MAX(journal_sequence) FROM event_journal WHERE session_id = ? AND frame_sequence = 2;
+	`, sess).Scan(&f2MaxSeq); err != nil {
+		t.Fatal(err)
+	}
+
+	cutTo, currentMax, err = frameAlignedIncrementalCut(ctx, db, p1, 50000)
+	if err != nil {
+		t.Fatalf("frameAlignedIncrementalCut after completion failed: %v", err)
+	}
+	if cutTo != f2MaxSeq {
+		t.Fatalf("cutTo after completion did not reach frame end: got %d, want %d", cutTo, f2MaxSeq)
+	}
+
+	// 5. AdvanceAccountingV2 must successfully advance the boundary to f2MaxSeq!
+	run, err = AdvanceAccountingV2(ctx, db, "tick after frame completed", 0)
+	if err != nil {
+		t.Fatalf("AdvanceAccountingV2 failed after completion: %v", err)
+	}
+	if *run.SourceJournalSequenceMax != f2MaxSeq {
+		t.Fatalf("expected boundary to advance to %d, got %d", f2MaxSeq, *run.SourceJournalSequenceMax)
 	}
 }

@@ -44,6 +44,23 @@ func (e *overlapEmitter) emit(ts time.Time, ev *types.CollectorEvent) {
 	if err := e.s.Emit(ev); err != nil {
 		e.t.Fatalf("emit failed: %v", err)
 	}
+
+	// Emit frame completion evidence if the emitted event is a connection event.
+	if ev.Type != types.EventSamplingResidual {
+		e.seq++
+		res := &types.CollectorEvent{
+			SessionID:     e.session,
+			EpochID:       1,
+			FrameSequence: e.frame,
+			EventSequence: e.seq,
+			Type:          types.EventSamplingResidual,
+			Timestamp:     ts,
+		}
+		res.GenerateDeterministicEventID()
+		if err := e.s.Emit(res); err != nil {
+			e.t.Fatalf("emit residual failed: %v", err)
+		}
+	}
 }
 
 func (e *overlapEmitter) nextFrame() time.Time {

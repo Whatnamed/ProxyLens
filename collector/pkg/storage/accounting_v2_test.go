@@ -39,6 +39,13 @@ type hourlyKey struct{ bucket, dimType, dimKey, route string }
 func emitEquivalenceFrame(t *testing.T, s *SQLiteEventSink, frame int64, ts time.Time, emit func(frameSeq int64, evSeq int64) []*types.CollectorEvent) {
 	t.Helper()
 	events := emit(frame, 0)
+	hasResidual := false
+	for _, e := range events {
+		if e.Type == types.EventSamplingResidual {
+			hasResidual = true
+			break
+		}
+	}
 	for i, e := range events {
 		e.SessionID = equivalenceFixtureSession
 		e.EpochID = 1
@@ -50,6 +57,21 @@ func emitEquivalenceFrame(t *testing.T, s *SQLiteEventSink, frame int64, ts time
 		e.GenerateDeterministicEventID()
 		if err := s.Emit(e); err != nil {
 			t.Fatalf("emit frame %d event %d failed: %v", frame, i+1, err)
+		}
+	}
+	if !hasResidual {
+		res := &types.CollectorEvent{
+			SessionID:     equivalenceFixtureSession,
+			EpochID:       1,
+			FrameSequence: frame,
+			EventSequence: int64(len(events) + 1),
+			Type:          types.EventSamplingResidual,
+			Timestamp:     ts,
+			Details:       map[string]any{"residualUpload": int64(0), "residualDownload": int64(0)},
+		}
+		res.GenerateDeterministicEventID()
+		if err := s.Emit(res); err != nil {
+			t.Fatalf("emit frame %d residual failed: %v", frame, err)
 		}
 	}
 }

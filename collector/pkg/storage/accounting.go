@@ -232,7 +232,7 @@ func reconcileBoundedRelayRelations(ctx context.Context, db *sql.DB, runID strin
 	// and health events without connections are not frame observations and
 	// must not extend presence into unobserved time.
 	rows, err := db.QueryContext(ctx, `
-		SELECT session_id, epoch_id, connection_id, event_type, observed_at, event_json
+		SELECT session_id, epoch_id, COALESCE(connection_id, ''), event_type, observed_at, event_json
 		FROM event_journal
 		WHERE journal_sequence <= ? AND ((connection_id IS NOT NULL AND connection_id != '') OR event_type = 'SamplingResidual')
 		ORDER BY frame_sequence ASC, event_sequence ASC;
