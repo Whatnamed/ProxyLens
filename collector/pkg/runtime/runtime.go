@@ -224,18 +224,45 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 	}
 
 	// Final accounting flush: the collector writer has stopped, so the
-	// journal is stable. Publish the remaining tail — session-end
-	// disappearances included — so a clean stop leaves zero accounting lag
-	// instead of deferring the last interval to the next start. Bounded and
-	// idempotent; a failure is health evidence and resumes on next start.
+	// journal is stable. One chunk is not generally enough for zero lag, so
+	// the flush catches up in bounded cycles within a fixed shutdown budget
+	// until the generation is fresh (this also drives a still-running seed to
+	// completion). If the budget expires the stop stays clean: the remaining
+	// lag is explicit health evidence and resumes on next start — the runtime
+	// never blocks shutdown indefinitely on accounting.
 	flushCtx, flushCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	flushRec, flushErr := storage.AdvanceAccountingV2(flushCtx, db, "runtime shutdown flush", 0)
+	flushStart := time.Now()
+	flushCycles := 0
+	var flushErr error
+	for {
+		if flushCtx.Err() != nil {
+			flushErr = flushCtx.Err()
+			break
+		}
+		if _, err := storage.AdvanceAccountingV2(flushCtx, db, "runtime shutdown flush", 0); err != nil {
+			flushErr = err
+			break
+		}
+		flushCycles++
+		fresh, ferr := storage.NewAnalyticsService(db).GetAccountingFreshness(flushCtx)
+		if ferr != nil {
+			flushErr = ferr
+			break
+		}
+		if fresh.LagEvents == 0 || flushCycles >= 64 {
+			// The 64-cycle cap only guards against a pathological no-progress
+			// inconsistency between publish and freshness; every cycle is
+			// itself bounded by the chunk budget.
+			break
+		}
+	}
 	flushCancel()
 	if flushErr != nil {
-		r.logger("[runtime] shutdown accounting flush failed (resumes next start): %v", flushErr)
-	} else if flushRec != nil {
-		r.logger("[runtime] shutdown accounting flush completed events=%d status=%s",
-			flushRec.SourceJournalEventCount, flushRec.Status)
+		r.logger("[runtime] shutdown accounting flush incomplete after %d cycles in %.1fs (resumes next start): %v",
+			flushCycles, time.Since(flushStart).Seconds(), flushErr)
+	} else {
+		r.logger("[runtime] shutdown accounting flush fresh after %d cycles (%.1fs)",
+			flushCycles, time.Since(flushStart).Seconds())
 	}
 
 	// Safe maintenance boundary: scheduler and collector writer have both
