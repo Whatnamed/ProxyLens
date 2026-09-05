@@ -182,7 +182,7 @@ func runCollector(args []string) {
 
 func runStorageCommand(args []string) {
 	if len(args) == 0 {
-		fmt.Println("Usage: collector storage <inspect|gaps|rebuild|cleanup|integrity> --db <path> [flags]")
+		fmt.Println("Usage: collector storage <inspect|gaps|rebuild|cleanup|integrity|seed-v2> --db <path> [flags]")
 		os.Exit(1)
 	}
 
@@ -303,6 +303,71 @@ func runStorageCommand(args []string) {
 				idx+1, g.Source, g.StartedAt.Format(time.RFC3339), endStr, durStr, g.Reason)
 		}
 
+	case "seed-v2":
+		fs := flag.NewFlagSet("collector storage seed-v2", flag.ContinueOnError)
+		dbPath := fs.String("db", "", "Path to SQLite database file")
+		force := fs.Bool("force", false, "Supersede an existing active generation and reseed")
+		chunkSize := fs.Int64("chunk-events", 100000, "Journal events per seed chunk")
+		if err := fs.Parse(subargs); err != nil || *dbPath == "" {
+			fmt.Fprintf(os.Stderr, "Usage: collector storage seed-v2 --db <path> [--force] [--chunk-events <n>]\n")
+			os.Exit(1)
+		}
+		ctx := context.Background()
+		db, err := storage.OpenDB(ctx, *dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[FATAL] failed to open database: %v\n", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
+		if active, genErr := storage.GetActiveAccountingGeneration(ctx, db); genErr == nil && active != nil {
+			if !*force {
+				fmt.Fprintf(os.Stderr, "[FATAL] generation %s is already active; use --force to supersede and reseed\n", active.GenerationID)
+				os.Exit(1)
+			}
+			fmt.Printf("Superseding active generation %s...\n", active.GenerationID)
+			if err := storage.SupersedeActiveGeneration(ctx, db); err != nil {
+				fmt.Fprintf(os.Stderr, "[FATAL] failed to supersede active generation: %v\n", err)
+				os.Exit(1)
+			}
+		}
+
+		fmt.Printf("Seeding incremental accounting v2 generation from %s...\n", *dbPath)
+		chunks := 0
+		for {
+			if ctx.Err() != nil {
+				fmt.Fprintf(os.Stderr, "[FATAL] seed canceled: %v\n", ctx.Err())
+				os.Exit(1)
+			}
+			rec, err := storage.AdvanceAccountingV2(ctx, db, "explicit seed-v2", *chunkSize)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[FATAL] seed chunk %d failed: %v\n", chunks+1, err)
+				os.Exit(1)
+			}
+			chunks++
+			boundary := int64(0)
+			if rec.SourceJournalSequenceMax != nil {
+				boundary = *rec.SourceJournalSequenceMax
+			}
+			fmt.Printf("  chunk %d: run=%s boundary=%d notes=%s\n", chunks, rec.RunID, boundary, rec.Notes)
+			gen, err := storage.GetActiveAccountingGeneration(ctx, db)
+			if err != nil {
+				continue // not active yet; keep chunking
+			}
+			fmt.Printf("Generation %s ACTIVE: published=%d rawUp=%d rawDown=%d accUp=%d accDown=%d (chunks=%d)\n",
+				gen.GenerationID, gen.PublishedJournalSequence, gen.PublishedRawUpload, gen.PublishedRawDownload,
+				gen.PublishedAccountedUpload, gen.PublishedAccountedDownload, chunks)
+			// Safe maintenance boundary: seed runs alone on the writer DB.
+			cpRes, cpErr := storage.CheckpointWAL(ctx, db, storage.WALCheckpointTruncateMode)
+			if cpErr != nil {
+				fmt.Printf("[WARN] post-seed WAL checkpoint failed: %v\n", cpErr)
+			} else {
+				fmt.Printf("Post-seed WAL checkpoint: busy=%v checkpointed=%d/%d frames\n",
+					cpRes.Busy, cpRes.CheckpointedFrames, cpRes.LogFrames)
+			}
+			break
+		}
+
 	case "rebuild":
 		fs := flag.NewFlagSet("collector storage rebuild", flag.ContinueOnError)
 		dbPath := fs.String("db", "", "Path to SQLite database file")
@@ -324,10 +389,17 @@ func runStorageCommand(args []string) {
 			fmt.Fprintf(os.Stderr, "[FATAL REBUILD ERROR] %v\n", err)
 			os.Exit(1)
 		}
-		// A full rebuild streams the whole journal through the WAL; truncate it
-		// back so the maintenance run never leaves a multi-GB log behind.
-		if err := storage.WALCheckpointTruncate(ctx, db); err != nil {
-			fmt.Fprintf(os.Stderr, "[WARN] post-rebuild WAL checkpoint failed: %v\n", err)
+		// A full rebuild streams the whole journal through the WAL; this is a
+		// safe maintenance boundary (no collector writer, fresh CLI context),
+		// so a TRUNCATE checkpoint is run and its structured result reported.
+		cpRes, cpErr := storage.CheckpointWAL(ctx, db, storage.WALCheckpointTruncateMode)
+		if cpErr != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] post-rebuild WAL checkpoint failed: %v\n", cpErr)
+		} else if cpRes.Busy || cpRes.LogFrames != cpRes.CheckpointedFrames {
+			fmt.Printf("[WARN] post-rebuild WAL checkpoint incomplete: busy=%v logFrames=%d checkpointed=%d\n",
+				cpRes.Busy, cpRes.LogFrames, cpRes.CheckpointedFrames)
+		} else {
+			fmt.Printf("Post-rebuild WAL checkpoint complete: checkpointed=%d frames.\n", cpRes.CheckpointedFrames)
 		}
 		fmt.Printf("Storage projections successfully rebuilt!\n")
 
@@ -439,7 +511,7 @@ func runStorageCommand(args []string) {
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown storage action: %s\n", action)
-		fmt.Println("Usage: collector storage <inspect|gaps|rebuild|cleanup|integrity> --db <path> [flags]")
+		fmt.Println("Usage: collector storage <inspect|gaps|rebuild|cleanup|integrity|seed-v2> --db <path> [flags]")
 		os.Exit(1)
 	}
 }

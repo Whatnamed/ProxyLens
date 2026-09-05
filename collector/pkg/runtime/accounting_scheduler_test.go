@@ -273,9 +273,9 @@ func TestAccountingSchedulerRunInvokesCheckpointPerTick(t *testing.T) {
 		Rebuild: func(context.Context, string) (*storage.AccountingRunRecord, error) {
 			return testRun(), nil
 		},
-		Checkpoint: func(ctx context.Context) error {
+		Checkpoint: func(ctx context.Context) (storage.WALCheckpointResult, error) {
 			checkpoints.Add(1)
-			return nil
+			return storage.WALCheckpointResult{}, nil
 		},
 	})
 	if err != nil {
@@ -308,8 +308,8 @@ func TestAccountingSchedulerCheckpointFailureIsNonFatal(t *testing.T) {
 		Rebuild: func(context.Context, string) (*storage.AccountingRunRecord, error) {
 			return testRun(), nil
 		},
-		Checkpoint: func(ctx context.Context) error {
-			return errors.New("checkpoint exploded")
+		Checkpoint: func(ctx context.Context) (storage.WALCheckpointResult, error) {
+			return storage.WALCheckpointResult{}, errors.New("checkpoint exploded")
 		},
 	})
 	if err != nil {

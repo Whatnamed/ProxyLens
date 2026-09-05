@@ -239,7 +239,11 @@ func (s *SQLiteEventSink) Emit(ev *types.CollectorEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// 30s emit budget: accounting chunks hold the writer lock for roughly
+	// 1-5s per tick at production scale. Ingestion waits inside the deadline
+	// (queue capacity buffers ~50s) — it must never be killed by maintenance;
+	// the deadline only bounds a genuine hang.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	return execWithTxRetry(ctx, s.db, 5, func(tx *sql.Tx) error {

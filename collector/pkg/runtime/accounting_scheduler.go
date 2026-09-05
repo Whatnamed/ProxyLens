@@ -28,7 +28,17 @@ const (
 
 type AccountingFreshnessFunc func(context.Context) (*storage.AccountingFreshness, error)
 type AccountingRebuildFunc func(context.Context, string) (*storage.AccountingRunRecord, error)
-type AccountingCheckpointFunc func(context.Context) error
+type AccountingCheckpointFunc func(context.Context) (storage.WALCheckpointResult, error)
+
+// AccountingWALTelemetry is the observable WAL checkpoint evidence recorded
+// after each scheduled tick. Repeated incomplete checkpoints are health
+// evidence for the storage layer, never a reason to block Collector ingestion.
+type AccountingWALTelemetry struct {
+	Result            storage.WALCheckpointResult
+	Err               error
+	WALBytes          int64
+	WALBytesAvailable bool
+}
 
 // AccountingTickResult is returned by Tick and optionally delivered to the
 // scheduler callback after each periodic decision.
@@ -44,10 +54,13 @@ type AccountingSchedulerOptions struct {
 	Notes     string
 	Freshness AccountingFreshnessFunc
 	Rebuild   AccountingRebuildFunc
-	// Checkpoint bounds WAL growth by truncating the write-ahead log after each
-	// scheduled tick. It is best-effort: a checkpoint failure never alters the
-	// tick result or stops collection.
+	// Checkpoint runs a best-effort PASSIVE wal_checkpoint after each
+	// scheduled tick and returns structured telemetry. A checkpoint failure
+	// or busy result never alters the tick result or stops collection.
 	Checkpoint AccountingCheckpointFunc
+
+	// OnCheckpoint receives the WAL telemetry after each tick when set.
+	OnCheckpoint func(AccountingWALTelemetry)
 
 	// OnRebuildStart is called only after a stale boundary is observed and
 	// immediately before invoking Rebuild.
@@ -64,6 +77,7 @@ type AccountingScheduler struct {
 	freshness      AccountingFreshnessFunc
 	rebuild        AccountingRebuildFunc
 	checkpoint     AccountingCheckpointFunc
+	onCheckpoint   func(AccountingWALTelemetry)
 	onRebuildStart func(*storage.AccountingFreshness)
 	onTick         func(AccountingTickResult)
 	tickMu         sync.Mutex
@@ -83,10 +97,17 @@ func NewAccountingScheduler(db *sql.DB, interval time.Duration, notes string) (*
 			return analytics.GetAccountingFreshness(ctx)
 		},
 		Rebuild: func(ctx context.Context, notes string) (*storage.AccountingRunRecord, error) {
-			return storage.RebuildAccounting(ctx, db, notes)
+			// Normal runtime accounting is generation-based and incremental:
+			// each tick processes at most a bounded, frame-aligned journal
+			// range and publishes its boundary atomically. Full-history
+			// rebuilds are no longer part of the normal runtime path.
+			return storage.AdvanceAccountingV2(ctx, db, notes, 0)
 		},
-		Checkpoint: func(ctx context.Context) error {
-			return storage.WALCheckpointTruncate(ctx, db)
+		Checkpoint: func(ctx context.Context) (storage.WALCheckpointResult, error) {
+			// Steady state relies on SQLite autocheckpoint plus a passive,
+			// best-effort checkpoint for telemetry. TRUNCATE is reserved for
+			// shutdown/maintenance boundaries and never runs per tick.
+			return storage.CheckpointWAL(ctx, db, storage.WALCheckpointPassive)
 		},
 	})
 }
@@ -112,6 +133,7 @@ func NewAccountingSchedulerWithOptions(opts AccountingSchedulerOptions) (*Accoun
 		freshness:      opts.Freshness,
 		rebuild:        opts.Rebuild,
 		checkpoint:     opts.Checkpoint,
+		onCheckpoint:   opts.OnCheckpoint,
 		onRebuildStart: opts.OnRebuildStart,
 		onTick:         opts.OnTick,
 	}, nil
@@ -200,14 +222,21 @@ func (s *AccountingScheduler) Run(ctx context.Context) error {
 	}
 }
 
-// runCheckpoint bounds WAL growth after every scheduled tick. Checkpoint
-// failures are deliberately silent: the next tick retries, and collection or
-// accounting correctness never depends on WAL truncation succeeding.
+// runCheckpoint performs the per-tick best-effort PASSIVE checkpoint and
+// forwards the structured WAL telemetry to OnCheckpoint. Failures and busy
+// results are health evidence only: the next tick retries, and collection or
+// accounting correctness never depends on checkpointing succeeding. TRUNCATE
+// is deliberately never used here; it belongs to shutdown/maintenance
+// boundaries with a fresh, non-canceled context (see Runtime.Run shutdown).
 func (s *AccountingScheduler) runCheckpoint(ctx context.Context) {
 	if s.checkpoint == nil {
 		return
 	}
-	_ = s.checkpoint(ctx)
+	res, err := s.checkpoint(ctx)
+	if s.onCheckpoint == nil {
+		return
+	}
+	s.onCheckpoint(AccountingWALTelemetry{Result: res, Err: err})
 }
 
 func (s *AccountingScheduler) publish(result AccountingTickResult) {

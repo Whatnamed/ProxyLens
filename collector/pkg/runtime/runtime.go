@@ -138,6 +138,20 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to initialize accounting scheduler: %w", err)
 	}
+	scheduler.onCheckpoint = func(telemetry AccountingWALTelemetry) {
+		if telemetry.Err != nil {
+			r.logger("[runtime] wal passive checkpoint failed (health evidence only): %v", telemetry.Err)
+			return
+		}
+		if telemetry.Result.Busy || telemetry.Result.LogFrames != telemetry.Result.CheckpointedFrames {
+			r.logger("[runtime] wal checkpoint incomplete busy=%v logFrames=%d checkpointed=%d",
+				telemetry.Result.Busy, telemetry.Result.LogFrames, telemetry.Result.CheckpointedFrames)
+		}
+		if telemetry.WALBytesAvailable {
+			r.logger("[runtime] wal telemetry checkpointed=%d/%d walBytes=%d",
+				telemetry.Result.CheckpointedFrames, telemetry.Result.LogFrames, telemetry.WALBytes)
+		}
+	}
 	scheduler.onRebuildStart = func(freshness *storage.AccountingFreshness) {
 		r.logger("[runtime] accounting catch-up start lagEvents=%d currentSequence=%d", freshness.LagEvents, freshness.CurrentJournalSequenceMax)
 	}
@@ -207,6 +221,37 @@ func (r *Runtime) Run(ctx context.Context) (runtimeResult *RuntimeResult, runErr
 		cancelScheduler()
 		<-schedulerDone
 		cancelCollector()
+	}
+
+	// Final accounting flush: the collector writer has stopped, so the
+	// journal is stable. Publish the remaining tail — session-end
+	// disappearances included — so a clean stop leaves zero accounting lag
+	// instead of deferring the last interval to the next start. Bounded and
+	// idempotent; a failure is health evidence and resumes on next start.
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	flushRec, flushErr := storage.AdvanceAccountingV2(flushCtx, db, "runtime shutdown flush", 0)
+	flushCancel()
+	if flushErr != nil {
+		r.logger("[runtime] shutdown accounting flush failed (resumes next start): %v", flushErr)
+	} else if flushRec != nil {
+		r.logger("[runtime] shutdown accounting flush completed events=%d status=%s",
+			flushRec.SourceJournalEventCount, flushRec.Status)
+	}
+
+	// Safe maintenance boundary: scheduler and collector writer have both
+	// stopped. TRUNCATE runs with a fresh, non-canceled context (the runtime
+	// ctx may already be canceled) and an incomplete result is reported as
+	// health evidence — a busy Query reader is never killed or blocked.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	cpRes, cpErr := storage.CheckpointWAL(shutdownCtx, db, storage.WALCheckpointTruncateMode)
+	shutdownCancel()
+	if cpErr != nil {
+		r.logger("[runtime] wal shutdown checkpoint failed: %v", cpErr)
+	} else if cpRes.Busy || cpRes.LogFrames != cpRes.CheckpointedFrames {
+		r.logger("[runtime] wal shutdown checkpoint incomplete busy=%v logFrames=%d checkpointed=%d",
+			cpRes.Busy, cpRes.LogFrames, cpRes.CheckpointedFrames)
+	} else {
+		r.logger("[runtime] wal shutdown checkpoint complete checkpointed=%d", cpRes.CheckpointedFrames)
 	}
 
 	if err := db.Close(); err != nil && outcome.err == nil {

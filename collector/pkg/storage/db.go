@@ -23,7 +23,7 @@ func OpenDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to create db directory %s: %w", dir, err)
 	}
 
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout=10000&_pragma=foreign_keys=ON&_pragma=synchronous=NORMAL", dbPath)
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout=10000&_pragma=foreign_keys=ON&_pragma=synchronous=NORMAL&_txlock=immediate", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite database at %s: %w", dbPath, err)
@@ -60,7 +60,12 @@ func OpenDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	return db, nil
 }
 
-// execWithTxRetry 在发生短时锁争用或快照过时 (database is locked / busy) 时自动进行退避重试
+// execWithTxRetry 在发生短时锁争用或快照过时 (database is locked / busy) 时自动进行退避重试。
+// writer DSN 通过 _txlock=immediate 使所有事务以 BEGIN IMMEDIATE 开启：核算 chunk
+// 这类"先读后写"的长事务若以 DEFERRED 升级写锁，在读阶段被并发 writer 提交后必然
+// 得到不可重试的 SQLITE_BUSY_SNAPSHOT（真实生产库 5.2GB 上 100% 复现）。IMMEDIATE
+// 让事务一开始就取得写锁，读阶段不再被作废；单 chunk 持锁 ~1s，Collector 写入
+// 在 busy_timeout 内等待即可。
 func execWithTxRetry(ctx context.Context, db *sql.DB, maxRetries int, fn func(tx *sql.Tx) error) error {
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
@@ -106,20 +111,50 @@ var (
 	ErrSchemaIncompatible = fmt.Errorf("database schema incompatible")
 )
 
-// WALCheckpointTruncate runs PRAGMA wal_checkpoint(TRUNCATE) so the write-ahead
-// log file is fully checkpointed back into the main database and truncated to
-// zero bytes. Committed data is never altered. A busy result (readers active)
-// is reported through the returned values rather than treated as an error.
-func WALCheckpointTruncate(ctx context.Context, db *sql.DB) error {
+// WALCheckpointMode selects the SQLite wal_checkpoint variant.
+type WALCheckpointMode string
+
+const (
+	// WALCheckpointPassive is the steady-state mode: it never blocks writers
+	// or readers and may checkpoint only part of the log.
+	WALCheckpointPassive WALCheckpointMode = "PASSIVE"
+	// WALCheckpointTruncate fully checkpoints the log and truncates the WAL
+	// file to zero bytes. It is only for safe maintenance/shutdown boundaries.
+	WALCheckpointTruncateMode WALCheckpointMode = "TRUNCATE"
+)
+
+// WALCheckpointResult carries the structured SQLite wal_checkpoint outcome.
+// A busy or incomplete checkpoint is health evidence, not an error and not a
+// success: callers must inspect Busy and CheckpointedFrames.
+type WALCheckpointResult struct {
+	Busy               bool
+	LogFrames          int64
+	CheckpointedFrames int64
+}
+
+// Complete reports whether the checkpoint fully checkpointed the log without
+// reader/writer contention.
+func (r WALCheckpointResult) Complete() bool {
+	return !r.Busy && r.LogFrames == r.CheckpointedFrames
+}
+
+// CheckpointWAL runs PRAGMA wal_checkpoint(mode) and returns the structured
+// result. Committed data is never altered. A busy result (readers active) is
+// reported through the returned values rather than treated as an error.
+func CheckpointWAL(ctx context.Context, db *sql.DB, mode WALCheckpointMode) (WALCheckpointResult, error) {
 	if db == nil {
-		return fmt.Errorf("wal checkpoint requires a database")
+		return WALCheckpointResult{}, fmt.Errorf("wal checkpoint requires a database")
 	}
+	var res WALCheckpointResult
 	var busy, logFrames, checkpointedFrames int64
-	row := db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
+	row := db.QueryRowContext(ctx, fmt.Sprintf("PRAGMA wal_checkpoint(%s);", string(mode)))
 	if err := row.Scan(&busy, &logFrames, &checkpointedFrames); err != nil {
-		return fmt.Errorf("wal checkpoint failed: %w", err)
+		return res, fmt.Errorf("wal checkpoint(%s) failed: %w", mode, err)
 	}
-	return nil
+	res.Busy = busy != 0
+	res.LogFrames = logFrames
+	res.CheckpointedFrames = checkpointedFrames
+	return res, nil
 }
 
 // OpenReadOnlyDB 以严格只读模式打开指定 SQLite 数据库并验证模式兼容性，绝不执行迁移或写操作
