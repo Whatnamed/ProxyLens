@@ -169,25 +169,34 @@ pub async fn apply_runtime_settings(
         });
     }
 
+    let mut stop_status = None;
     let mut activated = false;
     if let Ok(db_path) = crate::sidecar::resolve_runtime_db_path() {
         let db_arg = db_path.to_string_lossy().into_owned();
         let stop_args = ["control", "stop", "--db", db_arg.as_str(), "--wait", "10s"];
-        if let Ok((stop_ok, _)) = run_supervisor_command(&app_handle, &stop_args, None) {
+        if let Ok((stop_ok, output)) = run_supervisor_command(&app_handle, &stop_args, None) {
             if stop_ok {
-                if let Ok(mut supervisor) = state.supervisor.lock() {
-                    supervisor.take();
-                }
-                if let Ok(bootstrap) = crate::bootstrap_supervisor(&app_handle, &db_path).await {
-                    crate::store_supervisor_bootstrap(&state, bootstrap);
-                    activated = true;
+                if let Ok(status) = serde_json::from_slice::<ControlStatusWire>(&output) {
+                    let supervisor_stopped = !status.supervisor_running;
+                    stop_status = Some(status);
+                    if supervisor_stopped {
+                        if let Ok(mut supervisor) = state.supervisor.lock() {
+                            supervisor.take();
+                        }
+                        if let Ok(bootstrap) =
+                            crate::bootstrap_supervisor(&app_handle, &db_path).await
+                        {
+                            crate::store_supervisor_bootstrap(&state, bootstrap);
+                            activated = true;
+                        }
+                    }
                 }
             }
         }
     }
 
     let settings = collect_snapshot(&app_handle, &state)?;
-    if activated {
+    if activation_was_applied(stop_status.as_ref(), activated) {
         Ok(RuntimeSettingsApplyOutcome {
             saved: true,
             activation: "applied".to_string(),
@@ -204,6 +213,16 @@ pub async fn apply_runtime_settings(
             settings,
         })
     }
+}
+
+fn activation_was_applied(
+    stop_status: Option<&ControlStatusWire>,
+    rebootstrap_succeeded: bool,
+) -> bool {
+    rebootstrap_succeeded
+        && stop_status
+            .map(|status| !status.supervisor_running && !status.runtime_running)
+            .unwrap_or(false)
 }
 
 fn collect_snapshot(
@@ -359,7 +378,9 @@ fn run_supervisor_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_state_name, ConfigStatusWire};
+    use super::{
+        activation_was_applied, bootstrap_state_name, ConfigStatusWire, ControlStatusWire,
+    };
     use crate::supervisor_process::{SupervisorBootstrapState, SupervisorBootstrapStatus};
 
     #[test]
@@ -391,5 +412,31 @@ mod tests {
             runtime_pid: None,
         };
         assert_eq!(bootstrap_state_name(&status), "starting");
+    }
+
+    #[test]
+    fn external_runtime_after_stop_is_saved_pending_restart() {
+        let stop_status: ControlStatusWire =
+            serde_json::from_str(r#"{"supervisorRunning":false,"runtimeRunning":true}"#)
+                .expect("external Runtime stop status should parse");
+        assert!(!activation_was_applied(Some(&stop_status), true));
+    }
+
+    #[test]
+    fn absent_runtime_after_successful_rebootstrap_is_applied() {
+        let stop_status: ControlStatusWire =
+            serde_json::from_str(r#"{"supervisorRunning":false,"runtimeRunning":false}"#)
+                .expect("owned Runtime stop status should parse");
+        assert!(activation_was_applied(Some(&stop_status), true));
+    }
+
+    #[test]
+    fn malformed_or_unsuccessful_stop_cannot_report_applied() {
+        assert!(!activation_was_applied(None, true));
+        let stop_status = ControlStatusWire {
+            supervisor_running: false,
+            runtime_running: false,
+        };
+        assert!(!activation_was_applied(Some(&stop_status), false));
     }
 }

@@ -36,6 +36,7 @@ const trackedCaptures = new Set();
 const trackedPids = new Set();
 let controller;
 let expectedSecret = '';
+let expectedSecretGeneration = 0;
 let packagePath;
 let installedDesktop;
 let installedSupervisor;
@@ -106,9 +107,15 @@ async function startMockController() {
   }));
   const server = http.createServer((request, response) => {
     const requestPath = new URL(request.url || '/', 'http://127.0.0.1').pathname;
-    requests.push({ path: requestPath, secret: request.headers.authorization === `Bearer ${expectedSecret}` });
+    const secretMatches = request.headers.authorization === `Bearer ${expectedSecret}`;
+    requests.push({ path: requestPath, secret: secretMatches, generation: expectedSecretGeneration });
     if (request.method !== 'GET') {
       response.writeHead(405);
+      response.end();
+      return;
+    }
+    if (expectedSecret && !secretMatches) {
+      response.writeHead(401);
       response.end();
       return;
     }
@@ -122,8 +129,13 @@ async function startMockController() {
   });
   server.on('upgrade', (request, socket) => {
     const requestPath = new URL(request.url || '/', 'http://127.0.0.1').pathname;
-    requests.push({ path: requestPath, secret: request.headers.authorization === `Bearer ${expectedSecret}` });
+    const secretMatches = request.headers.authorization === `Bearer ${expectedSecret}`;
+    requests.push({ path: requestPath, secret: secretMatches, generation: expectedSecretGeneration });
     if (request.method !== 'GET' || requestPath !== '/connections' || typeof request.headers['sec-websocket-key'] !== 'string') {
+      socket.destroy();
+      return;
+    }
+    if (expectedSecret && !secretMatches) {
       socket.destroy();
       return;
     }
@@ -349,6 +361,22 @@ function configApply(controllerUrl, autostartEnabled, secretAction, secret) {
   }), 'settings apply');
 }
 
+function setExpectedSecret(secret) {
+  expectedSecretGeneration += 1;
+  expectedSecret = secret;
+  return expectedSecretGeneration;
+}
+
+function requireSecretGenerationEvidence(label, baseline, generation) {
+  const freshRequests = controller.requests.slice(baseline);
+  const version = freshRequests.some((request) => request.generation === generation && request.secret && request.path === '/version');
+  const connections = freshRequests.some((request) => request.generation === generation && request.secret && request.path === '/connections');
+  if (!version || !connections) {
+    throw new Error(`${label} generation ${generation} did not produce fresh authenticated version/connections evidence version=${version} connections=${connections}`);
+  }
+  return { generation, version, connections };
+}
+
 function startedRecords() {
   return fs.existsSync(statusFile)
     ? fs.readFileSync(statusFile, 'utf8')
@@ -432,10 +460,12 @@ async function main() {
 
   const initialApply = configApply(controller.url, true, 'replace', secretA);
   if (!initialApply.saved || !initialApply.restartRequired || !initialApply.secretChanged) throw new Error('initial secure Secret apply did not report a required restart');
-  expectedSecret = secretA;
+  const secretABaseline = controller.requests.length;
+  const secretAGeneration = setExpectedSecret(secretA);
   owner = await stopAndEnsureOwner();
   const dbAfterSecretA = fs.statSync(dbPath).size;
   await launchDesktop('settings-product-secret-a');
+  requireSecretGenerationEvidence('Secret A', secretABaseline, secretAGeneration);
   if (!isPidAlive(owner.supervisorPid) || !isPidAlive(owner.runtimePid)) {
     throw new Error('UI close stopped the Secret A owner supervisor=' + owner.supervisorPid + ':' + isPidAlive(owner.supervisorPid) + ' runtime=' + owner.runtimePid + ':' + isPidAlive(owner.runtimePid));
   }
@@ -443,11 +473,12 @@ async function main() {
 
   const replaceApply = configApply(controller.url, true, 'replace', secretB);
   if (!replaceApply.saved || !replaceApply.restartRequired) throw new Error('Secret B replacement did not require restart');
-  expectedSecret = secretB;
+  const secretBBaseline = controller.requests.length;
+  const secretBGeneration = setExpectedSecret(secretB);
   owner = await stopAndEnsureOwner();
   await launchDesktop('settings-product-secret-b');
   if (!isPidAlive(owner.supervisorPid) || !isPidAlive(owner.runtimePid)) throw new Error('UI close stopped the Secret B owner');
-  if (!controller.requests.some((request) => request.secret && request.path === '/version')) throw new Error('mock Controller did not observe the replaced Secret');
+  const secretBEvidence = requireSecretGenerationEvidence('Secret B', secretBBaseline, secretBGeneration);
 
   const beforeAutostart = { ...owner };
   const disabled = configApply(controller.url, false, 'keep', '');
@@ -459,7 +490,7 @@ async function main() {
   await waitFor(() => installStatus().taskRegistered === true && installStatus().taskEnabled === true, 10000, 'autostart true task restore');
   if (fs.statSync(dbPath).size < dbAfterSecretA) throw new Error('autostart reconciliation did not preserve the authority DB');
 
-  console.log(`PASS phase3e2b2b settings-product task=${taskName} installedLayout=${installStatus().installedLayout} secretA->secretB=verified autostart=false->true=verified ui-close=survived`);
+  console.log(`PASS phase3e2b2b settings-product task=${taskName} installedLayout=${installStatus().installedLayout} secretA->secretB=verified generations=${secretAGeneration}->${secretBEvidence.generation} version=${secretBEvidence.version} connections=${secretBEvidence.connections} autostart=false->true=verified ui-close=survived`);
 }
 
 try {

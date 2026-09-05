@@ -68,6 +68,17 @@ func controlStatusCommand(args []string) int {
 	})
 }
 
+func controlStatusAfterSupervisorStop(dbPath string) (controlStatus, error) {
+	runtimePresence, err := proxylensruntime.ProbeRuntimePresence(dbPath)
+	if err != nil {
+		return controlStatus{}, fmt.Errorf("failed to inspect Runtime ownership after Supervisor stop: %w", err)
+	}
+	return controlStatus{
+		SupervisorRunning: false,
+		RuntimeRunning:    runtimePresence == proxylensruntime.RuntimePresent,
+	}, nil
+}
+
 func controlStopCommand(args []string) int {
 	fs := flag.NewFlagSet("control stop", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -106,7 +117,12 @@ func controlStopCommand(args []string) int {
 			return 1
 		}
 	}
-	return encodeLifecycleStatus(controlStatus{SupervisorRunning: false, RuntimeRunning: false})
+	status, err := controlStatusAfterSupervisorStop(resolution.Path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return encodeLifecycleStatus(status)
 }
 
 func runInstallCommand(args []string) int {

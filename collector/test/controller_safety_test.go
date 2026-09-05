@@ -186,6 +186,14 @@ func TestSettingsProductHarnessReestablishesOnlyIsolatedRuntimeState(t *testing.
 		"PROXYLENS_E2E_TASK_ARGS",
 		"task-owner-wrapper.cmd",
 		"config', 'apply",
+		"expectedSecretGeneration",
+		"expectedSecret && !secretMatches",
+		"response.writeHead(401)",
+		"socket.destroy()",
+		"requests.slice(baseline)",
+		"secretABaseline",
+		"secretBBaseline",
+		"requireSecretGenerationEvidence",
 		"autostart=false->true",
 	} {
 		if !strings.Contains(source, required) {
