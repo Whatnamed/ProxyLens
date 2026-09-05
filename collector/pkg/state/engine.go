@@ -13,20 +13,20 @@ import (
 
 // ActiveConnectionState 维护单个存活连接的内部状态
 type ActiveConnectionState struct {
-	Snapshot                  types.ConnectionSnapshot
-	FirstObservedAt           time.Time
-	LastObservedAt            time.Time
-	LastUploadCounter         int64
-	LastDownloadCounter       int64
-	MonitoredCumulativeUpload int64
+	Snapshot                    types.ConnectionSnapshot
+	FirstObservedAt             time.Time
+	LastObservedAt              time.Time
+	LastUploadCounter           int64
+	LastDownloadCounter         int64
+	MonitoredCumulativeUpload   int64
 	MonitoredCumulativeDownload int64
-	BaselineUploadCounter     int64
-	BaselineDownloadCounter   int64
-	PreexistingAtStart        bool
-	PossibleUnobservedTail    bool
-	Route                     types.RouteType
-	AttributionClass          types.AttributionClass
-	QualityFlags              types.QualityFlags
+	BaselineUploadCounter       int64
+	BaselineDownloadCounter     int64
+	PreexistingAtStart          bool
+	PossibleUnobservedTail      bool
+	Route                       types.RouteType
+	AttributionClass            types.AttributionClass
+	QualityFlags                types.QualityFlags
 }
 
 // EngineOptions 配置状态机参数
@@ -37,26 +37,28 @@ type EngineOptions struct {
 
 // StateEngine 是 Collector 的核心状态机实现
 type StateEngine struct {
-	mu                                     sync.Mutex
-	sink                                   sink.EventSink
-	sessionID                              string
-	epochID                                int
-	frameSequence                          int64
-	eventSequence                          int64
-	sessionState                           types.SessionState
-	activeMap                              map[string]*ActiveConnectionState
-	prevUploadTotal                        int64
-	prevDownloadTotal                      int64
-	hasEverBeenHealthy                     bool
-	gapIsOpen                              bool
-	gapStartTime                           time.Time
-	gapStartTimeMonotonic                  time.Time
-	gapStartTimeString                     string
-	gapInjectionDetails                    map[string]any
+	mu                                      sync.Mutex
+	sink                                    sink.EventSink
+	sessionID                               string
+	epochID                                 int
+	frameSequence                           int64
+	eventSequence                           int64
+	sessionState                            types.SessionState
+	activeMap                               map[string]*ActiveConnectionState
+	prevUploadTotal                         int64
+	prevDownloadTotal                       int64
+	hasEverBeenHealthy                      bool
+	gapIsOpen                               bool
+	gapStartTime                            time.Time
+	gapStartTimeMonotonic                   time.Time
+	gapStartTimeString                      string
+	gapInjectionDetails                     map[string]any
 	lastSuccessfullyProcessedHealthyFrameAt time.Time
-	lastHealthyMonotonic                   time.Time
-	lastSuccessfullyProcessedHealthyStr    string
-	isBootstrapFrame                       bool
+	lastHealthyMonotonic                    time.Time
+	lastSuccessfullyProcessedHealthyStr     string
+	isBootstrapFrame                        bool
+	createdAt                               time.Time
+	unobservedGapEmitted                    bool
 }
 
 // NewStateEngine 创建 StateEngine 实例
@@ -76,6 +78,7 @@ func NewStateEngine(opts EngineOptions) *StateEngine {
 		sessionState:     types.SessionStarting,
 		activeMap:        make(map[string]*ActiveConnectionState),
 		isBootstrapFrame: true,
+		createdAt:        time.Now(),
 	}
 }
 
@@ -92,6 +95,63 @@ func (e *StateEngine) emitEvent(event *types.CollectorEvent) error {
 		return fmt.Errorf("sink emit failure on event %s (%s): %w", event.EventID, event.Type, err)
 	}
 	return nil
+}
+
+// controllerUnreachableGapMinDuration bounds the controller-unreachable gap
+// bookkeeping to intervals that are meaningful for audit coverage; sub-second
+// bootstrap delays are not recorded as gaps.
+const controllerUnreachableGapMinDuration = 2 * time.Second
+
+const controllerUnreachableGapReason = "controller_unreachable_since_session_start"
+
+// emitUnobservedIntervalGap records [start, end] as a closed controller_stream
+// monitoring gap pair. Intervals shorter than the minimum duration are skipped
+// and the pair is emitted at most once per engine lifetime.
+func (e *StateEngine) emitUnobservedIntervalGap(start, end time.Time) error {
+	if e.unobservedGapEmitted || start.IsZero() || !end.After(start) {
+		return nil
+	}
+	if end.Sub(start) < controllerUnreachableGapMinDuration {
+		return nil
+	}
+	e.unobservedGapEmitted = true
+	// The storage contract stores all gap interval bounds in UTC RFC3339; the
+	// rest of the coverage pipeline compares them as UTC strings.
+	startStr := start.UTC().Format(time.RFC3339Nano)
+	endUTC := end.UTC().Format(time.RFC3339Nano)
+	if err := e.emitEvent(&types.CollectorEvent{
+		Type:                types.EventMonitoringGapOpened,
+		Timestamp:           end,
+		AttributionInterval: []string{startStr},
+		Details: map[string]any{
+			"reason": controllerUnreachableGapReason,
+		},
+	}); err != nil {
+		return err
+	}
+	return e.emitEvent(&types.CollectorEvent{
+		Type:                types.EventMonitoringGapClosed,
+		Timestamp:           end,
+		AttributionInterval: []string{startStr, endUTC},
+		Details: map[string]any{
+			"actualGapMs": end.Sub(start).Milliseconds(),
+			"reason":      controllerUnreachableGapReason,
+		},
+	})
+}
+
+// EmitUnobservedSessionGap closes the session's observation accounting when the
+// collector shuts down without ever processing a healthy controller frame: the
+// session interval was spent unable to observe the controller and must be
+// recorded as a controller_stream monitoring gap instead of counting as
+// covered time. It is a no-op when the session ever observed a healthy frame.
+func (e *StateEngine) EmitUnobservedSessionGap(shutdownAt time.Time) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.hasEverBeenHealthy {
+		return nil
+	}
+	return e.emitUnobservedIntervalGap(e.createdAt, shutdownAt)
 }
 
 // ProcessIngestItem 统一处理有序通道中的项 (Frame, GapOpened, Health, Overload)
@@ -271,7 +331,7 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 			globalGapDown := payload.DownloadTotal - e.prevDownloadTotal
 
 			closedDetails := map[string]any{
-				"actualGapMs":           monotonicGapDurationMs,
+				"actualGapMs":            monotonicGapDurationMs,
 				"globalGapUploadDelta":   globalGapUp,
 				"globalGapDownloadDelta": globalGapDown,
 			}
@@ -537,6 +597,15 @@ func (e *StateEngine) processFrameInternal(frame *types.ConnectionSnapshotFrame)
 		e.lastSuccessfullyProcessedHealthyFrameAt = frameTs
 		e.lastHealthyMonotonic = time.Now()
 		e.lastSuccessfullyProcessedHealthyStr = frameTsStr
+		if !e.hasEverBeenHealthy {
+			// The controller was unreachable from session start until this
+			// first healthy frame. That whole interval is unobserved time and
+			// must be recorded as a controller_stream monitoring gap instead of
+			// silently counting as covered.
+			if err := e.emitUnobservedIntervalGap(e.createdAt, frameTs); err != nil {
+				return err
+			}
+		}
 		e.hasEverBeenHealthy = true
 		e.isBootstrapFrame = false
 		e.sessionState = types.SessionHealthy

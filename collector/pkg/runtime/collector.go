@@ -243,6 +243,12 @@ func (r *CollectorRunner) Run(ctx context.Context) (*CollectorResult, error) {
 
 	var cleanupErr error
 	if sqliteSink != nil {
+		// A session that never observed a healthy controller frame must record
+		// its whole interval as a controller_stream monitoring gap before the
+		// sinks close, so the unobserved window is never counted as covered.
+		if err := engine.EmitUnobservedSessionGap(time.Now()); err != nil && cleanupErr == nil {
+			cleanupErr = fmt.Errorf("failed to record unobserved session gap: %w", err)
+		}
 		endCtx, endCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := sqliteSink.EndSession(endCtx, r.sessionID, status); err != nil {
 			cleanupErr = fmt.Errorf("failed to end collector session: %w", err)

@@ -33,6 +33,16 @@ func toInt64(v any) (int64, bool) {
 	return 0, false
 }
 
+// normalizeGapTimestamp normalizes an RFC3339 gap bound to the storage
+// contract's UTC form so coverage interval math compares like-for-like strings
+// regardless of the emitter's local timezone.
+func normalizeGapTimestamp(value string) string {
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed.UTC().Format(time.RFC3339Nano)
+	}
+	return value
+}
+
 func toBool(v any) bool {
 	if v == nil {
 		return false
@@ -335,6 +345,7 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 		if len(ev.AttributionInterval) > 0 && ev.AttributionInterval[0] != "" {
 			startStr = ev.AttributionInterval[0]
 		}
+		startStr = normalizeGapTimestamp(startStr)
 		reason := "controller_disconnected_or_watchdog_stalled"
 		if ev.Details != nil {
 			if r, ok := ev.Details["reason"].(string); ok {
@@ -409,12 +420,24 @@ func ApplyEventProjection(ctx context.Context, tx *sql.Tx, ev *types.CollectorEv
 	case types.EventSamplingResidual:
 		var upDelta, downDelta, uniqueUp, uniqueDown, resUp, resDown int64
 		if ev.Details != nil {
-			if v, ok := toInt64(ev.Details["globalUploadDelta"]); ok { upDelta = v }
-			if v, ok := toInt64(ev.Details["globalDownloadDelta"]); ok { downDelta = v }
-			if v, ok := toInt64(ev.Details["uniqueObservedUpload"]); ok { uniqueUp = v }
-			if v, ok := toInt64(ev.Details["uniqueObservedDownload"]); ok { uniqueDown = v }
-			if v, ok := toInt64(ev.Details["residualUpload"]); ok { resUp = v }
-			if v, ok := toInt64(ev.Details["residualDownload"]); ok { resDown = v }
+			if v, ok := toInt64(ev.Details["globalUploadDelta"]); ok {
+				upDelta = v
+			}
+			if v, ok := toInt64(ev.Details["globalDownloadDelta"]); ok {
+				downDelta = v
+			}
+			if v, ok := toInt64(ev.Details["uniqueObservedUpload"]); ok {
+				uniqueUp = v
+			}
+			if v, ok := toInt64(ev.Details["uniqueObservedDownload"]); ok {
+				uniqueDown = v
+			}
+			if v, ok := toInt64(ev.Details["residualUpload"]); ok {
+				resUp = v
+			}
+			if v, ok := toInt64(ev.Details["residualDownload"]); ok {
+				resDown = v
+			}
 		}
 
 		insertSQL := `

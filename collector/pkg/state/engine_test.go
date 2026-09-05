@@ -1,6 +1,7 @@
 package state
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -82,7 +83,7 @@ func TestSteadyStateNewIDAndUpdates(t *testing.T) {
 				{
 					ID: "conn-new-1", Upload: 500, Download: 1500,
 					Metadata: types.RawMetadata{Process: "curl.exe", Host: "example.com"},
-					Rule: "Proxy", Chains: []string{"Node-1"},
+					Rule:     "Proxy", Chains: []string{"Node-1"},
 				},
 			},
 		},
@@ -112,7 +113,7 @@ func TestSteadyStateNewIDAndUpdates(t *testing.T) {
 				{
 					ID: "conn-new-1", Upload: 700, Download: 2500,
 					Metadata: types.RawMetadata{Process: "curl.exe", Host: "example.com"},
-					Rule: "Proxy", Chains: []string{"Node-1"},
+					Rule:     "Proxy", Chains: []string{"Node-1"},
 				},
 			},
 		},
@@ -314,7 +315,7 @@ func TestRelayPairingDeduplicationInAccounting(t *testing.T) {
 				{
 					ID: "logical-app-1", Upload: 5000, Download: 10000,
 					Metadata: types.RawMetadata{Process: "chrome.exe", Host: "youtube.com"},
-					Rule: "ProxyRule", Chains: []string{"Node-US-01", "ProxyGroup", "TopGroup"},
+					Rule:     "ProxyRule", Chains: []string{"Node-US-01", "ProxyGroup", "TopGroup"},
 				},
 				{
 					ID: "relay-cand-1", Upload: 5000, Download: 10000,
@@ -445,12 +446,12 @@ func TestRelayAmbiguousNoDedup(t *testing.T) {
 				{
 					ID: "logical-app-1", Upload: 5000, Download: 10000,
 					Metadata: types.RawMetadata{Process: "chrome.exe", Host: "youtube.com"},
-					Rule: "ProxyRule", Chains: []string{"Node-US-01", "ProxyGroup", "TopGroup"},
+					Rule:     "ProxyRule", Chains: []string{"Node-US-01", "ProxyGroup", "TopGroup"},
 				},
 				{
 					ID: "logical-app-2", Upload: 5000, Download: 10000,
 					Metadata: types.RawMetadata{Process: "firefox.exe", Host: "vimeo.com"},
-					Rule: "ProxyRule", Chains: []string{"Node-US-01", "ProxyGroup", "TopGroup"},
+					Rule:     "ProxyRule", Chains: []string{"Node-US-01", "ProxyGroup", "TopGroup"},
 				},
 				{
 					ID: "relay-cand-1", Upload: 5000, Download: 10000,
@@ -499,5 +500,140 @@ func TestSinkFailureFailSafe(t *testing.T) {
 	err := engine.ProcessFrame(frame1)
 	if err == nil {
 		t.Fatalf("Expected error when sink fails, got nil")
+	}
+}
+
+func TestFirstHealthyFrameRecordsControllerUnreachableGap(t *testing.T) {
+	memSink := sink.NewMemorySink()
+	engine := NewStateEngine(EngineOptions{Sink: memSink})
+	// Simulate a session that started unable to reach the controller.
+	engine.createdAt = time.Now().Add(-5 * time.Minute)
+
+	frame := &types.ConnectionSnapshotFrame{
+		ReceivedAt: time.Now().Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1000,
+			DownloadTotal: 2000,
+			Connections:   []types.ConnectionSnapshot{},
+		},
+	}
+	if err := engine.ProcessFrame(frame); err != nil {
+		t.Fatalf("ProcessFrame failed: %v", err)
+	}
+
+	var opened, closed *types.CollectorEvent
+	for _, ev := range memSink.GetEvents() {
+		switch ev.Type {
+		case types.EventMonitoringGapOpened:
+			if opened == nil {
+				opened = ev
+			}
+		case types.EventMonitoringGapClosed:
+			if closed == nil {
+				closed = ev
+			}
+		}
+	}
+	if opened == nil || closed == nil {
+		t.Fatalf("expected controller_stream gap pair after first healthy frame, got opened=%v closed=%v", opened != nil, closed != nil)
+	}
+	if len(opened.AttributionInterval) != 1 || len(closed.AttributionInterval) != 2 {
+		t.Fatalf("gap interval mismatch: opened=%v closed=%v", opened.AttributionInterval, closed.AttributionInterval)
+	}
+	gapEnd, err := time.Parse(time.RFC3339Nano, closed.AttributionInterval[1])
+	if err != nil {
+		t.Fatalf("gap end %q is not RFC3339: %v", closed.AttributionInterval[1], err)
+	}
+	frameTime, err := time.Parse(time.RFC3339Nano, frame.ReceivedAt)
+	if err != nil {
+		t.Fatalf("frame time %q is not RFC3339: %v", frame.ReceivedAt, err)
+	}
+	if !gapEnd.Equal(frameTime) {
+		t.Fatalf("gap end %q must equal first healthy frame time %q", closed.AttributionInterval[1], frame.ReceivedAt)
+	}
+	if !strings.HasSuffix(closed.AttributionInterval[1], "Z") {
+		t.Fatalf("gap bounds must be stored UTC, got %q", closed.AttributionInterval[1])
+	}
+	if opened.Details["reason"] != controllerUnreachableGapReason {
+		t.Fatalf("unexpected gap reason: %v", opened.Details["reason"])
+	}
+}
+
+func TestImmediateBootstrapSkipsUnreachableGap(t *testing.T) {
+	memSink := sink.NewMemorySink()
+	engine := NewStateEngine(EngineOptions{Sink: memSink})
+	engine.createdAt = time.Now().Add(-100 * time.Millisecond)
+
+	frame := &types.ConnectionSnapshotFrame{
+		ReceivedAt: time.Now().Format(time.RFC3339Nano),
+		Frame: types.ConnectionSnapshotPayload{
+			UploadTotal:   1000,
+			DownloadTotal: 2000,
+			Connections:   []types.ConnectionSnapshot{},
+		},
+	}
+	if err := engine.ProcessFrame(frame); err != nil {
+		t.Fatalf("ProcessFrame failed: %v", err)
+	}
+	for _, ev := range memSink.GetEvents() {
+		if ev.Type == types.EventMonitoringGapOpened || ev.Type == types.EventMonitoringGapClosed {
+			t.Fatalf("sub-second bootstrap must not record a controller gap, got %s", ev.Type)
+		}
+	}
+}
+
+func TestEmitUnobservedSessionGap(t *testing.T) {
+	memSink := sink.NewMemorySink()
+	engine := NewStateEngine(EngineOptions{Sink: memSink})
+	engine.createdAt = time.Now().Add(-3 * time.Minute)
+
+	if err := engine.EmitUnobservedSessionGap(time.Now()); err != nil {
+		t.Fatalf("EmitUnobservedSessionGap failed: %v", err)
+	}
+	var opened, closed int
+	for _, ev := range memSink.GetEvents() {
+		if ev.Type == types.EventMonitoringGapOpened {
+			opened++
+		}
+		if ev.Type == types.EventMonitoringGapClosed {
+			closed++
+		}
+	}
+	if opened != 1 || closed != 1 {
+		t.Fatalf("expected exactly one gap pair, opened=%d closed=%d", opened, closed)
+	}
+
+	// Second call must not duplicate the gap.
+	if err := engine.EmitUnobservedSessionGap(time.Now()); err != nil {
+		t.Fatalf("second EmitUnobservedSessionGap failed: %v", err)
+	}
+	opened, closed = 0, 0
+	for _, ev := range memSink.GetEvents() {
+		if ev.Type == types.EventMonitoringGapOpened {
+			opened++
+		}
+		if ev.Type == types.EventMonitoringGapClosed {
+			closed++
+		}
+	}
+	if opened != 1 || closed != 1 {
+		t.Fatalf("gap pair duplicated on second call: opened=%d closed=%d", opened, closed)
+	}
+
+	// A healthy session must not record the gap.
+	healthySink := sink.NewMemorySink()
+	healthyEngine := NewStateEngine(EngineOptions{Sink: healthySink})
+	healthyEngine.createdAt = time.Now().Add(-100 * time.Millisecond)
+	_ = healthyEngine.ProcessFrame(&types.ConnectionSnapshotFrame{
+		ReceivedAt: time.Now().Format(time.RFC3339Nano),
+		Frame:      types.ConnectionSnapshotPayload{Connections: []types.ConnectionSnapshot{}},
+	})
+	if err := healthyEngine.EmitUnobservedSessionGap(time.Now()); err != nil {
+		t.Fatalf("EmitUnobservedSessionGap on healthy engine failed: %v", err)
+	}
+	for _, ev := range healthySink.GetEvents() {
+		if ev.Type == types.EventMonitoringGapOpened {
+			t.Fatalf("healthy session must not record unobserved gap")
+		}
 	}
 }
