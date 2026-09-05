@@ -896,3 +896,174 @@ func TestIncrementalBoundaryInterleavedCompletionRefusesPartialPublish(t *testin
 			p1+2, *run2.SourceJournalSequenceMax)
 	}
 }
+
+// TestIncrementalBoundaryRefusesRecoveryFrameWithGapClosedOnly verifies that when
+// a recovery frame starts with MonitoringGapClosed followed by connection events
+// and SamplingResidual, committing ONLY the MonitoringGapClosed does not cause
+// accounting to treat the frame as complete. Accounting must refuse to advance
+// until connection evidence and SamplingResidual are committed.
+func TestIncrementalBoundaryRefusesRecoveryFrameWithGapClosedOnly(t *testing.T) {
+	ctx := context.Background()
+	base := fixtureBase()
+	dbPath, cleanup := createAccountingTestDB(t)
+	defer cleanup()
+	db, closeDB := runEquivalenceDB(t, dbPath)
+	defer closeDB()
+
+	sess := equivalenceFixtureSession
+	s, err := OpenSQLiteSink(ctx, dbPath, sess, "v-boundary-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyChains := []string{"NodeA", "GroupX"}
+	// Frame 1: Complete initial frame that includes a gap open and ends with SamplingResidual.
+	ts1 := base.Add(time.Second)
+	emitEquivalenceFrame(t, s, 1, ts1, func(f, e int64) []*types.CollectorEvent {
+		return []*types.CollectorEvent{
+			evNew("conn-1", 100, 200, 100, 200, types.RouteProxy, types.ClassKnownApplication, fixtureProxyMeta, "MATCH", proxyChains),
+			{
+				Type:                types.EventMonitoringGapOpened,
+				Timestamp:           ts1,
+				AttributionInterval: []string{ts1.Format(time.RFC3339Nano)},
+				Details: map[string]any{
+					"source": "controller_stream",
+					"reason": "mock_stream_disconnect",
+				},
+			},
+			{
+				Type:      types.EventSamplingResidual,
+				Timestamp: ts1,
+				Details: map[string]any{
+					"residualUpload":   int64(0),
+					"residualDownload": int64(0),
+				},
+			},
+		}
+	})
+
+	// Seed initial generation to publish frame 1.
+	for {
+		gen, genErr := GetActiveAccountingGeneration(ctx, db)
+		if genErr == nil && gen != nil {
+			break
+		}
+		if _, err := AdvanceAccountingV2(ctx, db, "seed frame 1", 0); err != nil {
+			t.Fatalf("seed failed: %v", err)
+		}
+	}
+
+	gen, err := GetActiveAccountingGeneration(ctx, db)
+	if err != nil || gen == nil {
+		t.Fatalf("expected active generation, got gen=%v err=%v", gen, err)
+	}
+	p1 := gen.PublishedJournalSequence
+	if p1 <= 0 {
+		t.Fatalf("expected positive published sequence, got %d", p1)
+	}
+
+	// Frame 2: Recovery frame in progress.
+	// Emits MonitoringGapClosed first.
+	ts2 := base.Add(2 * time.Second)
+	evGapClosed := &types.CollectorEvent{
+		EventID:             "ev-f2-gap-closed",
+		SessionID:           sess,
+		EpochID:             1,
+		FrameSequence:       2,
+		EventSequence:       1,
+		Type:                types.EventMonitoringGapClosed,
+		Timestamp:           ts2,
+		AttributionInterval: []string{ts1.Format(time.RFC3339Nano), ts2.Format(time.RFC3339Nano)},
+		Details: map[string]any{
+			"gapPhysicalDeltaUnavailable": false,
+		},
+	}
+	if err := s.Emit(evGapClosed); err != nil {
+		t.Fatalf("failed to emit gap closed: %v", err)
+	}
+
+	// Attempt accounting advance when only GapClosed is present.
+	run1, err := AdvanceAccountingV2(ctx, db, "tick with GapClosed only", 0)
+	if err != nil {
+		t.Fatalf("AdvanceAccountingV2 failed: %v", err)
+	}
+	// Must NOT advance past p1 because Frame 2 is still incomplete.
+	if run1 != nil && run1.SourceJournalSequenceMax != nil && *run1.SourceJournalSequenceMax > p1 {
+		t.Fatalf("PARTIAL PUBLISH: advanced boundary to %d when recovery frame only had MonitoringGapClosed; want %d",
+			*run1.SourceJournalSequenceMax, p1)
+	}
+
+	// Verify generation published sequence is still p1.
+	genAfter1, err := GetActiveAccountingGeneration(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if genAfter1.PublishedJournalSequence != p1 {
+		t.Fatalf("expected generation published sequence to remain %d, got %d",
+			p1, genAfter1.PublishedJournalSequence)
+	}
+
+	// Now emit the remainder of Frame 2: ConnectionDelta and SamplingResidual.
+	evDelta := &types.CollectorEvent{
+		EventID:                 "ev-f2-delta",
+		SessionID:               sess,
+		EpochID:                 1,
+		FrameSequence:           2,
+		EventSequence:           2,
+		Type:                    types.EventConnectionDelta,
+		Timestamp:               ts2,
+		ConnectionID:            "conn-1",
+		ObservedUploadCounter:   300,
+		ObservedDownloadCounter: 600,
+		DeltaUpload:             200,
+		DeltaDownload:           400,
+		Route:                   types.RouteProxy,
+		AttributionClass:        types.ClassKnownApplication,
+		Metadata:                fixtureProxyMeta,
+		Rule:                    "MATCH",
+		Chains:                  proxyChains,
+	}
+	if err := s.Emit(evDelta); err != nil {
+		t.Fatalf("failed to emit delta: %v", err)
+	}
+
+	evResidual := &types.CollectorEvent{
+		EventID:       "ev-f2-residual",
+		SessionID:     sess,
+		EpochID:       1,
+		FrameSequence: 2,
+		EventSequence: 3,
+		Type:          types.EventSamplingResidual,
+		Timestamp:     ts2,
+		Details: map[string]any{
+			"residualUpload":   int64(0),
+			"residualDownload": int64(0),
+		},
+	}
+	if err := s.Emit(evResidual); err != nil {
+		t.Fatalf("failed to emit residual: %v", err)
+	}
+
+	// Advance accounting again: should cleanly advance across the completed Frame 2.
+	run2, err := AdvanceAccountingV2(ctx, db, "tick with complete recovery frame", 0)
+	if err != nil {
+		t.Fatalf("AdvanceAccountingV2 after completion failed: %v", err)
+	}
+	expectedEnd := p1 + 3 // gapClosed + delta + residual = 3 events
+	if run2 == nil || run2.SourceJournalSequenceMax == nil || *run2.SourceJournalSequenceMax != expectedEnd {
+		var got int64
+		if run2 != nil && run2.SourceJournalSequenceMax != nil {
+			got = *run2.SourceJournalSequenceMax
+		}
+		t.Fatalf("expected boundary to advance to complete frame end %d, got %d", expectedEnd, got)
+	}
+
+	genAfter2, err := GetActiveAccountingGeneration(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if genAfter2.PublishedJournalSequence != expectedEnd {
+		t.Fatalf("expected generation published sequence to be %d, got %d",
+			expectedEnd, genAfter2.PublishedJournalSequence)
+	}
+}

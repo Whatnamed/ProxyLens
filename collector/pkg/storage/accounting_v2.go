@@ -1167,8 +1167,9 @@ func extendCutToFrameEnd(ctx context.Context, db *sql.DB, candidate, boundary in
 // has finished emitting all its events. A frame is complete if:
 // 1. A newer frame exists in the same session, or an event from a later session exists.
 // 2. The session itself is no longer running (closed or interrupted).
-// 3. The frame contains definitive completion evidence: SamplingResidual (steady-state frames),
-//    or frame/gap closure markers (MonitoringGapClosed, MonitoringGapOpened).
+// 3. The frame contains definitive completion evidence: SamplingResidual.
+//    Interim markers like MonitoringGapOpened or MonitoringGapClosed precede connection
+//    events in recovery frames and MUST NOT be treated as frame completion markers.
 func isFrameComplete(ctx context.Context, db *sql.DB, sessID string, frameSeq int64, boundary int64) (bool, error) {
 	// 1. Has a newer frame in the same session or a later session committed WITHIN boundary?
 	var hasNewer int
@@ -1196,12 +1197,15 @@ func isFrameComplete(ctx context.Context, db *sql.DB, sessID string, frameSeq in
 	}
 
 	// 3. For an actively running session, the latest frame must contain completion evidence
-	// committed WITHIN the captured boundary. Evidence committed after boundary is ignored.
+	// committed WITHIN the captured boundary. All snapshot frames (bootstrap, steady-state,
+	// and recovery) terminate with a SamplingResidual. Interim markers like MonitoringGapOpened
+	// or MonitoringGapClosed precede connection events in recovery frames and MUST NOT be
+	// treated as frame completion markers to prevent partial-frame publication.
 	var hasCompletion int
 	if err := db.QueryRowContext(ctx, `
 		SELECT 1 FROM event_journal
 		WHERE session_id = ? AND frame_sequence = ? AND journal_sequence <= ?
-		  AND event_type IN ('SamplingResidual', 'MonitoringGapClosed', 'MonitoringGapOpened')
+		  AND event_type = 'SamplingResidual'
 		LIMIT 1;
 	`, sessID, frameSeq, boundary).Scan(&hasCompletion); err == nil && hasCompletion == 1 {
 		return true, nil
