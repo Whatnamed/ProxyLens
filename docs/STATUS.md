@@ -163,7 +163,7 @@
 - Final Tauri interaction recheck：真实 WebView2 完成 History/Inspector boundary、Refresh frozen snapshot、Select Arrow/Home/End/Enter/Space/Tab、DatePicker focus、System Status focus trap/return、EN↔中文 reload persistence、native-control absence 与 overlay geometry；具体值见 acceptance report。
 - Final rendered-font audit：CDP 实际 glyph 分别命中 Manrope、Sarasa UI SC 与 JetBrains Mono，正式 face `loaded`，`font-synthesis: none`；canonical grayscale spot check 保持结构层级。
 - Scaled UI evidence：100,000-event fixture 的 Query sanity 与 Tauri History/Coverage/Inspector/filter/navigation 交互无明显 main-thread freeze、hover/input starvation 或 repeated-request runaway；详细矩阵见 `docs/acceptance/phase3-final-tauri-visual-acceptance-2026-09-06.md`。
-- Affected Go gate：`go vet` 与 `pkg/api` / fixture command focused tests PASS；唯一允许的 `TestIncrementalConstantCost` targeted command 在当前环境 600.079s 后 timeout，未改动 storage/accounting implementation，作为独立 follow-up 如实记录。
+- Affected Go gate：`go vet` 与 `pkg/api` / fixture command focused tests PASS；后续 follow-up 已将 `TestIncrementalConstantCost` 的 600.079s timeout 定位为测试 fixture 未结束 synthetic session，导致 seed 永久停在不完整末帧，并叠加 bulk fixture / seed 构造成本；测试现在在 seed 前明确结束临时 session，普通 10k vs 100k guard 约 12.6s 完成，最终 2k incremental 为 0.138s vs 0.303s（2.2x），未改动 storage/accounting implementation。
 - `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
 - 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller；AST 守卫递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；lifecycle tooling 另有随机 mock URL、temp-dir、E2E-only status file 与 exact-PID cleanup guard。3E-2B1 验收未启动或修改真实 FLClash/Mihomo，未发生真实网络生命周期或 Mihomo 写操作。
 

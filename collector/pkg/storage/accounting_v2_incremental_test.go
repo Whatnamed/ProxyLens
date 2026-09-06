@@ -283,11 +283,52 @@ func TestSeedChunkedResumeMatchesSingleShot(t *testing.T) {
 	}
 }
 
+type incrementalCostTiming struct {
+	historyEvents     int
+	setup             time.Duration
+	baseFixture       time.Duration
+	historyInsertion  time.Duration
+	seed              time.Duration
+	appendedInsertion time.Duration
+	incremental       time.Duration
+	freshness         time.Duration
+	seedCalls         int
+	seedRunRows       int64
+	seedProcessed     int64
+	seedBoundary      int64
+}
+
+func latestSeedProgress(ctx context.Context, db *sql.DB) (runRows, processed, boundary int64, err error) {
+	err = db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(processed_events), 0),
+		       COALESCE(MAX(to_sequence_inclusive), 0)
+		FROM accounting_runs_v2
+		WHERE mode = 'seed';
+	`).Scan(&runRows, &processed, &boundary)
+	return
+}
+
+func generationProgress(ctx context.Context, db *sql.DB) (status string, seedLast, materializeLast, published int64, err error) {
+	gen, activeErr := GetActiveAccountingGeneration(ctx, db)
+	if activeErr == nil && gen != nil {
+		return gen.Status, gen.SeedLastSequence, gen.MaterializeLastSequence, gen.PublishedJournalSequence, nil
+	}
+	gen, err = getResumableGeneration(ctx, db)
+	if err != nil {
+		return "", 0, 0, 0, err
+	}
+	if gen == nil {
+		return "none", 0, 0, 0, nil
+	}
+	return gen.Status, gen.SeedLastSequence, gen.MaterializeLastSequence, gen.PublishedJournalSequence, nil
+}
+
 // TestIncrementalConstantCost is the architectural guard proving incremental
 // cost depends on the appended range, not on history size: the same appended
 // batch on a large-history generation must not be orders of magnitude slower
-// than on a small-history generation. (The full 1.5M-row proof runs in the
-// E-drive scale acceptance tool.)
+// than on a small-history generation. The ordinary regression guard uses
+// measured developer-scale histories; the full 1.5M-row proof belongs to the
+// E-drive scale acceptance tool.
 func TestIncrementalConstantCost(t *testing.T) {
 	if testing.Short() {
 		t.Skip("constant-cost test skipped in short mode")
@@ -295,7 +336,10 @@ func TestIncrementalConstantCost(t *testing.T) {
 	ctx := context.Background()
 	base := fixtureBase()
 
-	buildAndMeasure := func(t *testing.T, historyEvents int) time.Duration {
+	buildAndMeasure := func(t *testing.T, historyEvents int) incrementalCostTiming {
+		t.Helper()
+		measurement := incrementalCostTiming{historyEvents: historyEvents}
+		stageStart := time.Now()
 		dbPath, cleanup := createAccountingTestDB(t)
 		defer cleanup()
 		db, closeDB := runEquivalenceDB(t, dbPath)
@@ -305,24 +349,64 @@ func TestIncrementalConstantCost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		measurement.setup = time.Since(stageStart)
+
+		stageStart = time.Now()
 		emitEquivalenceFrameScript(t, s, 1, base.Add(time.Second))
+		measurement.baseFixture = time.Since(stageStart)
+
+		stageStart = time.Now()
 		if err := bulkInsertJournalRows(t, db, historyEvents); err != nil {
 			t.Fatal(err)
 		}
+		// The fixture is a closed historical dataset. Leaving the session in
+		// "running" makes the final synthetic frame look incomplete because it
+		// has no SamplingResidual, so the frame-aligned seed boundary cannot
+		// advance past it. Production code correctly refuses that boundary; the
+		// test harness must finalize its synthetic session before seeding.
+		if err := s.EndSession(ctx, equivalenceFixtureSession, SessionStatusClosedClean); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		measurement.historyInsertion = time.Since(stageStart)
 
 		// Seed to activation (may span multiple chunked calls).
+		stageStart = time.Now()
 		for {
 			gen, genErr := GetActiveAccountingGeneration(ctx, db)
 			if genErr == nil && gen != nil {
 				break
 			}
+			callStart := time.Now()
 			if _, err := AdvanceAccountingV2(ctx, db, "seed", 0); err != nil {
 				t.Fatal(err)
 			}
+			measurement.seedCalls++
+			if measurement.seedCalls > 1000 {
+				t.Fatalf("seed did not activate after %d calls; fixture likely contains an incomplete final frame", measurement.seedCalls)
+			}
+			runRows, processed, boundary, err := latestSeedProgress(ctx, db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			measurement.seedRunRows = runRows
+			measurement.seedProcessed = processed
+			measurement.seedBoundary = boundary
+			status, seedLast, materializeLast, published, err := generationProgress(ctx, db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("history=%d seed call=%d callDuration=%v seedRuns=%d processed=%d maxBoundary=%d generation=%s seedLast=%d materializeLast=%d published=%d",
+				historyEvents, measurement.seedCalls, time.Since(callStart), runRows, processed, boundary,
+				status, seedLast, materializeLast, published)
 		}
+		measurement.seed = time.Since(stageStart)
 
 		// Identical appended batch for both histories, inserted directly into
 		// the journal beyond the published boundary.
+		stageStart = time.Now()
 		var maxSeq int64
 		if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(journal_sequence),0) FROM event_journal;`).Scan(&maxSeq); err != nil {
 			t.Fatal(err)
@@ -368,13 +452,15 @@ func TestIncrementalConstantCost(t *testing.T) {
 			t.Fatal(err)
 		}
 		stmt.Close()
+		measurement.appendedInsertion = time.Since(stageStart)
 
-		start := time.Now()
+		stageStart = time.Now()
 		if _, err := AdvanceAccountingV2(ctx, db, "appended batch", 0); err != nil {
 			t.Fatal(err)
 		}
-		elapsed := time.Since(start)
+		measurement.incremental = time.Since(stageStart)
 
+		stageStart = time.Now()
 		fresh, err := NewAnalyticsService(db).GetAccountingFreshness(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -382,15 +468,31 @@ func TestIncrementalConstantCost(t *testing.T) {
 		if !fresh.IsFresh {
 			t.Fatalf("history %d: expected fresh after incremental, got %+v", historyEvents, fresh)
 		}
-		return elapsed
+		measurement.freshness = time.Since(stageStart)
+		t.Logf("history=%d timing setup=%v baseFixture=%v historyInsertion=%v seed=%v appendedInsertion=%v incremental=%v freshness=%v seedCalls=%d seedRuns=%d seedProcessed=%d seedBoundary=%d",
+			historyEvents, measurement.setup, measurement.baseFixture, measurement.historyInsertion,
+			measurement.seed, measurement.appendedInsertion, measurement.incremental, measurement.freshness,
+			measurement.seedCalls, measurement.seedRunRows, measurement.seedProcessed, measurement.seedBoundary)
+		return measurement
 	}
 
-	small := buildAndMeasure(t, 10000)
-	large := buildAndMeasure(t, 300000)
-	ratio := float64(large) / float64(small)
-	t.Logf("incremental duration: small-history(10k)=%v large-history(300k)=%v ratio=%.1fx", small, large, ratio)
+	measurements := make([]incrementalCostTiming, 0, 2)
+	for _, historyEvents := range []int{10000, 100000} {
+		historyEvents := historyEvents
+		t.Run(fmt.Sprintf("history_%dk", historyEvents/1000), func(t *testing.T) {
+			measurements = append(measurements, buildAndMeasure(t, historyEvents))
+		})
+	}
+	if len(measurements) != 2 {
+		t.Fatalf("constant-cost comparison requires both history fixtures; completed %d", len(measurements))
+	}
+
+	small := measurements[0]
+	large := measurements[len(measurements)-1]
+	ratio := float64(large.incremental) / float64(small.incremental)
+	t.Logf("incremental duration: small-history(10k)=%v large-history(100k)=%v ratio=%.1fx", small.incremental, large.incremental, ratio)
 	if ratio >= 20 {
-		t.Fatalf("large history made a small incremental batch %.0fx slower (small=%v large=%v)", ratio, small, large)
+		t.Fatalf("large history made a small incremental batch %.0fx slower (small=%v large=%v)", ratio, small.incremental, large.incremental)
 	}
 }
 
