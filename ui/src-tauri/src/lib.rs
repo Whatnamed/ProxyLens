@@ -9,7 +9,7 @@ use state::AppState;
 use std::env;
 use std::path::Path;
 use std::time::Duration;
-use tauri::{Manager, State};
+use tauri::{LogicalSize, Manager, Size, State};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -31,6 +31,47 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let state: State<AppState> = app.state();
+
+            if sidecar::visual_qa_query_only_enabled() {
+                // This branch intentionally does not call bootstrap_supervisor,
+                // installed_owner, Runtime, or Collector. It is the only
+                // supported path for real-Tauri visual fixture review.
+                match sidecar::validate_visual_qa_environment()
+                    .and_then(|_| sidecar::resolve_visual_qa_db_path())
+                {
+                    Ok(db_path) => {
+                        if let Err(error) = apply_visual_qa_window_size(&handle) {
+                            eprintln!("[ProxyLens Tauri] Visual QA window sizing refused: {error}");
+                        }
+                        eprintln!(
+                            "PROXYLENS_VISUAL_QA_MODE queryOnly=1 owner=0 runtime=0 controller=0"
+                        );
+                        match tauri::async_runtime::block_on(sidecar::spawn_query_sidecar(
+                            &handle, &db_path,
+                        )) {
+                            Ok((session, child)) => {
+                                eprintln!(
+                                    "[ProxyLens Tauri] Visual QA query sidecar ready at: {}",
+                                    session.base_url
+                                );
+                                *state.session.lock().unwrap() = Some(session);
+                                *state.child.lock().unwrap() = Some(child);
+                                eprintln!(
+                                    "PROXYLENS_VISUAL_QA_READY queryOnly=1 owner=0 runtime=0 controller=0"
+                                );
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[ProxyLens Tauri] Visual QA query sidecar failed: {error}"
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("[ProxyLens Tauri] Visual QA refused: {error}");
+                    }
+                }
+            } else {
 
             // An installed current-user Task Scheduler task is the preferred
             // owner. Developer checkouts without that exact owner retain the
@@ -110,6 +151,7 @@ pub fn run() {
             } else if let Err(e) = db_res {
                 eprintln!("[ProxyLens Tauri] Notice: {}", e);
             }
+            }
 
             schedule_e2e_auto_exit(&handle);
             Ok(())
@@ -178,6 +220,33 @@ fn schedule_e2e_auto_exit(app_handle: &tauri::AppHandle) {
             let _ = window.close();
         }
     });
+}
+
+fn apply_visual_qa_window_size(app_handle: &tauri::AppHandle) -> Result<(), String> {
+    let Some(raw_size) = env::var("PROXYLENS_VISUAL_QA_WINDOW_SIZE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let (width, height) = raw_size
+        .split_once('x')
+        .ok_or_else(|| "expected WIDTHxHEIGHT".to_string())?;
+    let width = width
+        .parse::<f64>()
+        .map_err(|_| "window width must be numeric".to_string())?;
+    let height = height
+        .parse::<f64>()
+        .map_err(|_| "window height must be numeric".to_string())?;
+    if !(width >= 800.0 && height >= 600.0) {
+        return Err("visual QA window size is below the supported minimum".to_string());
+    }
+    let window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| "main window is not available".to_string())?;
+    window
+        .set_size(Size::Logical(LogicalSize::new(width, height)))
+        .map_err(|error| format!("failed to set visual QA window size: {error}"))
 }
 
 fn supervisor_bootstrap_succeeded(state: &State<AppState>) -> bool {

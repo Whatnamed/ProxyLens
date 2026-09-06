@@ -2,6 +2,7 @@ use crate::state::QueryApiSession;
 use rand::RngCore;
 use serde::Deserialize;
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
@@ -37,6 +38,86 @@ pub fn resolve_runtime_db_path() -> Result<PathBuf, String> {
         false,
         |path| path.is_file(),
     )
+}
+
+/// Visual acceptance is deliberately query-only. Both gates are required
+/// before this path is considered active; a partial environment must not
+/// enter either the production owner or the visual path.
+pub fn visual_qa_query_only_enabled() -> bool {
+    env::var("PROXYLENS_E2E_MODE").unwrap_or_default() == "1"
+        && env::var("PROXYLENS_VISUAL_QA_QUERY_ONLY").unwrap_or_default() == "1"
+}
+
+/// Reject inherited production authority before opening the visual fixture.
+pub fn validate_visual_qa_environment() -> Result<(), String> {
+    for name in ["PROXYLENS_CONTROLLER_URL", "MIHOMO_SECRET"] {
+        if env_value(name).is_some() {
+            return Err(format!(
+                "VISUAL_QA_NOT_SAFE: {name} must be unset in query-only visual QA mode"
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn resolve_visual_qa_db_path() -> Result<PathBuf, String> {
+    resolve_visual_qa_db_path_from_values(
+        env_value("PROXYLENS_DB_PATH"),
+        env_value("LOCALAPPDATA"),
+        |path| path.is_file(),
+    )
+}
+
+fn resolve_visual_qa_db_path_from_values(
+    explicit_db_path: Option<String>,
+    local_app_data: Option<String>,
+    path_exists: impl Fn(&Path) -> bool,
+) -> Result<PathBuf, String> {
+    let Some(explicit_db_path) = explicit_db_path else {
+        return Err(
+            "VISUAL_QA_NOT_SAFE: PROXYLENS_DB_PATH must explicitly point to an existing fixture DB"
+                .to_string(),
+        );
+    };
+    let path = PathBuf::from(&explicit_db_path);
+    if !path.is_absolute() {
+        return Err(
+            "VISUAL_QA_NOT_SAFE: PROXYLENS_DB_PATH must be an absolute fixture path".to_string(),
+        );
+    }
+    if !path_exists(&path) {
+        return Err(format!(
+            "DB_NOT_READY: visual QA fixture does not exist at '{}'",
+            explicit_db_path
+        ));
+    }
+
+    if let Some(local_app_data) = local_app_data {
+        let canonical = PathBuf::from(local_app_data)
+            .join("ProxyLens")
+            .join("data")
+            .join("proxylens.db");
+        if paths_equal_for_safety(&path, &canonical) {
+            return Err(
+                "VISUAL_QA_NOT_SAFE: canonical production database is not allowed in query-only visual QA mode"
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(path)
+}
+
+fn paths_equal_for_safety(left: &Path, right: &Path) -> bool {
+    let left = fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
+    let right = fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
+    left.to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+        == right
+            .to_string_lossy()
+            .replace('\\', "/")
+            .to_ascii_lowercase()
 }
 
 pub fn resolve_query_db_path() -> Result<PathBuf, String> {
@@ -210,7 +291,7 @@ pub fn stop_query_sidecar(mut child: CommandChild) {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_db_path_from_values;
+    use super::{resolve_db_path_from_values, resolve_visual_qa_db_path_from_values};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -314,5 +395,41 @@ mod tests {
         )
         .expect("writer resolution should allow the first-run database");
         assert_eq!(resolved, PathBuf::from(r"C:\fixture\missing.db"));
+    }
+
+    #[test]
+    fn visual_qa_requires_explicit_existing_absolute_noncanonical_fixture() {
+        let resolved = resolve_visual_qa_db_path_from_values(
+            Some(r"C:\qa\fixture.db".to_string()),
+            Some(r"C:\Users\tester\AppData\Local".to_string()),
+            |_| true,
+        )
+        .expect("isolated fixture should resolve");
+        assert_eq!(resolved, PathBuf::from(r"C:\qa\fixture.db"));
+
+        assert!(resolve_visual_qa_db_path_from_values(
+            None,
+            Some(r"C:\Users\tester\AppData\Local".to_string()),
+            |_| true,
+        )
+        .is_err());
+        assert!(resolve_visual_qa_db_path_from_values(
+            Some(r"fixtures\fixture.db".to_string()),
+            Some(r"C:\Users\tester\AppData\Local".to_string()),
+            |_| true,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn visual_qa_rejects_canonical_production_database() {
+        let canonical = r"C:\Users\tester\AppData\Local\ProxyLens\data\proxylens.db";
+        let error = resolve_visual_qa_db_path_from_values(
+            Some(canonical.to_string()),
+            Some(r"C:\Users\tester\AppData\Local".to_string()),
+            |_| true,
+        )
+        .expect_err("production DB must be rejected");
+        assert!(error.contains("canonical production database"));
     }
 }
