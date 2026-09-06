@@ -133,6 +133,7 @@ pub fn get_runtime_settings(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RuntimeSettingsSnapshot, String> {
+    ensure_runtime_settings_allowed()?;
     collect_snapshot(&app_handle, &state)
 }
 
@@ -142,6 +143,7 @@ pub async fn apply_runtime_settings(
     state: State<'_, AppState>,
     request: RuntimeSettingsApplyRequest,
 ) -> Result<RuntimeSettingsApplyOutcome, String> {
+    ensure_runtime_settings_allowed()?;
     let payload =
         serde_json::to_vec(&request).map_err(|_| "Changes were not saved.".to_string())?;
     let (success, output) =
@@ -213,6 +215,22 @@ pub async fn apply_runtime_settings(
             settings,
         })
     }
+}
+
+fn ensure_runtime_settings_allowed() -> Result<(), String> {
+    let gate = crate::sidecar::visual_qa_gate();
+    if settings_command_allowed_for_gate(gate) {
+        Ok(())
+    } else {
+        Err(
+            "VISUAL_QA_NOT_SAFE: runtime settings are unavailable in query-only visual QA mode"
+                .to_string(),
+        )
+    }
+}
+
+fn settings_command_allowed_for_gate(gate: crate::sidecar::VisualQaGateState) -> bool {
+    crate::sidecar::settings_lifecycle_allowed_for_gate(gate)
 }
 
 fn activation_was_applied(
@@ -379,7 +397,8 @@ fn run_supervisor_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_was_applied, bootstrap_state_name, ConfigStatusWire, ControlStatusWire,
+        activation_was_applied, bootstrap_state_name, settings_command_allowed_for_gate,
+        ConfigStatusWire, ControlStatusWire,
     };
     use crate::supervisor_process::{SupervisorBootstrapState, SupervisorBootstrapStatus};
 
@@ -438,5 +457,18 @@ mod tests {
             runtime_running: false,
         };
         assert!(!activation_was_applied(Some(&stop_status), false));
+    }
+
+    #[test]
+    fn query_only_settings_commands_are_refused_but_normal_product_is_allowed() {
+        assert!(!settings_command_allowed_for_gate(
+            crate::sidecar::VisualQaGateState::Active
+        ));
+        assert!(!settings_command_allowed_for_gate(
+            crate::sidecar::VisualQaGateState::RefusedIncomplete
+        ));
+        assert!(settings_command_allowed_for_gate(
+            crate::sidecar::VisualQaGateState::Disabled
+        ));
     }
 }

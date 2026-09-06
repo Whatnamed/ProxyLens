@@ -32,7 +32,8 @@ pub fn run() {
             let handle = app.handle().clone();
             let state: State<AppState> = app.state();
 
-            if sidecar::visual_qa_query_only_enabled() {
+            match sidecar::visual_qa_gate() {
+                sidecar::VisualQaGateState::Active => {
                 // This branch intentionally does not call bootstrap_supervisor,
                 // installed_owner, Runtime, or Collector. It is the only
                 // supported path for real-Tauri visual fixture review.
@@ -40,9 +41,8 @@ pub fn run() {
                     .and_then(|_| sidecar::resolve_visual_qa_db_path())
                 {
                     Ok(db_path) => {
-                        if let Err(error) = apply_visual_qa_window_size(&handle) {
-                            eprintln!("[ProxyLens Tauri] Visual QA window sizing refused: {error}");
-                        }
+                        apply_visual_qa_window_size(&handle)
+                            .map_err(|error| format!("Visual QA refused: {error}"))?;
                         eprintln!(
                             "PROXYLENS_VISUAL_QA_MODE queryOnly=1 owner=0 runtime=0 controller=0"
                         );
@@ -71,13 +71,19 @@ pub fn run() {
                         eprintln!("[ProxyLens Tauri] Visual QA refused: {error}");
                     }
                 }
-            } else {
+                }
+                sidecar::VisualQaGateState::RefusedIncomplete => {
+                    eprintln!(
+                        "PROXYLENS_VISUAL_QA_REFUSED reason=incomplete_visual_qa_gate"
+                    );
+                }
+                sidecar::VisualQaGateState::Disabled => {
 
-            // An installed current-user Task Scheduler task is the preferred
-            // owner. Developer checkouts without that exact owner retain the
-            // direct Supervisor bootstrap below. Query remains a separate,
-            // UI-owned, read-only sidecar.
-            match sidecar::resolve_runtime_db_path() {
+                    // An installed current-user Task Scheduler task is the preferred
+                    // owner. Developer checkouts without that exact owner retain the
+                    // direct Supervisor bootstrap below. Query remains a separate,
+                    // UI-owned, read-only sidecar.
+                    match sidecar::resolve_runtime_db_path() {
                 Ok(runtime_db_path) => {
                     let bootstrap = tauri::async_runtime::block_on(bootstrap_supervisor(
                         &handle,
@@ -122,35 +128,36 @@ pub fn run() {
                     );
                     *state.supervisor_status.lock().unwrap() = status;
                 }
-            }
-
-            let db_res = if supervisor_bootstrap_succeeded(&state) {
-                tauri::async_runtime::block_on(sidecar::wait_for_query_db_path(
-                    Duration::from_secs(2),
-                ))
-            } else {
-                sidecar::resolve_query_db_path()
-            };
-            if let Ok(db_path) = db_res {
-                eprintln!("[ProxyLens Tauri] Resolved Query DB path: {:?}", db_path);
-                match tauri::async_runtime::block_on(sidecar::spawn_query_sidecar(
-                    &handle, &db_path,
-                )) {
-                    Ok((session, child)) => {
-                        eprintln!(
-                            "[ProxyLens Tauri] Query sidecar ready at: {}",
-                            session.base_url
-                        );
-                        *state.session.lock().unwrap() = Some(session);
-                        *state.child.lock().unwrap() = Some(child);
                     }
-                    Err(e) => {
-                        eprintln!("[ProxyLens Tauri] Failed to start query sidecar: {}", e);
+
+                    let db_res = if supervisor_bootstrap_succeeded(&state) {
+                        tauri::async_runtime::block_on(sidecar::wait_for_query_db_path(
+                            Duration::from_secs(2),
+                        ))
+                    } else {
+                        sidecar::resolve_query_db_path()
+                    };
+                    if let Ok(db_path) = db_res {
+                        eprintln!("[ProxyLens Tauri] Resolved Query DB path: {:?}", db_path);
+                        match tauri::async_runtime::block_on(sidecar::spawn_query_sidecar(
+                            &handle, &db_path,
+                        )) {
+                            Ok((session, child)) => {
+                                eprintln!(
+                                    "[ProxyLens Tauri] Query sidecar ready at: {}",
+                                    session.base_url
+                                );
+                                *state.session.lock().unwrap() = Some(session);
+                                *state.child.lock().unwrap() = Some(child);
+                            }
+                            Err(e) => {
+                                eprintln!("[ProxyLens Tauri] Failed to start query sidecar: {}", e);
+                            }
+                        }
+                    } else if let Err(e) = db_res {
+                        eprintln!("[ProxyLens Tauri] Notice: {}", e);
                     }
                 }
-            } else if let Err(e) = db_res {
-                eprintln!("[ProxyLens Tauri] Notice: {}", e);
-            }
             }
 
             schedule_e2e_auto_exit(&handle);
@@ -229,6 +236,16 @@ fn apply_visual_qa_window_size(app_handle: &tauri::AppHandle) -> Result<(), Stri
     else {
         return Ok(());
     };
+    let (width, height) = parse_visual_qa_window_size(&raw_size)?;
+    let window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| "main window is not available".to_string())?;
+    window
+        .set_size(Size::Logical(LogicalSize::new(width, height)))
+        .map_err(|error| format!("failed to set visual QA window size: {error}"))
+}
+
+fn parse_visual_qa_window_size(raw_size: &str) -> Result<(f64, f64), String> {
     let (width, height) = raw_size
         .split_once('x')
         .ok_or_else(|| "expected WIDTHxHEIGHT".to_string())?;
@@ -241,12 +258,7 @@ fn apply_visual_qa_window_size(app_handle: &tauri::AppHandle) -> Result<(), Stri
     if !(width >= 800.0 && height >= 600.0) {
         return Err("visual QA window size is below the supported minimum".to_string());
     }
-    let window = app_handle
-        .get_webview_window("main")
-        .ok_or_else(|| "main window is not available".to_string())?;
-    window
-        .set_size(Size::Logical(LogicalSize::new(width, height)))
-        .map_err(|error| format!("failed to set visual QA window size: {error}"))
+    Ok((width, height))
 }
 
 fn supervisor_bootstrap_succeeded(state: &State<AppState>) -> bool {
@@ -257,4 +269,24 @@ fn supervisor_bootstrap_succeeded(state: &State<AppState>) -> bool {
             | supervisor_process::SupervisorBootstrapState::AlreadyRunning
             | supervisor_process::SupervisorBootstrapState::Installed
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_visual_qa_window_size;
+
+    #[test]
+    fn parses_supported_visual_qa_window_size() {
+        assert_eq!(
+            parse_visual_qa_window_size("1600x1000").expect("valid size"),
+            (1600.0, 1000.0)
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_or_too_small_visual_qa_window_size() {
+        assert!(parse_visual_qa_window_size("1600").is_err());
+        assert!(parse_visual_qa_window_size("799x600").is_err());
+        assert!(parse_visual_qa_window_size("1600x599").is_err());
+    }
 }

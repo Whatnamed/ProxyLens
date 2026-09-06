@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-09-06 — Final Tauri acceptance targeted review closure
+
+**Scope:** 只修正 Visual QA gate 的 fail-closed 控制流、query-only Settings lifecycle side effect
+边界与窗口尺寸 evidence；未启动 Phase 4、未重跑 Phase 3S、未触碰真实 FLClash/Mihomo。
+
+**Completed:**
+
+- Visual QA gate 抽为纯状态并覆盖 normal product、existing E2E、complete query-only 与 incomplete request；不完整请求明确拒绝，不进入 owner/Supervisor/Runtime/Query product bootstrap；
+- query-only `get_runtime_settings` / `apply_runtime_settings` 在 Tauri command 边界 fail-closed，正常产品 Settings 行为保持不变；
+- 固定 viewport 失败会使 QA run 失败，evidence 同时记录 requested size 与 CDP actual viewport；
+- 真实 Tauri targeted interaction recheck 补齐 History/Inspector boundary、Refresh snapshot、Select/DatePicker/Status keyboard focus、locale persistence、native-control 与 overlay geometry evidence；Design System v1 继续 Frozen；
+- `TestIncrementalConstantCost` 唯一 targeted command 在当前环境 600.079s 后 timeout；未改 storage/accounting code，作为独立 follow-up 记录。
+
+---
+
 ## 2026-09-06 — Phase 3 Final Tauri Visual Acceptance & Design System Freeze
 
 **Scope:** 在不启动产品 owner、Runtime、Collector 或真实 Controller 的前提下，完成双门控

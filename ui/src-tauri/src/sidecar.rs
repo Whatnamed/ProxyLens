@@ -40,22 +40,69 @@ pub fn resolve_runtime_db_path() -> Result<PathBuf, String> {
     )
 }
 
-/// Visual acceptance is deliberately query-only. Both gates are required
-/// before this path is considered active; a partial environment must not
-/// enter either the production owner or the visual path.
+/// Visual acceptance is deliberately query-only. A missing Visual QA flag is
+/// not a request and therefore preserves the existing product/E2E behavior;
+/// once the flag is present, however, an incomplete gate must be refused
+/// rather than falling through to owner/Supervisor/Runtime bootstrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualQaGateState {
+    Disabled,
+    Active,
+    RefusedIncomplete,
+}
+
+pub fn visual_qa_gate_from_values(
+    e2e_mode: Option<&str>,
+    visual_qa_flag: Option<&str>,
+) -> VisualQaGateState {
+    if visual_qa_flag.is_none() {
+        return VisualQaGateState::Disabled;
+    }
+    if e2e_mode == Some("1") && visual_qa_flag == Some("1") {
+        VisualQaGateState::Active
+    } else {
+        VisualQaGateState::RefusedIncomplete
+    }
+}
+
+pub fn visual_qa_gate() -> VisualQaGateState {
+    visual_qa_gate_from_values(
+        env::var("PROXYLENS_E2E_MODE").ok().as_deref(),
+        env::var("PROXYLENS_VISUAL_QA_QUERY_ONLY").ok().as_deref(),
+    )
+}
+
 pub fn visual_qa_query_only_enabled() -> bool {
-    env::var("PROXYLENS_E2E_MODE").unwrap_or_default() == "1"
-        && env::var("PROXYLENS_VISUAL_QA_QUERY_ONLY").unwrap_or_default() == "1"
+    visual_qa_gate() == VisualQaGateState::Active
+}
+
+pub fn settings_lifecycle_allowed_for_gate(gate: VisualQaGateState) -> bool {
+    gate == VisualQaGateState::Disabled
 }
 
 /// Reject inherited production authority before opening the visual fixture.
 pub fn validate_visual_qa_environment() -> Result<(), String> {
-    for name in ["PROXYLENS_CONTROLLER_URL", "MIHOMO_SECRET"] {
-        if env_value(name).is_some() {
-            return Err(format!(
-                "VISUAL_QA_NOT_SAFE: {name} must be unset in query-only visual QA mode"
-            ));
-        }
+    validate_visual_qa_authority_values(
+        env_value("PROXYLENS_CONTROLLER_URL").as_deref(),
+        env_value("MIHOMO_SECRET").as_deref(),
+    )
+}
+
+pub fn validate_visual_qa_authority_values(
+    controller_url: Option<&str>,
+    mihomo_secret: Option<&str>,
+) -> Result<(), String> {
+    if controller_url.is_some() {
+        return Err(
+            "VISUAL_QA_NOT_SAFE: PROXYLENS_CONTROLLER_URL must be unset in query-only visual QA mode"
+                .to_string(),
+        );
+    }
+    if mihomo_secret.is_some() {
+        return Err(
+            "VISUAL_QA_NOT_SAFE: MIHOMO_SECRET must be unset in query-only visual QA mode"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -291,7 +338,11 @@ pub fn stop_query_sidecar(mut child: CommandChild) {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_db_path_from_values, resolve_visual_qa_db_path_from_values};
+    use super::{
+        resolve_db_path_from_values, resolve_visual_qa_db_path_from_values,
+        settings_lifecycle_allowed_for_gate, validate_visual_qa_authority_values,
+        visual_qa_gate_from_values, VisualQaGateState,
+    };
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -431,5 +482,49 @@ mod tests {
         )
         .expect_err("production DB must be rejected");
         assert!(error.contains("canonical production database"));
+    }
+
+    #[test]
+    fn visual_qa_gate_preserves_normal_and_existing_e2e_modes() {
+        assert_eq!(
+            visual_qa_gate_from_values(None, None),
+            VisualQaGateState::Disabled
+        );
+        assert_eq!(
+            visual_qa_gate_from_values(Some("1"), None),
+            VisualQaGateState::Disabled
+        );
+        assert_eq!(
+            visual_qa_gate_from_values(Some("1"), Some("1")),
+            VisualQaGateState::Active
+        );
+    }
+
+    #[test]
+    fn incomplete_visual_qa_requests_are_refused_without_falling_through() {
+        assert_eq!(
+            visual_qa_gate_from_values(None, Some("1")),
+            VisualQaGateState::RefusedIncomplete
+        );
+        assert_eq!(
+            visual_qa_gate_from_values(Some("1"), Some("0")),
+            VisualQaGateState::RefusedIncomplete
+        );
+        assert!(!settings_lifecycle_allowed_for_gate(
+            VisualQaGateState::Active
+        ));
+        assert!(!settings_lifecycle_allowed_for_gate(
+            VisualQaGateState::RefusedIncomplete
+        ));
+        assert!(settings_lifecycle_allowed_for_gate(
+            VisualQaGateState::Disabled
+        ));
+    }
+
+    #[test]
+    fn visual_qa_rejects_inherited_controller_and_secret_authority() {
+        assert!(validate_visual_qa_authority_values(Some("http://127.0.0.1:43127"), None).is_err());
+        assert!(validate_visual_qa_authority_values(None, Some("synthetic-secret")).is_err());
+        assert!(validate_visual_qa_authority_values(None, None).is_ok());
     }
 }

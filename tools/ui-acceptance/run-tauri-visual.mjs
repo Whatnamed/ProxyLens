@@ -11,6 +11,9 @@ import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  validateVisualQaRunnerInputs,
+} from './visual-qa-policy.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,10 +90,17 @@ let output = '';
 let child;
 
 try {
-  // Keep this check explicit without ever printing a secret value.
-  if (environment.PROXYLENS_CONTROLLER_URL || environment.MIHOMO_SECRET) {
-    throw new Error('Visual QA runner refused to start with Controller/Secret environment authority');
-  }
+  validateVisualQaRunnerInputs({
+    e2eMode: environment.PROXYLENS_E2E_MODE,
+    visualQaFlag: environment.PROXYLENS_VISUAL_QA_QUERY_ONLY,
+    explicitDbPath: copyDb,
+    fixtureExists: fs.existsSync(copyDb),
+    canonicalProductionDbPath: environment.LOCALAPPDATA
+      ? path.join(environment.LOCALAPPDATA, 'ProxyLens', 'data', 'proxylens.db')
+      : null,
+    controllerUrl: environment.PROXYLENS_CONTROLLER_URL,
+    mihomoSecret: environment.MIHOMO_SECRET,
+  });
 
   child = spawn('cmd.exe', ['/d', '/s', '/c', 'npm.cmd run tauri:dev'], {
     cwd: uiDir,
@@ -113,6 +123,7 @@ try {
     ? 'PROXYLENS_WEBVIEW_E2E_READY meta=0 summary=0 connections=0'
     : 'PROXYLENS_WEBVIEW_E2E_READY meta=1 summary=1 connections=1';
   await waitForOutput(child, () => output.includes(expectedProbe), 30000, 'WebView Query API probe');
+  const actualViewport = await waitForWebviewViewport(cdpPort, size, 30000);
   await waitForProcessExit(child, autoExitMs + 15000, 'Tauri visual QA auto-exit');
   if (child.exitCode !== 0) {
     throw new Error(`Tauri visual QA process exited with code ${child.exitCode}; evidence log: ${logPath}`);
@@ -130,6 +141,8 @@ try {
     runId,
     profile,
     size,
+    requestedSize: size,
+    actualViewport,
     sourceFixture: path.relative(rootDir, sourceDb),
     sourceSha256: sourceShaBefore,
     copiedFixtureSha256: copyShaAfter,
@@ -147,7 +160,7 @@ try {
     evidenceDir: path.relative(rootDir, runDir),
   };
   fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  console.log(`PASS tauri-visual profile=${profile} size=${size} run=${runId} queryOnly=1 owner=0 runtime=0 controller=0 sourceUnchanged=1 copyUnchanged=1`);
+  console.log(`PASS tauri-visual profile=${profile} size=${size} viewport=${actualViewport.width}x${actualViewport.height} run=${runId} queryOnly=1 owner=0 runtime=0 controller=0 sourceUnchanged=1 copyUnchanged=1`);
 } finally {
   logStream.end();
   if (child && child.exitCode === null && !child.killed) terminateProcessTree(child.pid);
@@ -227,6 +240,74 @@ function waitForProcessExit(processHandle, timeoutMs, label) {
       processHandle.removeListener('exit', onExit);
     }
   });
+}
+
+async function waitForWebviewViewport(port, requestedSize, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const viewport = await readWebviewViewport(port);
+      if (requestedSize !== 'max') {
+        const [expectedWidth, expectedHeight] = requestedSize.split('x').map(Number);
+        if (Math.abs(viewport.width - expectedWidth) > 2
+          || Math.abs(viewport.height - expectedHeight) > 2) {
+          throw new Error(
+            `requested viewport ${requestedSize} but observed ${viewport.width}x${viewport.height}`,
+          );
+        }
+      }
+      console.log(
+        `PROXYLENS_VISUAL_QA_VIEWPORT requested=${requestedSize} actual=${viewport.width}x${viewport.height}`,
+      );
+      return viewport;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw new Error(`Timed out reading WebView viewport: ${lastError?.message || 'unavailable'}`);
+}
+
+async function readWebviewViewport(port) {
+  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const page = targets.find((target) => target.type === 'page');
+  if (!page?.webSocketDebuggerUrl) throw new Error('WebView page target is unavailable');
+
+  const socket = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    socket.onerror = () => reject(new Error('WebView CDP connection failed'));
+  });
+
+  let nextId = 1;
+  const pending = new Map();
+  socket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    const resolve = pending.get(message.id);
+    if (resolve) {
+      pending.delete(message.id);
+      resolve(message);
+    }
+  };
+  const call = (method, params = {}) => new Promise((resolve) => {
+    const id = nextId++;
+    pending.set(id, resolve);
+    socket.send(JSON.stringify({ id, method, params }));
+  });
+
+  try {
+    const response = await call('Runtime.evaluate', {
+      expression: 'JSON.stringify({width: innerWidth, height: innerHeight, dpr: devicePixelRatio})',
+      returnByValue: true,
+    });
+    if (response.error || response.result?.exceptionDetails) {
+      throw new Error('WebView viewport evaluation failed');
+    }
+    return JSON.parse(response.result.result.value);
+  } finally {
+    socket.close();
+  }
 }
 
 function terminateProcessTree(pid) {

@@ -159,9 +159,11 @@
 - 本任务正式 runtime 测试使用 `httptest` / mock WebSocket 与隔离临时 SQLite DB；真实 FLClash/Mihomo lifecycle 与 real-data validation 未纳入本阶段正式验收。
 - Phase 3 final Tauri visual acceptance：query-only 双门控路径、五套 synthetic fixture、1280×800 / 1440×900 / 1600×1000 与 maximized spot check 均完成；每次均确认 `owner=0 runtime=0 controller=0`、Query probe、source/copy SHA 不变。
 - Final Tauri interaction matrix：healthy 的 Overview / History + selected Inspector / Coverage 在 EN / 中文与 Light / Dark 下完成实际 WebView2 交互；gaps 的 Inspect Around Gap → History、scaled 的 pagination/filter/Inspector/Coverage/theme 重绘均通过；无 P0/P1 blocker。
+- Final Tauri targeted review closure：Visual QA gate 已抽为可单测的 `Disabled` / `Active` / `RefusedIncomplete` 纯状态；不完整请求 fail-closed 且不进入产品 bootstrap；query-only Settings commands fail-closed；固定窗口 evidence 同时记录 requested size 与 CDP actual CSS viewport（1280×800、1600×1000 targeted smoke 均匹配）。
+- Final Tauri interaction recheck：真实 WebView2 完成 History/Inspector boundary、Refresh frozen snapshot、Select Arrow/Home/End/Enter/Space/Tab、DatePicker focus、System Status focus trap/return、EN↔中文 reload persistence、native-control absence 与 overlay geometry；具体值见 acceptance report。
 - Final rendered-font audit：CDP 实际 glyph 分别命中 Manrope、Sarasa UI SC 与 JetBrains Mono，正式 face `loaded`，`font-synthesis: none`；canonical grayscale spot check 保持结构层级。
 - Scaled UI evidence：100,000-event fixture 的 Query sanity 与 Tauri History/Coverage/Inspector/filter/navigation 交互无明显 main-thread freeze、hover/input starvation 或 repeated-request runaway；详细矩阵见 `docs/acceptance/phase3-final-tauri-visual-acceptance-2026-09-06.md`。
-- Affected Go gate：`go vet` 与 `pkg/api` / fixture command focused tests PASS；`pkg/storage` 全包测试在既有 `TestIncrementalConstantCost` 达到 10 分钟 testing timeout，未改动该 storage 路径，作为非本阶段 blocker 如实记录。
+- Affected Go gate：`go vet` 与 `pkg/api` / fixture command focused tests PASS；唯一允许的 `TestIncrementalConstantCost` targeted command 在当前环境 600.079s 后 timeout，未改动 storage/accounting implementation，作为独立 follow-up 如实记录。
 - `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
 - 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller；AST 守卫递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；lifecycle tooling 另有随机 mock URL、temp-dir、E2E-only status file 与 exact-PID cleanup guard。3E-2B1 验收未启动或修改真实 FLClash/Mihomo，未发生真实网络生命周期或 Mihomo 写操作。
 
