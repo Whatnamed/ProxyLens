@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-09-06 — Phase 3 Final Tauri Visual Acceptance & Design System Freeze
+
+**Scope:** 在不启动产品 owner、Runtime、Collector 或真实 Controller 的前提下，完成双门控
+query-only Tauri visual QA path、五套共享 anchor synthetic fixture 与 final rendered UI acceptance。
+
+**Completed:**
+
+- 新增 fail-closed Tauri query-only visual QA：显式 fixture DB、canonical production DB 拒绝、authority env 清除，以及 source/copy SHA 与 owner/runtime/controller marker 验证；
+- fixture runner 统一生成 `healthy / gaps / stale / empty / scaled`，记录同一 UTC anchor；scaled 100,000 events Query sanity 通过；
+- 真实 WebView2 完成 1280×800、1440×900、1600×1000 与 maximized spot check；Overview、History + Inspector、Coverage、EN / 中文、Light / Dark 及 gaps 跳转、scaled filter/pagination 交互通过；
+- CDP rendered-font 证据确认 Manrope、Sarasa UI SC、JetBrains Mono 实际 glyph 命中；灰阶层级通过；修复 History 主区 `min-width: 0` 导致 Inspector 在最终 viewport 下的布局约束；
+- Design System v1 从 Draft 冻结为 Frozen v1；真实 FLClash/Mihomo 与 real-data validation 仍 Deferred。
+
+**Validation note:** `go vet` 与本阶段 focused Go checks 通过；storage 全包测试的既有
+`TestIncrementalConstantCost` 达到 10 分钟 testing timeout，未改动该路径，详见 acceptance report。
+
+
 ## 2026-09-06 — Phase 3S Correctness Closure (post-review targeted fixes)
 
 **Scope:** 独立 review 新发现的 7 项深层缺陷修复：`loadConnStateClosure` key 缺陷与

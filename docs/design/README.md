@@ -1,7 +1,7 @@
 # ProxyLens UI Design System
 
-**Status:** Draft v1 — implementation-facing, not yet frozen  
-**Current lifecycle:** initial C implementation + engineering/semantic Closure complete; real multi-state visual acceptance still pending.  
+**Status:** Frozen v1 — implementation-facing and acceptance-validated
+**Current lifecycle:** real Tauri multi-fixture visual acceptance complete; subsequent changes require evidence and synchronized implementation/docs updates.
 **Canonical visual reference:** the rules in this directory, not external screenshots.  
 **Product semantics:** current repository code and frozen UI/API/semantic documents remain authoritative.
 
@@ -16,15 +16,16 @@ It is intentionally more detailed than a mood board but lighter than a fully mat
 The system should evolve with the shipped app:
 
 ```text
-Design System Draft
+Design System v1
 → Real Tauri implementation
 → Visual QA
 → Token / Pattern corrections
 → Shipped UI
-→ Design System synchronized back to reality
+→ Design System Frozen v1
 ```
 
-The initial real implementation now exists. The remaining purpose of this Draft is to guide visual acceptance, maintenance and future UI work until the validated shipped UI is stable enough to Freeze v1.
+The initial real implementation has completed final Tauri visual acceptance. This Frozen v1 records the
+validated shipped UI baseline; later changes must be driven by real evidence and kept synchronized with code.
 
 Do not preserve a written rule when the real product proves it is visually or ergonomically wrong; update the rule and implementation together.
 
@@ -60,12 +61,13 @@ frozen API / IA / semantic contracts
 >
 product interaction framework
 >
-Draft Design System
+Frozen Design System v1
 >
 generic UI conventions / external references
 ```
 
-If a verified implementation correction changes a Draft Design System rule, synchronize the document and code together rather than leaving permanent drift.
+If a verified implementation correction changes a Frozen v1 rule, synchronize the document and code together
+and record the evidence rather than leaving permanent drift.
 
 ---
 
@@ -145,12 +147,13 @@ Add those only after the real UI stabilizes and repeated reuse justifies them.
 
 ## Current acceptance boundary
 
-Before freezing Design System v1, complete real Tauri visual review across:
+The v1 freeze was based on real Tauri visual review across:
 
 - healthy / gaps / stale / empty / scaled fixtures;
-- 1280×800 and 1600×1000 minimum review sizes;
+- 1280×800, 1440×900 and 1600×1000 review sizes;
 - Light and Dark themes;
 - History + Inspector, Overview and Coverage;
 - typography/fallback behavior and semantic color footprint.
 
-Use `docs/STATUS.md` for the current validation checklist and `docs/DEVLOG.md` for completed milestone history.
+Use `docs/STATUS.md` and `docs/acceptance/phase3-final-tauri-visual-acceptance-2026-09-06.md` for
+the current validation checklist, and `docs/DEVLOG.md` for completed milestone history.

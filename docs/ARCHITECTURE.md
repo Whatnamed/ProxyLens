@@ -53,6 +53,16 @@ API，Supervisor 与 Runtime/Collector 继续运行，下一次 UI 打开时复�
 mock-only installed product acceptance。Windows Service、托盘、MSI/updater、Test
 Connection、FLClash config discovery、Mihomo 自动配置与真实环境验收仍 Deferred。
 
+### Query-only Tauri visual acceptance boundary
+
+Final visual acceptance 使用双门控 `PROXYLENS_E2E_MODE=1` +
+`PROXYLENS_VISUAL_QA_QUERY_ONLY=1`。该模式只接受显式、已存在且非 canonical production
+DB 的 `PROXYLENS_DB_PATH`，拒绝 inherited Controller/Secret authority，跳过 installed
+owner、Supervisor、Runtime 与 Collector，只启动现有 fixture 的 read-only Query API。
+它是 UI/Query 的验证边界，不是产品 runtime lifecycle，也不改变正常 Tauri 启动分支；每次
+验收必须确认 owner/runtime/controller 均为 0、fixture source/copy 未被写入，且不接触
+真实 FLClash/Mihomo。
+
 核心隔离原则：
 
 ```text

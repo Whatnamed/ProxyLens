@@ -1,6 +1,6 @@
 # ProxyLens — UI Implementation & Visual QA v1
 
-**Status:** Draft implementation guidance
+**Status:** Frozen v1 implementation and QA guidance
 
 ---
 
@@ -19,7 +19,8 @@ Theme tokens
 → pages
 ```
 
-The first implementation is allowed to evolve the Draft Design System when real visual evidence shows a better solution.
+The validated implementation defines the Frozen v1 baseline. A later change is allowed only when real visual
+evidence shows a better solution and the relevant rule, code and acceptance evidence are updated together.
 
 Update docs and code together.
 
@@ -442,7 +443,7 @@ A build passing without visually inspecting the application is not enough for th
 
 At the end of the implementation:
 
-- record any intentional deviations from Design System Draft;
+- record any intentional deviations from Frozen Design System v1;
 - update the Design System when the implementation proved a better rule;
 - do not leave “doc says one thing, code permanently does another.”
 

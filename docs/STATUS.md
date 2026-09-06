@@ -7,13 +7,13 @@
 
 ## Current State
 
-- **当前阶段**：Phase 3S Production Storage & Accounting Scale Closure complete。此前 Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力与交互收口已完成，Design System 继续保持 Draft；Final Full Tauri multi-fixture / real-data visual acceptance 仍 Deferred。
+- **当前阶段**：Phase 3S Production Storage & Accounting Scale Closure complete。此前 Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力、交互与 query-only Tauri multi-fixture visual acceptance 已完成，Design System v1 已 Frozen；真实 FLClash/Mihomo 与 real-data validation 仍 Deferred。
 - **代码线**：以当前 checkout 的 Git HEAD 及其相对 `origin/main` 的关系为准；活动分支名和短期 SHA 不在此处硬编码。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
 - **Closure**：`96b08cb` 之后的代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 `main`；工程/语义 Gate 全部通过。
 - **当前状态与待办**：
-  1. Final Full Tauri multi-fixture / real-data visual acceptance（Deferred：当前不以真实 FLClash/Mihomo lifecycle validation 作为验收路径）。
-  2. UI Design System 继续保持 Draft。
+  1. 真实 FLClash/Mihomo lifecycle 与 real-data visual acceptance（Deferred：本阶段只使用 query-only synthetic fixtures）。
+  2. Phase 4 Audit Intelligence 尚未开始。
 
 ### Phase 3E-1 Runtime Core (Complete)
 
@@ -125,7 +125,7 @@
 8. **Overview Traffic Summary 副标题语义对齐**：副标题统一为全量路由统计语义，避免与当前 `routeFocus` 混淆；
 9. **交互框架文档同步**：`docs/PROXYLENS_UI_PRODUCT_INTERACTION_FRAMEWORK_v1.md` 全面同步双时间模型、`keepLiveTickOnly` 语义作用域防护、Future 分段、Gap 稳定身份选择规范，删除未实现的“anchored to sidebar footer”误导文案；
 10. **高风险交互精准回归测试**：新增 `queries.test.ts` 专门测试 `keepLiveTickOnly` 与 History 作用域隔离；扩充 `coverageSegments.test.ts` 测试 `gapIdentity` 稳定性与防漂移；扩充 `AuditContext.test.ts` 测试快照冻结契约。前端测试达 85 项（18 个 Suite 全部 PASS）；
-11. **视觉状态诚实声明**：维持 Design System 为 Draft，视觉验收待通过完整 Tauri 多 fixture 执行，不妄自宣称 100% 结束；
+ 11. **视觉状态诚实声明**：在最终 Tauri acceptance 完成前维持 Design System 为 Draft；本轮完成后按实际证据 Freeze v1；
 12. **最终收尾清理（Final Closure Cleanup）**：补齐 Coverage 图例各 swatch modifier 与 mixed gap 双色纹理样式（利用 `--pl-status-offline` 与 `--pl-status-gap` 双色条纹在彩色与灰阶下均可明确区分），解耦 Gap Selection 与数据源 Provenance 视觉表现（使用现有统一 neutral/accent selection）；修正 History 翻页时选中项立即置空、彻底消除 Inspector 跨页残留；准确表达 System Status 中源事件数为“核算纳入事件数”并更新 Coverage Gap helper 文案；清理无用 i18n keys（390 keys 严格 1:1 对齐）与遗留 gapIndex/originalIndex 代码；
 13. **History 选区保留与 Overview 局部状态收敛**：删除 HistoryPage 冗余 mount effect，严格由 AuditContext 的 `setPage` 单一权威入口负责翻页选中重置，完整保障 History → Overview/Coverage → History 原样返回时保留选中行与 Inspector；Overview 页面级骨架屏与错误状态严格收敛由 `allSummaryQ` 单一权威决定，Route Focus 切换不再触发整页闪烁，`scopedSummary` 仅局部控制 Missing Attribution 与 Ambiguous Relay，加载时克制呈现局部状态并杜绝假 0 回退。
 
@@ -157,6 +157,11 @@
 - Phase 3S：E: 盘生产规模验收全部 PASS（density 97.62% `ConnectionDelta` 零增量行削减/字节精确；真实库 seed WAL 峰值 8.5MB、authority 字节不变；crash/cancel/bounded；常数成本 0.42s@50K vs 0.34s@1.57M；30min soak FinalLag=0、LegacyRuns=0、QueueOverload=0、MaxIncremental ~0.14s、WAL 峰值 ~5MB）；生产 C: 库短时 revalidation 完成后 collection 再次停止；Go 全量测试 + vet、UI 90 tests + build、cargo 19 tests、`git diff --check` 本地 PASS；这些结果不是 GitHub CI PASS。
 - Phase 3S Correctness Closure & Review Fixes：`go vet ./...` + `go test ./pkg/... ./test/...` 全部 PASS（新增 closure key、stale relation 清理、tombstone FIFO 实例感知淘汰、write-quiescent low-disk 模式、session progress 单调性、shutdown 64-cycle 真实状态报告、frame-complete boundary 切分等回归）；E: cardinality gate 在修正 closure key 后重新实测（1k 3.1ms hold / 10k 8.0ms hold，lag=0，全部 PASS）；全部 90 UI tests 与 Rust 19 cargo tests 全部 PASS；这些结果不是 GitHub CI PASS。
 - 本任务正式 runtime 测试使用 `httptest` / mock WebSocket 与隔离临时 SQLite DB；真实 FLClash/Mihomo lifecycle 与 real-data validation 未纳入本阶段正式验收。
+- Phase 3 final Tauri visual acceptance：query-only 双门控路径、五套 synthetic fixture、1280×800 / 1440×900 / 1600×1000 与 maximized spot check 均完成；每次均确认 `owner=0 runtime=0 controller=0`、Query probe、source/copy SHA 不变。
+- Final Tauri interaction matrix：healthy 的 Overview / History + selected Inspector / Coverage 在 EN / 中文与 Light / Dark 下完成实际 WebView2 交互；gaps 的 Inspect Around Gap → History、scaled 的 pagination/filter/Inspector/Coverage/theme 重绘均通过；无 P0/P1 blocker。
+- Final rendered-font audit：CDP 实际 glyph 分别命中 Manrope、Sarasa UI SC 与 JetBrains Mono，正式 face `loaded`，`font-synthesis: none`；canonical grayscale spot check 保持结构层级。
+- Scaled UI evidence：100,000-event fixture 的 Query sanity 与 Tauri History/Coverage/Inspector/filter/navigation 交互无明显 main-thread freeze、hover/input starvation 或 repeated-request runaway；详细矩阵见 `docs/acceptance/phase3-final-tauri-visual-acceptance-2026-09-06.md`。
+- Affected Go gate：`go vet` 与 `pkg/api` / fixture command focused tests PASS；`pkg/storage` 全包测试在既有 `TestIncrementalConstantCost` 达到 10 分钟 testing timeout，未改动该 storage 路径，作为非本阶段 blocker 如实记录。
 - `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
 - 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller；AST 守卫递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；lifecycle tooling 另有随机 mock URL、temp-dir、E2E-only status file 与 exact-PID cleanup guard。3E-2B1 验收未启动或修改真实 FLClash/Mihomo，未发生真实网络生命周期或 Mihomo 写操作。
 
@@ -182,12 +187,7 @@
 - 本轮 primary-first-line alignment correction：不是 1px polish；DatePicker、network/page-size listbox、segmented controls、RouteBadge / EvidenceChip / Network token / StatusIndicator / Coverage legend、Causal Path 与 Accounting Events 均通过实际渲染截图与首行关系检查；marker 不再由 key/timestamp 或整块内容决定，未新增 locale-specific 或 font-specific offset。
 - 本轮 marker closure：Causal Path 的 Process / Destination secondary path/IP 不影响 marker，Rule / Top policy / Proxy chain / Egress 保持单一 primary；Accounting Events 的规则、代理、流量与 evidence chip 独立下沉；连接线按 primary 首行 marker center 分段，hollow marker 的 surface fill 遮蔽连接线。
 
-仍待人工验收：
-
-- `healthy / gaps / stale / empty / scaled` 全 fixture；
-- 完整 Tauri 运行时下的 1280×800 / 1600×1000；
-- Light / Dark 两套主题在 History + Inspector、Overview、Coverage 上的完整视觉一致性；
-- 本轮仍未用完整 Tauri 多 fixture 取代浏览器 fallback；因此不把 focused QA 表述为最终视觉 Freeze。
+本轮最终验收已关闭上述视觉待办；真实 FLClash/Mihomo 数据与 lifecycle 仍不属于本阶段边界。
 
 ---
 
@@ -211,7 +211,7 @@
 
 ## Open Questions
 
-- 最终视觉验收后，当前 Draft Design System v1 是否 Freeze；
+- Phase 4 Audit Intelligence 的范围与排期；
 - Windows Service、tray、MSI、updater、Test Connection、FLClash config discovery、Mihomo 自动配置与真实 FLClash/Mihomo validation 仍不在当前范围。
 
 ---
@@ -219,13 +219,13 @@
 ## Known Issues / Non-blocking Notes
 
 - 交互模型收口已完成：Overview / Coverage 使用动态推进的 Live Analysis Range，History 使用确定性冻结快照，已解决快照提前生成与展示范围语义漂移问题。
-- UI Design System 仍为 Draft，不应在最终视觉验收前标记 Frozen。
-- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻与 Supervisor crash recovery 已由 Phase 3E-2B2A 的 current-user Task Scheduler LogonTrigger + 无限 `PT1M` repetition 提供，Runtime crash recovery 仍由 Supervisor bounded backoff 负责。Settings/status polish 已完成；最终视觉与真实环境验证仍 Deferred。
+- UI Design System v1 已按本轮真实 Tauri evidence Freeze；后续改动必须保留 semantic tokens、geometry、locale、theme 与 actual rendered-font 证据。
+- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻与 Supervisor crash recovery 已由 Phase 3E-2B2A 的 current-user Task Scheduler LogonTrigger + 无限 `PT1M` repetition 提供，Runtime crash recovery 仍由 Supervisor bounded backoff 负责。Settings/status polish 已完成；真实环境验证仍 Deferred。
 
 ---
 
 ## Next Step
 
-1. 待完整桌面 runtime 条件具备且用户明确安排真实环境后，执行 Deferred 的 Full Tauri multi-fixture / real-data 视觉验收（`healthy / gaps / stale / empty / scaled`，覆盖 1280×800 与 1600×1000，Light / Dark）。
-2. 在完整桌面视觉验收前，UI Design System 继续保持 Draft；之后再按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence。
+1. 待用户明确安排真实环境后，执行 Deferred 的 real FLClash/Mihomo 与 real-data validation；不得把它与本轮 synthetic query-only visual acceptance 混同。
+2. 按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence 前，继续保持本轮已冻结的 Design System v1 与现有只读边界。
 3. Phase 3S 正确性收口（11 blocker）已完成并提交；生产库迁移/revalidation 结果保持有效，生产 active generation 无需 repair。如恢复长期常驻采集，由用户明确决定，不自行动恢复。

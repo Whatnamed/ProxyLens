@@ -1,6 +1,6 @@
 # ProxyLens — UI Components & Product Patterns v1
 
-**Status:** Draft implementation specification  
+**Status:** Frozen v1 implementation specification
 **Goal:** Define only components/patterns that current product surfaces actually need.
 
 ---

@@ -1,7 +1,7 @@
 ---
 name: proxylens-ui-design
 description: Implementation brief for the ProxyLens visual system and audit UI.
-status: draft-v1
+status: frozen-v1
 ---
 
 # Agent Brief

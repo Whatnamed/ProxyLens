@@ -23,7 +23,7 @@ Phase 1  Collector 原型                           [COMPLETED]
    ↓
 Phase 2  持久化、核算与运行时验证                  [COMPLETED]
    ↓
-Phase 3  审计 UI                                  [IN PROGRESS — core UI implemented]
+Phase 3  审计 UI                                  [COMPLETED — core UI + final Tauri visual acceptance]
    ↓
 Phase 3E Desktop Runtime Integration              [IN PROGRESS — runtime implementation complete; final visual/real-environment validation deferred]
    ↓
@@ -107,7 +107,7 @@ Later    长期增强                                 [PLANNED]
 - [x] React 类型化 Query API client；
 - [x] Windows 原生桌面构建验证。
 
-### Phase 3B — Visual System & Primary Audit UI [IMPLEMENTED — VISUAL ACCEPTANCE PENDING]
+### Phase 3B — Visual System & Primary Audit UI [COMPLETED — DESIGN SYSTEM FROZEN V1]
 
 - [x] Draft Design System v1：Light / Dark semantic tokens、Typography、Density、Interaction；
 - [x] 正式 App Shell 与 Overview / History / Coverage 导航；
@@ -116,9 +116,9 @@ Later    长期增强                                 [PLANNED]
 - [x] Temporary Diagnostics 退出默认产品入口；
 - [x] UI semantic Closure、English / 中文 runtime locale + persistence 与 80 个前端回归测试；
 - [x] 确定性 typography assets：Manrope Latin 400/500、Sarasa Gothic UI SC Regular 与 SemiBold→CSS 500、JetBrains Mono 400/500 WOFF2；Narrative 以 script-aware 轴组合，locale 不改变字体或几何；
-- [ ] healthy / gaps / stale / empty / scaled 全 fixture 真实视觉验收；
-- [ ] 1280×800 / 1600×1000 + Light / Dark 完整视觉验收；
-- [ ] 根据验收结果决定是否 Freeze Design System v1；
+- [x] healthy / gaps / stale / empty / scaled 全 fixture 真实 Tauri query-only 视觉验收；
+- [x] 1280×800 / 1440×900 / 1600×1000 + Light / Dark + EN / 中文视觉验收；
+- [x] 根据验收结果 Freeze Design System v1；
 
 ### Phase 3C — History, Search & Connection Detail [PARTIALLY IMPLEMENTED]
 
@@ -159,10 +159,10 @@ Later    长期增强                                 [PLANNED]
 
 仍待后续：
 
-- [ ] Coverage / History 在 scaled fixture 下的真实交互性能验收；
+- [x] Coverage / History 在 scaled fixture 下的真实交互性能验收；
 - [ ] 必要时针对大数据量做虚拟化或渲染优化；
   - [ ] 桌面应用图标、安装版生命周期与启动性能最终打磨；
-  - [ ] 最终视觉 polish 与 Design System freeze。
+  - [x] 最终视觉 polish 与 Design System freeze。
 
 ### Phase 3E — Desktop Runtime Integration [IN PROGRESS — runtime implementation complete; final visual/real-environment validation deferred]
 
@@ -207,7 +207,7 @@ Later    长期增强                                 [PLANNED]
 - [x] effective-source metadata、strict bounded stdin config apply、keep / replace / clear Secret contract、safe rollback 与 saved-pending-restart state；
 - [x] developer checkout installed-layout gate、exact lifecycle rebootstrap、autostart-only non-disruption 与 EN / 中文、Light / Dark utility-dialog states；
 - [x] mock-only installed product acceptance：random mock Controller、random WinCred/task identities、Secret replacement、autostart false → true、UI-close survival 与 same-DB preservation；
-- [ ] real FLClash/Mihomo validation 与最终 real-data visual acceptance（Deferred）。
+- [ ] real FLClash/Mihomo validation 与 real-data visual acceptance（Deferred；synthetic query-only visual acceptance 已完成）。
 
 ---
 
@@ -230,7 +230,7 @@ Later    长期增强                                 [PLANNED]
 
 明确不做（本阶段边界）：
 
-- Final Full Tauri visual acceptance 保持 Deferred；不启动 Phase 4；不 Freeze Design System；
+- Final Full Tauri synthetic query-only visual acceptance 已完成；不启动 Phase 4；真实 FLClash/Mihomo / real-data validation 仍 Deferred；Design System v1 已 Frozen；
 - 不删除/重写/VACUUM 真实 authority DB；不改变 raw authority 语义；不修改 Mihomo/FLClash 任何状态。
 
 ---

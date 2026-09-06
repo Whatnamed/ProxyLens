@@ -1,6 +1,6 @@
 # ProxyLens — UI Design System v1
 
-**Status:** Draft — first implementation baseline  
+**Status:** Frozen v1 — final Tauri visual acceptance baseline
 **Theme strategy:** Light + Dark  
 **Canonical current direction:** Light-first visual baseline; Dark is a coherent adaptation  
 **Primary product character:** Quiet Technical Audit Workspace
@@ -764,19 +764,17 @@ Do not use:
 
 ---
 
-# 18. What is intentionally not frozen yet
+# 18. Frozen v1 boundary and future change policy
 
-The following may be tuned after the first real implementation:
+The following values were reviewed in the final Tauri acceptance and are the Frozen v1 baseline:
 
-- exact neutral hex values for roles not yet selected;
-- exact semantic hue values;
-- sidebar width;
-- Inspector width;
+- exact neutral and semantic roles used by the shipped surfaces;
+- sidebar width and Inspector width;
 - row height within the target range;
-- exact type sizes/weights;
-- exact border contrast;
-- exact spacing between Overview sections.
+- type sizes/weights and border contrast;
+- spacing between Overview sections.
 
-Do not treat first-pass values as branding law before visual QA.
+These are product UI rules, not branding law; any later change requires a concrete visual/interaction
+regression and synchronized documentation.
 
 The design system must follow the real validated UI, not become a reason to preserve a poor first pass.

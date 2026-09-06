@@ -1,6 +1,6 @@
 # ProxyLens — UI Token Reference v1
 
-**Status:** Draft implementation seed  
+**Status:** Frozen v1 implementation reference
 **Important:** Token names/roles are more authoritative than first-pass hex values.
 
 Use semantic variables in components.
@@ -455,9 +455,8 @@ Working implementation constants:
 --pl-inspector-w: 410px;
 ```
 
-These geometry values are intentionally **tunable**.
-
-Do not freeze them until real Tauri visual QA.
+These geometry values were validated in the final Tauri visual acceptance and are Frozen v1. Any later
+change requires real visual evidence and synchronized component/pattern documentation.
 
 ---
 
