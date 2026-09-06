@@ -93,7 +93,9 @@ func generateHealthy(ctx context.Context, dbPath string, anchor time.Time) {
 	sink, err := storage.OpenSQLiteSink(ctx, dbPath, sessionID, "v1.0.0-synthetic")
 	checkErr("OpenSQLiteSink healthy", err)
 
-	baseTime := anchor.Add(-24 * time.Hour)
+	// Keep the healthy sample inside the anchor's local "Today" window so the
+	// default Overview/History surfaces show meaningful data during visual QA.
+	baseTime := anchor.Add(-12 * time.Hour)
 	seq := int64(1)
 
 	// 1. Chrome 访问多个海外域名 (PROXY)
@@ -144,6 +146,20 @@ func generateHealthy(ctx context.Context, dbPath string, anchor time.Time) {
 
 	_, err = storage.RebuildAccounting(ctx, db, "synthetic healthy profile build")
 	checkErr("RebuildAccounting healthy", err)
+
+	// The generator is intentionally time-anchored, while the normal sink uses
+	// wall-clock session timestamps. Normalize the synthetic session so a
+	// visual run performed minutes after generation still renders a healthy
+	// Today window instead of manufacturing an offline trailing gap.
+	startedAt := anchor.Add(-12 * time.Hour).Format(time.RFC3339Nano)
+	lastEventAt := anchor.Add(-3 * time.Hour).Format(time.RFC3339Nano)
+	qaEndAt := anchor.Add(1 * time.Hour).Format(time.RFC3339Nano)
+	_, err = db.ExecContext(ctx, `
+		UPDATE collector_sessions
+		SET started_at = ?, ended_at = ?, last_event_at = ?, last_heartbeat_at = ?, updated_at = ?
+		WHERE session_id = ?;
+	`, startedAt, qaEndAt, lastEventAt, anchor.Format(time.RFC3339Nano), anchor.Format(time.RFC3339Nano), sessionID)
+	checkErr("Normalize healthy visual session", err)
 }
 
 func generateGaps(ctx context.Context, dbPath string, anchor time.Time) {
