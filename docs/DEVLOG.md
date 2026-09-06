@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-09-06 — Phase 4B2A Deterministic Acceptance Closure
+
+**Scope:** 只修正 `review-route-shift` fixture 的完整小时边界、process/host
+证据隔离与 History wording；未修改 detector semantics、History backend、
+accounting writer、migration、index 或真实网络生命周期。
+
+**Completed:**
+
+- 所有 intended baseline/recent host events 与 interval allocation 均限制在
+  各自 full-hour window 内；`route-alpha.example` 改为 sniff-host-only，host
+  detector 的 intended positive set 固定为四个 recorded hosts，negative set
+  明确不出现；固定 anchor 的 xx:05 / xx:55 Go regression 得到相同 ordered set；
+- query-only Tauri 最终八态（1280×800 / 1600×1000 × EN/中文 × Light/Dark）全部
+  通过，`rows=12 hostRows=4`、四个 expected hosts、负例缺失、History drill、
+  source/copy SHA 与 owner/runtime/controller=0 均有 evidence；
+- History wording 明确为 recorded-host value seeded contextual filter，仍按
+  既有 `host` / `sniff_host` substring semantics，不声称 exact SQL match 或数值复现。
+
 ## 2026-09-06 — Phase 4B2A Host Route Transition
 
 **Scope:** 在 Phase 4B1 shared temporal mechanics 上增加窄的 recorded-host
@@ -19,10 +37,10 @@ migration、index 或任何真实网络生命周期。
 - host detector 只接受非空 exact recorded host 且满足 baseline DIRECT>0、
   baseline PROXY=0、recent PROXY>0；recent mixed DIRECT/REJECT、exact/estimated
   evidence、stable host IDs 与 deterministic ordering 均保留；
-- Review 增加 EN/中文 host section 与 `route=PROXY` + exact host History drill，
-  `review-route-shift` 使用 synthetic copied temporary DB；1280×800 EN Light
-  query-only real-Tauri targeted acceptance 通过，Phase 4A sections 与 source/copy
-  SHA、owner/runtime/controller=0 均保持；
+- Review 增加 EN/中文 host section 与 `route=PROXY` + recorded-host-seeded
+  contextual History drill，`review-route-shift` 使用 synthetic copied temporary
+  DB；1280×800 EN Light query-only real-Tauri targeted acceptance 通过，Phase 4A
+  sections 与 source/copy SHA、owner/runtime/controller=0 均保持；
 - legacy/v2 equivalence、API contract、negative detector、10k/100k EQP/timing、
   UI tests/build 与 focused validation 持续覆盖；Phase 4B2B/4C 继续 Deferred。
 

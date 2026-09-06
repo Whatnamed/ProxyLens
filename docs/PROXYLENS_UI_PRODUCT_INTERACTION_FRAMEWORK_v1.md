@@ -213,9 +213,12 @@ Review must not invent score, severity, intent, current node state, or a
 recommendation. Investigation transfers only supported process/host/IP/network/
 exact-rule filters, fixes History route focus to PROXY, and creates a new
 History snapshot. Temporal process investigation carries only `process`, while
-host transition investigation carries only the exact recorded `host`; both use
-the fixed `PROXY` route and do not carry a growth score or create an anomaly
-classification.
+host transition investigation seeds the History `host` filter with the exact
+recorded host value; both use the fixed `PROXY` route and do not carry a growth
+score or create an anomaly classification. The existing History host search is
+contextual across `host` and `sniff_host` (`LIKE` substring semantics), so
+History rows/bytes are investigative context rather than a promise to reproduce
+the temporal hourly host total exactly.
 
 The Review API reads the reconciled accounting authority through the normal
 read-only Query API. It does not contact Mihomo or start/stop any runtime.

@@ -281,7 +281,7 @@ real-data validation remains a separate deferred acceptance boundary.
 
 - [x] 在共享 temporal readiness contract 上增加 generic `temporal-findings` bundle，同时保持 `process-changes` compatibility endpoint；
 - [x] 仅对 exact recorded host 检测 baseline DIRECT>0、baseline PROXY=0、recent PROXY>0，保留 mixed recent DIRECT/REJECT 与 exact/estimated evidence；
-- [x] Review host section、`route=PROXY` + exact host History drill、`review-route-shift` synthetic fixture 与 targeted query-only Tauri evidence；
+- [x] Review host section、`route=PROXY` + recorded-host-seeded contextual History drill、deterministic `review-route-shift` fixture 与 1280×800 / 1600×1000 × EN/ZH × Light/Dark query-only Tauri evidence；
 - [x] 未新增 accounting writer、migration、index 或自动网络动作；
 
 ### Phase 4B2B / 4C — Deferred

@@ -39,8 +39,8 @@
 
 - 已新增只读 generic `GET /api/v1/intelligence/temporal-findings`，复用 Phase 4B1 的同一 authority、monitoring coverage 与 effective-window accounting publication readiness；`process-changes` 保持兼容；
 - host detector 只使用 event-time 已记录的非空 `host`：baseline DIRECT>0、baseline PROXY=0、recent PROXY>0；recent DIRECT/REJECT 证据保留并明确 mixed routing，不推断全部切换；stable ID 为 detector kind + exact host，排序为 recent PROXY bytes desc / host asc；
-- Review 已增加 host temporal section 与 `route=PROXY` + exact host History 下钻；`review-route-shift` fixture 仅用于 copied temporary DB query-only acceptance；
-- 1280×800 EN Light targeted real-Tauri route-shift run 已验证 temporal process/host rows、mixed/estimated evidence、Phase 4A sections、History host drill、viewport/overflow、source/copy SHA 与 `owner=0 runtime=0 controller=0`；既有 Phase 4B1 八态 evidence 继续有效，本窄增量不重复替代它；
+- Review 已增加 host temporal section 与 `route=PROXY` + recorded-host-seeded contextual History 下钻；现有 History host search 继续同时匹配 `host` / `sniff_host` 的 substring 语义；`review-route-shift` fixture 仅用于 copied temporary DB query-only acceptance；
+- 1280×800 / 1600×1000 × EN/中文 × Light/Dark 的最终 route-shift query-only Tauri 八态均已验证 exact 四 host findings、负例缺失、temporal process/host rows、mixed/estimated evidence、Phase 4A sections、History host drill、viewport/overflow、source/copy SHA 与 `owner=0 runtime=0 controller=0`；
 - 本阶段未修改 accounting writer、migration、index、真实 Controller 或网络生命周期；Phase 4B2B/4C 继续 Deferred。
 
 ### Phase 3E-1 Runtime Core (Complete)

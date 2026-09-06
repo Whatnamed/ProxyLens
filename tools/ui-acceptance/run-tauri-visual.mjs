@@ -25,6 +25,19 @@ const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review
 const sizes = new Set(['1280x800', '1440x900', '1600x1000', 'max']);
 const locales = new Set(['en', 'zh-CN']);
 const themes = new Set(['light', 'dark']);
+const routeShiftExpectedHosts = [
+  'host-direct-to-proxy.example',
+  'host-mixed-recent.example',
+  'very-long-recorded-host-name-for-route-transition-review.example',
+  'host-interval.example',
+];
+const routeShiftNegativeHosts = [
+  'host-always-proxy.example',
+  'host-stays-direct.example',
+  'host-new-only.example',
+  'host-reject-baseline.example',
+  'route-alpha.example',
+];
 
 const args = parseArgs(process.argv.slice(2));
 const profile = args.profile || 'healthy';
@@ -381,7 +394,9 @@ async function assertRouteShiftReviewEvidence(port, locale) {
           hasTemporalProcess: text.includes('route-alpha.exe') && text.includes('route-growth.exe'),
           hasPhase4AFallback: text.includes('MATCH fallback') || text.includes('MATCH 兜底'),
           temporalRows: rows.length,
-          hostRows: rows.filter((row) => row.textContent.includes('host-')).length,
+          hostRows: rows.filter((row) => row.textContent.includes(${JSON.stringify(locale === 'zh-CN' ? '已记录主机' : 'Recorded host')})).length,
+          expectedHostsPresent: ${JSON.stringify(routeShiftExpectedHosts)}.every((host) => text.includes(host)),
+          negativeHostsAbsent: ${JSON.stringify(routeShiftNegativeHosts)}.every((host) => !text.includes(host)),
           noHorizontalOverflow: !reviewScroll || reviewScroll.scrollWidth <= reviewScroll.clientWidth + 2,
           documentNoHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
         });
@@ -405,7 +420,8 @@ function isCompleteRouteShiftEvidence(evidence) {
   return Boolean(evidence?.hasComparisonTitle && evidence.hasHostSection && evidence.hasDirectToProxy
     && evidence.hasMixedHost && evidence.hasMixedExplanation && evidence.hasLongHost
     && evidence.hasEstimatedEvidence && evidence.hasTemporalProcess && evidence.hasPhase4AFallback
-    && evidence.temporalRows >= 6 && evidence.hostRows >= 4
+    && evidence.temporalRows >= 6 && evidence.hostRows === routeShiftExpectedHosts.length
+    && evidence.expectedHostsPresent && evidence.negativeHostsAbsent
     && evidence.noHorizontalOverflow && evidence.documentNoHorizontalOverflow);
 }
 

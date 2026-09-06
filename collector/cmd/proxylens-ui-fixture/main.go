@@ -449,27 +449,27 @@ func generateReviewRouteShift(ctx context.Context, dbPath string, anchor time.Ti
 	emitHost("route-stays-direct-base", "host-stays-direct.example", types.RouteDirect, 100, 900, baselineBucket.Add(50*time.Minute))
 	emitHost("route-stays-direct-recent", "host-stays-direct.example", types.RouteDirect, 200, 1800, recentBucket.Add(50*time.Minute))
 	// Negative: recent-only host has no DIRECT baseline evidence.
-	emitHost("route-new-only-recent", "host-new-only.example", types.RouteProxy, 200, 1800, recentBucket.Add(time.Hour))
+	emitHost("route-new-only-recent", "host-new-only.example", types.RouteProxy, 200, 1800, recentBucket.Add(55*time.Minute))
 	// Negative: REJECT-only baseline is not a DIRECT baseline.
-	emitHost("route-reject-base", "host-reject-baseline.example", types.RouteReject, 100, 900, baselineBucket.Add(70*time.Minute))
-	emitHost("route-reject-recent", "host-reject-baseline.example", types.RouteProxy, 200, 1800, recentBucket.Add(70*time.Minute))
+	emitHost("route-reject-base", "host-reject-baseline.example", types.RouteReject, 100, 900, baselineBucket.Add(15*time.Minute))
+	emitHost("route-reject-recent", "host-reject-baseline.example", types.RouteProxy, 200, 1800, recentBucket.Add(15*time.Minute))
 	// Long recorded host exercises the existing truncation/overflow presentation.
 	longHost := "very-long-recorded-host-name-for-route-transition-review.example"
-	emitHost("route-long-base", longHost, types.RouteDirect, 100, 900, baselineBucket.Add(80*time.Minute))
-	emitHost("route-long-recent", longHost, types.RouteProxy, 400, 3600, recentBucket.Add(80*time.Minute))
+	emitHost("route-long-base", longHost, types.RouteDirect, 100, 900, baselineBucket.Add(25*time.Minute))
+	emitHost("route-long-recent", longHost, types.RouteProxy, 400, 3600, recentBucket.Add(25*time.Minute))
 	// Positive interval-derived case preserves estimated evidence in the hourly host dimension.
-	intervalStart := recentBucket.Add(-30 * time.Minute)
-	intervalEnd := recentBucket.Add(30 * time.Minute)
+	intervalStart := recentBucket.Add(5 * time.Minute)
+	intervalEnd := recentBucket.Add(55 * time.Minute)
 	emitHostInterval("route-interval-recent", "host-interval.example", 1000, 3000, recentBucket.Add(30*time.Minute), intervalStart, intervalEnd)
-	emitHost("route-interval-base", "host-interval.example", types.RouteDirect, 100, 900, baselineBucket.Add(90*time.Minute))
+	emitHost("route-interval-base", "host-interval.example", types.RouteDirect, 100, 900, baselineBucket.Add(35*time.Minute))
 
 	// Keep the accepted process temporal and Phase 4A evidence visible in the
 	// same Review page without changing the review-temporal fixture.
 	emitConnEvent(sink, sessionID, 1, &seq, "route-process-alpha-direct", types.EventConnectionNew,
-		"route-alpha.exe", "C:\\Synthetic\\route-alpha.exe", "route-alpha.example", "", "198.51.100.82", "443", "tcp", "DomainSuffix", "route-alpha",
+		"route-alpha.exe", "C:\\Synthetic\\route-alpha.exe", "", "route-alpha.example", "198.51.100.82", "443", "tcp", "DomainSuffix", "route-alpha",
 		types.RouteDirect, []string{"DIRECT"}, 100, 400, baselineBucket.Add(15*time.Minute))
 	emitConnEvent(sink, sessionID, 1, &seq, "route-process-alpha-proxy", types.EventConnectionNew,
-		"route-alpha.exe", "C:\\Synthetic\\route-alpha.exe", "route-alpha.example", "", "198.51.100.82", "443", "tcp", "DomainSuffix", "route-alpha",
+		"route-alpha.exe", "C:\\Synthetic\\route-alpha.exe", "", "route-alpha.example", "198.51.100.82", "443", "tcp", "DomainSuffix", "route-alpha",
 		types.RouteProxy, []string{"Node-Route-03", "ProxyGroup"}, 1000, 4000, recentBucket.Add(15*time.Minute))
 	emitConnEvent(sink, sessionID, 1, &seq, "route-process-growth-base", types.EventConnectionNew,
 		"route-growth.exe", "C:\\Synthetic\\route-growth.exe", "route-growth.example", "", "198.51.100.83", "443", "tcp", "DomainSuffix", "route-growth",

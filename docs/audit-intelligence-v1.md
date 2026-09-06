@@ -165,9 +165,14 @@ Controller config, nodes, system proxy, TUN, DNS, or routes.
 The temporal comparison is shown before the Phase 4A detector sections. It
 uses the existing Review time range, reports its effective baseline/recent
 windows and coverage state, and offers the same read-only History handoff with
-`route=PROXY` plus either the process or exact recorded-host filter. Host
-investigation clears unrelated History filters, resets pagination, and creates
-a fresh snapshot. It does not add a second navigation surface or a
+`route=PROXY` plus either the process filter or a History host filter seeded
+with the exact recorded-host value. The existing History host search remains
+contextual across both `host` and `sniff_host` using its substring semantics;
+it is not an exact SQL host match. The temporal finding remains the
+authoritative historical comparison, while History is an investigation context:
+its rows and bytes are not required to equal the hourly host finding totals.
+Host investigation clears unrelated History filters, resets pagination, and
+creates a fresh snapshot. It does not add a second navigation surface or a
 general-purpose time-series explorer.
 
 ## 5. Fixtures and acceptance
