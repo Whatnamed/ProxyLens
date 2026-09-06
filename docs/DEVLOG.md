@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-09-07 — Phase 4D Real-Data Audit Intelligence Validation
+
+**Scope:** 在 production writer、Task Scheduler owner、WAL 与 DB mtime 静止后，使用
+E: 盘 filesystem-only immutable source-copy、schema-008 reference copy 与 disposable
+schema-009 analysis copy 完成真实数据验证；未修改 accounting、detector、catalog、
+index、migration 设计或任何网络生命周期。
+
+**Completed:**
+
+- Phase 4D0 仅在 disposable analysis copy 上运行 current-main official migration 009；
+  schema、active generation、journal/accounting business invariants 与 `quick_check`
+  均保持一致，source/reference copies 未变；
+- current-main Query API 以 `mode=ro` + `query_only=ON` 完成 health/meta、coverage、
+  summary、findings、temporal-findings 与 connections 读取；真实 5+ GB 数据的性能
+  结果未发现 common-path blocker；
+- static detector sampling 只观察到一个 IP-only candidate，并由独立 SQL 交叉核验；
+  monitoring coverage 不足以形成完整 temporal comparison pair，因此 temporal UI
+  正确保持局部 unavailable，而不是伪造 zero-change；
+- 真实 Tauri query-only spot check（1600×1000 EN Light、1280×800 中文 Dark）验证
+  Review、IP-only → History drill、长字段布局、无横向溢出、analysis copy unchanged
+  与 `owner=0 runtime=0 controller=0`；
+- 脱敏报告见 `docs/acceptance/phase4d-real-data-audit-intelligence-validation-2026-09-07.md`。
+  Phase 4B2B/4C2 与 installed FLClash/Mihomo/live Controller real-environment
+  validation 继续 Deferred。
+
+---
+
 ## 2026-09-07 — Phase 4C1 Background/Security Process Intelligence
 
 **Scope:** 新增 provenance-backed embedded background process catalog 与当前窗口

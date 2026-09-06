@@ -29,7 +29,7 @@ Phase 3E Desktop Runtime Integration              [CORE COMPLETE — real-enviro
    ↓
 Phase 3S Production Storage & Accounting Scale    [COMPLETED]
    ↓
-Phase 4  Audit Intelligence                       [IN PROGRESS — 4A + 4B1 COMPLETE]
+Phase 4  Audit Intelligence                       [IN PROGRESS — 4A + 4B1 + 4B2A + 4C1 + 4D COMPLETE]
    ↓
 Later    长期增强                                 [PLANNED]
 ```
@@ -238,7 +238,7 @@ real-data validation remains a separate deferred acceptance boundary.
 
 ---
 
-## Phase 4 — Audit Intelligence [IN PROGRESS — 4A + 4B1 + 4B2A + 4C1 COMPLETE]
+## Phase 4 — Audit Intelligence [IN PROGRESS — 4A + 4B1 + 4B2A + 4C1 + 4D COMPLETE]
 
 目标：在可靠历史之上，用透明、可解释的规则筛选“值得检查的代理流量”，辅助用户优化分流。
 
@@ -292,10 +292,18 @@ real-data validation remains a separate deferred acceptance boundary.
 - [x] dedicated Review section、EN/中文、Light/Dark、process+target History drill、deterministic `review-background-services` fixture and final query-only Tauri 8-state evidence；
 - [x] no filesystem/service/signature inspection, runtime fetch, writer/migration/index, automatic DIRECT rule or network lifecycle；
 
+### Phase 4D — Real-Data Audit Intelligence Validation & Product Calibration [COMPLETED]
+
+- [x] 在 quiescent production filesystem copy 上完成 official migration 009 的 disposable schema-009 analysis copy，对照 schema-008 reference 保持全部业务 invariants，`quick_check` 为 `ok`；
+- [x] current-main Query API 以 `mode=ro` + `query_only=ON` 完成真实 5+ GB 数据的 schema、authority、coverage、summary、findings、temporal 与 connections 读取性能验证；
+- [x] static detector sampling 与独立 SQL 交叉核验完成；真实窗口的 temporal readiness 因 monitoring gaps 正确保持 unavailable，未新增 threshold、catalog、index、migration 或 accounting 设计；
+- [x] 两次真实 Tauri query-only spot check（1600×1000 EN Light、1280×800 中文 Dark）验证 Review、IP-only → History drill、长字段布局、无横向溢出、copy unchanged 与 `owner=0 runtime=0 controller=0`；
+- [x] 脱敏 acceptance report 已提交；Phase 4B2B/4C2 与 installed FLClash/Mihomo/live Controller real-environment validation 继续 Deferred；
+
 ### Phase 4B2B / 4C2 — Deferred
 
 - [ ] broader historical route-change comparison、canonical target storage/query、suggested rules or scoring；
-- [ ] richer rule/final-proxy/port dimensions、real FLClash/Mihomo and real-data validation；
+- [ ] richer rule/final-proxy/port dimensions；installed FLClash/Mihomo and live Controller real-environment validation remains separately Deferred；
 - [ ] any automatic configuration or network action remains explicitly out of scope。
 
 ---

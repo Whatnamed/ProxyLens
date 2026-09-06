@@ -7,13 +7,13 @@
 
 ## Current State
 
-- **当前阶段**：Phase 4A Audit Intelligence Foundation、Phase 4B1 Temporal Process Intelligence、Phase 4B2A Host Route Transition 与 Phase 4C1 Provenance-backed Background/Security Process Intelligence complete。此前 Phase 3S Production Storage & Accounting Scale Closure、Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力、交互与 query-only Tauri multi-fixture visual acceptance 已完成，Design System v1 已 Frozen；真实 FLClash/Mihomo 与 real-data validation 仍 Deferred。
+- **当前阶段**：Phase 4A Audit Intelligence Foundation、Phase 4B1 Temporal Process Intelligence、Phase 4B2A Host Route Transition、Phase 4C1 Provenance-backed Background/Security Process Intelligence 与 Phase 4D Real-Data Audit Intelligence Validation complete。此前 Phase 3S Production Storage & Accounting Scale Closure、Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力、交互与 query-only Tauri multi-fixture visual acceptance 已完成，Design System v1 已 Frozen；真实 FLClash/Mihomo lifecycle / live Controller validation 仍是独立 Deferred 边界。
 - **代码线**：以当前 checkout 的 Git HEAD 及其相对 `origin/main` 的关系为准；活动分支名和短期 SHA 不在此处硬编码。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
-- **Closure**：既有 Phase 3 / Phase 4A / Phase 4B1 代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 `main`；当前 checkout 继续记录 Phase 4B2A 的独立收口状态。
+- **Closure**：既有 Phase 3 / Phase 4A / Phase 4B1 / Phase 4B2A / Phase 4C1 代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 main；Phase 4D 仅提交脱敏 acceptance/calibration 文档，不改变生产代码或网络生命周期。
 - **当前状态与待办**：
-  1. 真实 FLClash/Mihomo lifecycle 与 real-data visual acceptance（Deferred：本阶段只使用 query-only synthetic fixtures）。
-  2. Phase 4B2B/4C2 Audit Intelligence enhancements 尚未开始；真实 FLClash/Mihomo 与 real-data validation 仍单独 Deferred。
+  1. separately deferred 的 installed FLClash/Mihomo lifecycle / live Controller validation，需另行执行完整安全预检；本次 Phase 4D 只使用 quiescent production copy。
+  2. Phase 4B2B/4C2 Audit Intelligence enhancements 尚未开始；Phase 4D 未提供足够 ready temporal window 证明其必要性，继续 Deferred。
 
 ### Phase 4A Audit Intelligence Foundation (Complete)
 
@@ -51,6 +51,16 @@
 - Review 已新增后台 / 安全服务目录匹配 section，保持中性 evidence 语义（catalog match ≠ signature verification），History 下钻只携带 `route=PROXY`、process 与现有 target context；EN/中文、Light/Dark 与 Design System v1 Frozen 保持一致；
 - `review-background-services` fixture 精确包含三个正例、wrong-path/pathless/DIRECT 负例和一个 interval-derived 正例；13:05/13:55 anchor regression、10k/100k static timing、Go/API/UI/Node checks 与 1280×800 / 1600×1000 × EN/中文 query-only Tauri 八态均通过；每态 owner/runtime/controller=0，source/copy unchanged；
 - 本阶段未连接真实 Controller、FLClash/Mihomo、production DB 或 Windows process/service；Phase 4B2B / Phase 4C2 rule suggestions 继续 Deferred。
+
+### Phase 4D Real-Data Audit Intelligence Validation & Product Calibration (Complete)
+
+- 已在 production writer、Task Scheduler owner、WAL 与 DB mtime 静止后，通过 filesystem-only copy 建立 immutable source-copy、schema-008 reference work-copy 与 disposable schema-009 analysis copy；正式 migration 009 后全部业务 invariants 保持一致，quick_check 为 ok；
+- current-main Query API 仅以 mode=ro + query_only=ON 打开 analysis copy；schema、active incremental-v2 authority、health/meta、coverage、summary、findings、temporal-findings 与 connections 读取均通过，analysis copy 未发生写入；
+- 真实历史约 5.41 GB / 1.60M journal rows；最长 gap-free span 约 20.95 分钟，未伪造 temporal ready pair；monitoring gaps 使 temporal comparison 正确返回 unavailable，未改 readiness contract；
+- static Review 在真实窗口只观察到一个 IP-only candidate，约 23.6 MB / 812 physical identities，独立 SQL 交叉核验 route/host/target/identity 语义一致；MATCH、broad UDP、large connection、catalog 与三类 temporal detector 在本数据集没有可采样 finding；
+- /intelligence/findings warm median 约 0.36–0.40s，summary 约 0.19s，History first page 约 0.008s，未发现 common-path performance blocker；未新增 index/migration、threshold、catalog 或 accounting 代码；
+- 两次真实 Tauri query-only spot check（1600×1000 EN Light、1280×800 中文 Dark）均验证 Review、IP-only → History drill、真实长字段布局、无横向溢出、analysis DB unchanged 与 owner=0 runtime=0 controller=0；
+- 脱敏完整报告见 docs/acceptance/phase4d-real-data-audit-intelligence-validation-2026-09-07.md；P0/P1 为 0，Phase 4B2B/4C2 继续 Deferred，下一方向为独立的 installed FLClash/Mihomo real-environment acceptance。
 
 ### Phase 3E-1 Runtime Core (Complete)
 
