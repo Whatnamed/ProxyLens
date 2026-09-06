@@ -85,6 +85,26 @@ func bulkInsertJournalRows(t *testing.T, db *sql.DB, n int) error {
 	return tx.Commit()
 }
 
+func emitZeroSamplingResidual(t *testing.T, s *SQLiteEventSink, frameSequence, eventSequence int64, ts time.Time) {
+	t.Helper()
+	residual := &types.CollectorEvent{
+		Type:          types.EventSamplingResidual,
+		SessionID:     equivalenceFixtureSession,
+		EpochID:       1,
+		FrameSequence: frameSequence,
+		EventSequence: eventSequence,
+		Timestamp:     ts,
+		Details: map[string]any{
+			"residualUpload":   int64(0),
+			"residualDownload": int64(0),
+		},
+	}
+	residual.GenerateDeterministicEventID()
+	if err := s.Emit(residual); err != nil {
+		t.Fatalf("emit sampling residual for frame %d failed: %v", frameSequence, err)
+	}
+}
+
 // TestIncrementalPublishBoundaryAndRuns proves the publish contract: each
 // incremental run records its exact (from, to] range, the published boundary
 // only advances to fully derived ranges, and a no-evidence tick is a no-op.
@@ -349,6 +369,11 @@ func TestIncrementalConstantCost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close fixture sink: %v", err)
+			}
+		}()
 		measurement.setup = time.Since(stageStart)
 
 		stageStart = time.Now()
@@ -359,17 +384,9 @@ func TestIncrementalConstantCost(t *testing.T) {
 		if err := bulkInsertJournalRows(t, db, historyEvents); err != nil {
 			t.Fatal(err)
 		}
-		// The fixture is a closed historical dataset. Leaving the session in
-		// "running" makes the final synthetic frame look incomplete because it
-		// has no SamplingResidual, so the frame-aligned seed boundary cannot
-		// advance past it. Production code correctly refuses that boundary; the
-		// test harness must finalize its synthetic session before seeding.
-		if err := s.EndSession(ctx, equivalenceFixtureSession, SessionStatusClosedClean); err != nil {
-			t.Fatal(err)
-		}
-		if err := s.Close(); err != nil {
-			t.Fatal(err)
-		}
+		bulkFinalFrame := int64(100000 + historyEvents - 1)
+		bulkFinalTimestamp := base.Add(time.Duration(50+(historyEvents-1)%1000) * time.Second)
+		emitZeroSamplingResidual(t, s, bulkFinalFrame, 2, bulkFinalTimestamp)
 		measurement.historyInsertion = time.Since(stageStart)
 
 		// Seed to activation (may span multiple chunked calls).
@@ -452,6 +469,9 @@ func TestIncrementalConstantCost(t *testing.T) {
 			t.Fatal(err)
 		}
 		stmt.Close()
+		appendedFinalFrame := int64(900000 + appended - 1)
+		appendedFinalTimestamp := base.Add(time.Duration(5000+appended-1) * time.Second)
+		emitZeroSamplingResidual(t, s, appendedFinalFrame, 2, appendedFinalTimestamp)
 		measurement.appendedInsertion = time.Since(stageStart)
 
 		stageStart = time.Now()
@@ -476,8 +496,17 @@ func TestIncrementalConstantCost(t *testing.T) {
 		return measurement
 	}
 
+	const (
+		smallHistoryEvents     = 10000
+		largeHistoryEvents     = 300000
+		maxIncrementalSlowdown = 20.0
+	)
+	// The ordinary guard uses a 30x history spread while keeping the test in
+	// the tens-of-seconds range on a developer machine. A 20x ceiling rejects
+	// an approximately history-linear regression without making this test a
+	// substitute for the 1.5M-row E-drive scale acceptance.
 	measurements := make([]incrementalCostTiming, 0, 2)
-	for _, historyEvents := range []int{10000, 100000} {
+	for _, historyEvents := range []int{smallHistoryEvents, largeHistoryEvents} {
 		historyEvents := historyEvents
 		t.Run(fmt.Sprintf("history_%dk", historyEvents/1000), func(t *testing.T) {
 			measurements = append(measurements, buildAndMeasure(t, historyEvents))
@@ -490,8 +519,9 @@ func TestIncrementalConstantCost(t *testing.T) {
 	small := measurements[0]
 	large := measurements[len(measurements)-1]
 	ratio := float64(large.incremental) / float64(small.incremental)
-	t.Logf("incremental duration: small-history(10k)=%v large-history(100k)=%v ratio=%.1fx", small.incremental, large.incremental, ratio)
-	if ratio >= 20 {
+	t.Logf("incremental duration: small-history(%d)=%v large-history(%d)=%v ratio=%.1fx",
+		small.historyEvents, small.incremental, large.historyEvents, large.incremental, ratio)
+	if ratio >= maxIncrementalSlowdown {
 		t.Fatalf("large history made a small incremental batch %.0fx slower (small=%v large=%v)", ratio, small.incremental, large.incremental)
 	}
 }

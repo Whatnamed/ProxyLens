@@ -16,7 +16,7 @@
 - query-only `get_runtime_settings` / `apply_runtime_settings` 在 Tauri command 边界 fail-closed，正常产品 Settings 行为保持不变；
 - 固定 viewport 失败会使 QA run 失败，evidence 同时记录 requested size 与 CDP actual viewport；
 - 真实 Tauri targeted interaction recheck 补齐 History/Inspector boundary、Refresh snapshot、Select/DatePicker/Status keyboard focus、locale persistence、native-control 与 overlay geometry evidence；Design System v1 继续 Frozen；
-- `TestIncrementalConstantCost` 在当时环境 600.079s 后 timeout；后续独立 follow-up 已定位为测试 fixture 未结束 synthetic session，导致 seed 卡在不完整末帧，未归因于 production accounting。
+- `TestIncrementalConstantCost` 在当时环境 600.079s 后 timeout；后续 follow-up 已定位为测试 fixture 未结束 synthetic session，导致 seed 卡在不完整末帧，未归因于 production accounting。最终 fixture 保持 running，并为 bulk/appended 最后一帧补 typed `SamplingResidual`；10k vs 300k（30x）最终 targeted run 约 47.7s，2k incremental 为 0.142s vs 1.387s（9.8x，阈值 <20x），1.5M E-drive proof 继续独立保留。
 
 ---
 
@@ -35,7 +35,8 @@ query-only Tauri visual QA path、五套共享 anchor synthetic fixture 与 fina
 
 **Validation note:** `go vet` 与本阶段 focused Go checks 通过；当时 storage targeted
 `TestIncrementalConstantCost` 达到 10 分钟 testing timeout，后续 follow-up 已修正测试
-fixture 并完成阶段计时，详见 acceptance report。
+fixture 并完成阶段计时；最终 ordinary guard 为 10k vs 300k、约 47.7s、incremental ratio
+9.8x，详见 acceptance report。
 
 
 ## 2026-09-06 — Phase 3S Correctness Closure (post-review targeted fixes)
