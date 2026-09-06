@@ -123,12 +123,67 @@ func (s *Server) handleIntelligenceProcessChanges(w http.ResponseWriter, r *http
 		case errors.Is(err, storage.ErrNoCompletedAccountingRun):
 			s.writeError(w, http.StatusNotFound, "NO_COMPLETED_ACCOUNTING_RUN", "No completed accounting run found in database")
 		case errors.Is(err, storage.ErrInvalidProcessChangeRange):
-			s.writeError(w, http.StatusBadRequest, "INVALID_TIME_RANGE", "Comparison windows must be non-overlapping, UTC-hour aligned, and at least one hour long")
+			s.writeError(w, http.StatusBadRequest, "INVALID_TIME_RANGE", "The baseline window must end at or before the recent window begins; both windows must be UTC-hour aligned and at least one hour long")
 		case errors.Is(err, storage.ErrInvalidProcessChangeLimit):
 			s.writeError(w, http.StatusBadRequest, "INVALID_LIMIT", "limitPerKind must be between 1 and 50")
 		default:
 			s.logInternalError("ListProcessChanges failed", err)
 			s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to retrieve process comparison")
+		}
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleIntelligenceTemporalFindings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
+		return
+	}
+	if s.intelligenceSvc == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "DB_UNAVAILABLE", "Audit intelligence service is unavailable")
+		return
+	}
+
+	values := make(map[string]*time.Time, 4)
+	for _, name := range []string{"baselineFrom", "baselineTo", "recentFrom", "recentTo"} {
+		value, err := parseRequiredTemporalBoundary(r, name)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "INVALID_TIMESTAMP", err.Error())
+			return
+		}
+		values[name] = value
+	}
+
+	limit := storage.TemporalFindingsDefaultLimit
+	if raw := r.URL.Query().Get("limitPerKind"); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 || parsed > storage.TemporalFindingsMaxLimit {
+			s.writeError(w, http.StatusBadRequest, "INVALID_LIMIT", "limitPerKind must be between 1 and 50")
+			return
+		}
+		limit = parsed
+	}
+
+	result, err := s.intelligenceSvc.ListTemporalFindings(r.Context(), storage.TemporalFindingsFilter{
+		BaselineFrom: values["baselineFrom"],
+		BaselineTo:   values["baselineTo"],
+		RecentFrom:   values["recentFrom"],
+		RecentTo:     values["recentTo"],
+		LimitPerKind: limit,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, storage.ErrNoCompletedAccountingRun):
+			s.writeError(w, http.StatusNotFound, "NO_COMPLETED_ACCOUNTING_RUN", "No completed accounting run found in database")
+		case errors.Is(err, storage.ErrInvalidTemporalComparisonRange):
+			s.writeError(w, http.StatusBadRequest, "INVALID_TIME_RANGE", "The baseline window must end at or before the recent window begins; both windows must be UTC-hour aligned and at least one hour long")
+		case errors.Is(err, storage.ErrInvalidTemporalComparisonLimit):
+			s.writeError(w, http.StatusBadRequest, "INVALID_LIMIT", "limitPerKind must be between 1 and 50")
+		default:
+			s.logInternalError("ListTemporalFindings failed", err)
+			s.writeError(w, http.StatusInternalServerError, "QUERY_FAILED", "Failed to retrieve temporal findings")
 		}
 		return
 	}

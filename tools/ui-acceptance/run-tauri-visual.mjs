@@ -21,7 +21,7 @@ const rootDir = path.resolve(__dirname, '..', '..');
 const uiDir = path.join(rootDir, 'ui');
 const fixtureDir = path.join(rootDir, 'fixtures');
 const evidenceRoot = path.join(rootDir, 'tmp', 'phase3-final-acceptance');
-const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete']);
+const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete', 'review-route-shift']);
 const sizes = new Set(['1280x800', '1440x900', '1600x1000', 'max']);
 const locales = new Set(['en', 'zh-CN']);
 const themes = new Set(['light', 'dark']);
@@ -31,7 +31,7 @@ const profile = args.profile || 'healthy';
 const size = args.size || '1600x1000';
 const locale = args.locale || 'en';
 const theme = args.theme || 'light';
-const view = args.view || (profile === 'review' || profile === 'review-temporal' || profile === 'review-temporal-incomplete' ? 'review' : 'overview');
+const view = args.view || (profile === 'review' || profile === 'review-temporal' || profile === 'review-temporal-incomplete' || profile === 'review-route-shift' ? 'review' : 'overview');
 const runId = safeRunId(args['run-id'] || `${profile}-${size}-${Date.now()}`);
 const autoExitMs = parsePositiveInt(args['auto-exit-ms'] || '30000', 'auto-exit-ms');
 const cdpPort = parsePositiveInt(args['cdp-port'] || '9223', 'cdp-port');
@@ -96,6 +96,7 @@ else delete environment.PROXYLENS_VISUAL_QA_WINDOW_SIZE;
 const logStream = fs.createWriteStream(logPath, { flags: 'w' });
 let output = '';
 let child;
+let cdpTargetId = null;
 
 try {
   validateVisualQaRunnerInputs({
@@ -131,15 +132,20 @@ try {
     ? 'PROXYLENS_WEBVIEW_E2E_READY meta=0 summary=0 connections=0'
     : 'PROXYLENS_WEBVIEW_E2E_READY meta=1 summary=1 connections=1';
   await waitForOutput(child, () => output.includes(expectedProbe), 30000, 'WebView Query API probe');
-  await setWebviewPreferences(cdpPort, locale, theme);
-  await waitForWebviewPreferences(cdpPort, locale, theme, 30000);
+  const preferenceReload = await setWebviewPreferences(cdpPort, locale, theme);
+  await waitForWebviewPreferences(cdpPort, locale, theme, preferenceReload.timeOrigin, 30000);
   await selectWebviewView(cdpPort, view);
   const actualState = await waitForWebviewState(cdpPort, size, locale, theme, view, 30000);
-  const temporalEvidence = profile === 'review-temporal'
-    ? await assertTemporalReviewEvidence(cdpPort, locale)
-    : profile === 'review-temporal-incomplete'
-      ? await assertTemporalAccountingIncompleteEvidence(cdpPort, locale)
-      : null;
+  let temporalEvidence = null;
+  let hostDrillEvidence = null;
+  if (profile === 'review-temporal') {
+    temporalEvidence = await assertTemporalReviewEvidence(cdpPort, locale);
+  } else if (profile === 'review-temporal-incomplete') {
+    temporalEvidence = await assertTemporalAccountingIncompleteEvidence(cdpPort, locale);
+  } else if (profile === 'review-route-shift') {
+    temporalEvidence = await assertRouteShiftReviewEvidence(cdpPort, locale);
+    hostDrillEvidence = await assertHostRouteShiftHistoryDrill(cdpPort, locale);
+  }
   const actualViewport = { width: actualState.width, height: actualState.height, dpr: actualState.dpr };
   await waitForProcessExit(child, autoExitMs + 15000, 'Tauri visual QA auto-exit');
   if (child.exitCode !== 0) {
@@ -180,6 +186,7 @@ try {
     cdpPort,
     webviewProbe: expectedProbe,
     temporalEvidence,
+    hostDrillEvidence,
     evidenceDir: path.relative(rootDir, runDir),
   };
   fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
@@ -266,21 +273,26 @@ function waitForProcessExit(processHandle, timeoutMs, label) {
 }
 
 async function setWebviewPreferences(port, locale, theme) {
-  await evaluateWebview(port, `(() => {
+  const result = await evaluateWebview(port, `(() => {
+    const previousTimeOrigin = performance.timeOrigin;
     localStorage.setItem('pl-locale', ${JSON.stringify(locale)});
     localStorage.setItem('pl-theme', ${JSON.stringify(theme)});
     setTimeout(() => location.reload(), 0);
-    return true;
+    return JSON.stringify({ timeOrigin: previousTimeOrigin });
   })()`);
+  return JSON.parse(result);
 }
 
-async function waitForWebviewPreferences(port, expectedLocale, expectedTheme, timeoutMs) {
+async function waitForWebviewPreferences(port, expectedLocale, expectedTheme, previousTimeOrigin, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
     try {
       const state = await readWebviewState(port);
-      if (state.locale === expectedLocale && state.theme === expectedTheme) return;
+      if (state.readyState === 'complete'
+        && state.timeOrigin !== previousTimeOrigin
+        && state.locale === expectedLocale
+        && state.theme === expectedTheme) return;
       throw new Error(`preferences not applied: observed ${state.locale}/${state.theme}`);
     } catch (error) {
       lastError = error;
@@ -343,6 +355,109 @@ function isCompleteTemporalEvidence(evidence) {
     && evidence.hasLongProcess && evidence.hasPhase4AFallback && evidence.temporalRows >= 2
     && evidence.investigateButtons >= 2 && evidence.noHorizontalOverflow
     && evidence.documentNoHorizontalOverflow);
+}
+
+async function assertRouteShiftReviewEvidence(port, locale) {
+  const deadline = Date.now() + 30000;
+  let evidence = null;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      evidence = JSON.parse(await evaluateWebview(port, `(() => {
+        const text = document.body.innerText || '';
+        const reviewScroll = document.querySelector('[data-pl-page="review"] .pl-page__scroll');
+        const rows = [...document.querySelectorAll('.pl-review__temporal-finding')];
+        return JSON.stringify({
+          comparisonTitle: ${JSON.stringify(locale === 'zh-CN' ? '与对比时段相比的变化' : 'Changes from comparison period')},
+          hasComparisonTitle: text.includes(${JSON.stringify(locale === 'zh-CN' ? '与对比时段相比的变化' : 'Changes from comparison period')}),
+          hasHostSection: text.includes(${JSON.stringify(locale === 'zh-CN' ? '近期开始出现代理的主机' : 'Hosts that gained PROXY')}),
+          hasDirectToProxy: text.includes('host-direct-to-proxy.example'),
+          hasMixedHost: text.includes('host-mixed-recent.example'),
+          hasMixedExplanation: text.includes(${JSON.stringify(locale === 'zh-CN'
+            ? '近期同时存在代理与直连流量'
+            : 'Recent period contains both PROXY and DIRECT traffic')}),
+          hasLongHost: text.includes('very-long-recorded-host-name-for-route-transition-review.example'),
+          hasEstimatedEvidence: Boolean(document.querySelector('.pl-review__temporal-finding .pl-evidence-chip--estimated')),
+          hasTemporalProcess: text.includes('route-alpha.exe') && text.includes('route-growth.exe'),
+          hasPhase4AFallback: text.includes('MATCH fallback') || text.includes('MATCH 兜底'),
+          temporalRows: rows.length,
+          hostRows: rows.filter((row) => row.textContent.includes('host-')).length,
+          noHorizontalOverflow: !reviewScroll || reviewScroll.scrollWidth <= reviewScroll.clientWidth + 2,
+          documentNoHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
+        });
+      })()`));
+      if (isCompleteRouteShiftEvidence(evidence)) break;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (!isCompleteRouteShiftEvidence(evidence)) {
+    throw new Error(`Route-shift Review evidence failed: ${JSON.stringify(evidence)}${lastError ? ` (${lastError.message})` : ''}`);
+  }
+  console.log(
+    `PROXYLENS_VISUAL_QA_ROUTE_SHIFT comparison=1 process=1 host=1 mixed=1 estimated=1 phase4a=1 rows=${evidence.temporalRows} hostRows=${evidence.hostRows} overflow=0`,
+  );
+  return evidence;
+}
+
+function isCompleteRouteShiftEvidence(evidence) {
+  return Boolean(evidence?.hasComparisonTitle && evidence.hasHostSection && evidence.hasDirectToProxy
+    && evidence.hasMixedHost && evidence.hasMixedExplanation && evidence.hasLongHost
+    && evidence.hasEstimatedEvidence && evidence.hasTemporalProcess && evidence.hasPhase4AFallback
+    && evidence.temporalRows >= 6 && evidence.hostRows >= 4
+    && evidence.noHorizontalOverflow && evidence.documentNoHorizontalOverflow);
+}
+
+async function assertHostRouteShiftHistoryDrill(port, locale) {
+  const expectedHost = 'host-direct-to-proxy.example';
+  await evaluateWebview(port, `(() => {
+    const row = [...document.querySelectorAll('.pl-review__temporal-finding')]
+      .find((candidate) => candidate.textContent.includes(${JSON.stringify(expectedHost)}));
+    if (!row) throw new Error('host route-shift finding row is unavailable');
+    const button = row.querySelector('button.pl-review__investigate');
+    if (!button) throw new Error('host route-shift investigate button is unavailable');
+    button.click();
+    return true;
+  })()`);
+
+  const deadline = Date.now() + 30000;
+  let evidence = null;
+  let lastError = null;
+  const expectedRoute = locale === 'zh-CN' ? '代理' : 'Proxy';
+  while (Date.now() < deadline) {
+    try {
+      evidence = JSON.parse(await evaluateWebview(port, `(() => {
+        const hostInputs = [...document.querySelectorAll('.pl-history-toolbar input')];
+        const networkTrigger = document.querySelector('.pl-select-menu--network button[data-value]');
+        const routeTablist = document.querySelectorAll('.pl-context-bar [role="tablist"]')[1];
+        const selectedRoute = routeTablist?.querySelector('[role="tab"][aria-selected="true"] .pl-segmented__label')?.textContent?.trim() || '';
+        const pageText = document.querySelector('.pl-pagination__page')?.textContent || '';
+        const snapshot = document.querySelector('.pl-snapshot-chip');
+        return JSON.stringify({
+          history: Boolean(document.querySelector('.pl-history')),
+          routeProxy: selectedRoute === ${JSON.stringify(expectedRoute)},
+          hostFilter: hostInputs.some((input) => input.value === ${JSON.stringify(expectedHost)}),
+          pageOne: /1/.test(pageText),
+          freshSnapshot: Boolean(snapshot && snapshot.textContent.trim()),
+          unrelatedFiltersCleared: hostInputs.filter((input) => input.value !== ${JSON.stringify(expectedHost)})
+            .every((input) => input.value === '') && networkTrigger?.dataset.value === '',
+          pageRows: document.querySelectorAll('.pl-history__table-wrap tbody tr').length,
+        });
+      })()`));
+      if (evidence.history && evidence.routeProxy && evidence.hostFilter && evidence.pageOne
+        && evidence.freshSnapshot && evidence.unrelatedFiltersCleared) break;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (!evidence?.history || !evidence.routeProxy || !evidence.hostFilter || !evidence.pageOne
+    || !evidence.freshSnapshot || !evidence.unrelatedFiltersCleared) {
+    throw new Error(`Host route-shift History drill failed: ${JSON.stringify(evidence)}${lastError ? ` (${lastError.message})` : ''}`);
+  }
+  console.log('PROXYLENS_VISUAL_QA_ROUTE_SHIFT_DRILL history=1 route=PROXY host=1 page=1 freshSnapshot=1 unrelatedFilters=0');
+  return evidence;
 }
 
 async function assertTemporalAccountingIncompleteEvidence(port, locale) {
@@ -415,13 +530,18 @@ async function waitForWebviewState(port, requestedSize, expectedLocale, expected
 }
 
 async function readWebviewState(port) {
-  const value = await evaluateWebview(port, 'JSON.stringify({width: innerWidth, height: innerHeight, dpr: devicePixelRatio, locale: document.documentElement.lang, theme: document.documentElement.getAttribute("data-theme"), view: document.querySelector("[data-pl-page]")?.getAttribute("data-pl-page") || document.querySelector("[data-pl-view][aria-current=page]")?.getAttribute("data-pl-view")})');
+  const value = await evaluateWebview(port, 'JSON.stringify({width: innerWidth, height: innerHeight, dpr: devicePixelRatio, timeOrigin: performance.timeOrigin, readyState: document.readyState, locale: document.documentElement.lang, theme: document.documentElement.getAttribute("data-theme"), view: document.querySelector("[data-pl-page]")?.getAttribute("data-pl-page") || document.querySelector("[data-pl-view][aria-current=page]")?.getAttribute("data-pl-view")})');
   return JSON.parse(value);
 }
 
 async function evaluateWebview(port, expression) {
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  const page = targets.find((target) => target.type === 'page');
+  const pages = targets.filter((target) => target.type === 'page');
+  let page = cdpTargetId ? pages.find((target) => target.id === cdpTargetId) : null;
+  if (!page) {
+    page = pages.find((target) => target.url?.includes('127.0.0.1:1420')) || pages[0];
+    cdpTargetId = page?.id || null;
+  }
   if (!page?.webSocketDebuggerUrl) throw new Error('WebView page target is unavailable');
 
   const socket = new WebSocket(page.webSocketDebuggerUrl);

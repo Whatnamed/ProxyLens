@@ -1,8 +1,8 @@
 import React from 'react';
 import { QueryApiClient } from '../../api/client';
-import { AuditFinding, AuditFindingKind, MetaResponse, ProcessChangeFinding, ProcessChangeResult } from '../../api/types';
+import { AuditFinding, AuditFindingKind, HostRouteChangeFinding, MetaResponse, ProcessChangeFinding, TemporalFindingsResult } from '../../api/types';
 import { useAuditContext, useLocale } from '../../state/AuditContext';
-import { useAuditFindingsQuery, useProcessChangesQuery } from '../../api/queries';
+import { useAuditFindingsQuery, useTemporalFindingsQuery } from '../../api/queries';
 import { PageGate, errorCodeOf, isNoAccountingRunError } from '../common/PageGate';
 import {
   EmptyState,
@@ -31,7 +31,7 @@ function processPeriodHasEstimatedBytes(period: ProcessChangeFinding['recent']):
   );
 }
 
-function comparisonWindowLabel(result: Pick<ProcessChangeResult['baseline'], 'from' | 'to'>, locale: 'en' | 'zh-CN'): string {
+function comparisonWindowLabel(result: Pick<TemporalFindingsResult['baseline'], 'from' | 'to'>, locale: 'en' | 'zh-CN'): string {
   return `${formatLocalDateTime(result.from, locale)} – ${formatLocalDateTime(result.to, locale)}`;
 }
 
@@ -127,10 +127,11 @@ const TemporalFindingRow: React.FC<{
 
 const TemporalReviewSection: React.FC<{
   comparison: TemporalComparisonRange;
-  query: ReturnType<typeof useProcessChangesQuery>;
+  query: ReturnType<typeof useTemporalFindingsQuery>;
   locale: 'en' | 'zh-CN';
   onInvestigate: (finding: ProcessChangeFinding) => void;
-}> = ({ comparison, query, locale, onInvestigate }) => {
+  onHostInvestigate: (finding: HostRouteChangeFinding) => void;
+}> = ({ comparison, query, locale, onInvestigate, onHostInvestigate }) => {
   const { t } = useLocale();
   const result = query.data;
   const unavailable = result && result.status !== 'ready';
@@ -158,23 +159,34 @@ const TemporalReviewSection: React.FC<{
       ) : result ? (
         <>
           <Section title={t('review.temporalNewSection')} sub={t('review.temporalNewSectionSub')} right={<span className="pl-mono pl-small">{result.countsByKind.process_newly_observed_on_proxy ?? 0}</span>}>
-            {result.items.filter((item) => item.kind === 'process_newly_observed_on_proxy').length === 0 ? (
+            {result.processItems.filter((item) => item.kind === 'process_newly_observed_on_proxy').length === 0 ? (
               <div className="pl-review__empty">{t('review.temporalNoChanges')}</div>
             ) : (
               <div className="pl-review__list">
-                {result.items.filter((item) => item.kind === 'process_newly_observed_on_proxy').map((finding) => (
+                {result.processItems.filter((item) => item.kind === 'process_newly_observed_on_proxy').map((finding) => (
                   <TemporalFindingRow key={finding.id} finding={finding} onInvestigate={onInvestigate} />
                 ))}
               </div>
             )}
           </Section>
           <Section title={t('review.temporalGrowthSection')} sub={t('review.temporalGrowthSectionSub')} right={<span className="pl-mono pl-small">{result.countsByKind.process_proxy_growth ?? 0}</span>}>
-            {result.items.filter((item) => item.kind === 'process_proxy_growth').length === 0 ? (
+            {result.processItems.filter((item) => item.kind === 'process_proxy_growth').length === 0 ? (
               <div className="pl-review__empty">{t('review.temporalNoChanges')}</div>
             ) : (
               <div className="pl-review__list">
-                {result.items.filter((item) => item.kind === 'process_proxy_growth').map((finding) => (
+                {result.processItems.filter((item) => item.kind === 'process_proxy_growth').map((finding) => (
                   <TemporalFindingRow key={finding.id} finding={finding} onInvestigate={onInvestigate} />
+                ))}
+              </div>
+            )}
+          </Section>
+          <Section title={t('review.temporalHostSection')} sub={t('review.temporalHostSectionSub')} right={<span className="pl-mono pl-small">{result.countsByKind.host_gained_proxy_after_direct_baseline ?? 0}</span>}>
+            {result.hostItems.length === 0 ? (
+              <div className="pl-review__empty">{t('review.temporalNoHostChanges')}</div>
+            ) : (
+              <div className="pl-review__list">
+                {result.hostItems.map((finding) => (
+                  <HostTemporalFindingRow key={finding.id} finding={finding} onInvestigate={onHostInvestigate} />
                 ))}
               </div>
             )}
@@ -182,6 +194,73 @@ const TemporalReviewSection: React.FC<{
         </>
       ) : null}
     </Section>
+  );
+};
+
+const HostTemporalFindingRow: React.FC<{
+  finding: HostRouteChangeFinding;
+  onInvestigate: (finding: HostRouteChangeFinding) => void;
+}> = ({ finding, onInvestigate }) => {
+  const { t } = useLocale();
+  const estimated = processPeriodHasEstimatedBytes(finding.baseline) || processPeriodHasEstimatedBytes(finding.recent);
+  const mixedRecent = finding.recent.direct.totalBytes > 0;
+  return (
+    <article className="pl-review__finding pl-review__temporal-finding">
+      <div className="pl-review__finding-main">
+        <div className="pl-review__finding-heading">
+          <span className="pl-review__kind">{t('review.temporalHostKind')}</span>
+          <span className="pl-review__target pl-mono" title={finding.host}>{finding.host}</span>
+          <EvidenceChip
+            kind={estimated ? 'estimated' : 'neutral'}
+            label={estimated ? t('common.estimated') : t('common.exact')}
+            title={estimated ? t('review.temporalEstimated') : t('review.temporalExact')}
+          />
+        </div>
+        <dl className="pl-review__facts pl-review__temporal-facts">
+          <div>
+            <dt>{t('review.temporalRecordedHost')}</dt>
+            <dd className="pl-mono">{finding.host}</dd>
+          </div>
+          <div>
+            <dt>{t('review.temporalBaselineDirect')}</dt>
+            <dd className="pl-mono">{formatBytes(finding.baseline.direct.totalBytes)}</dd>
+          </div>
+          <div>
+            <dt>{t('review.temporalBaselineProxy')}</dt>
+            <dd className="pl-mono">{formatBytes(finding.baseline.proxy.totalBytes)}</dd>
+          </div>
+          <div>
+            <dt>{t('review.temporalRecentProxy')}</dt>
+            <dd className="pl-mono">{formatBytes(finding.recent.proxy.totalBytes)}</dd>
+          </div>
+          {mixedRecent && (
+            <div>
+              <dt>{t('review.temporalRecentDirect')}</dt>
+              <dd className="pl-mono">{formatBytes(finding.recent.direct.totalBytes)}</dd>
+            </div>
+          )}
+          {finding.recent.reject.totalBytes > 0 && (
+            <div>
+              <dt>{t('review.temporalRecentReject')}</dt>
+              <dd className="pl-mono">{formatBytes(finding.recent.reject.totalBytes)}</dd>
+            </div>
+          )}
+        </dl>
+        <div className="pl-review__why">
+          <span className="pl-review__why-label">{t('review.why')}</span>
+          <span>{t('review.temporalHostFact')}</span>
+          {mixedRecent && <span>{t('review.temporalHostMixedFact')}</span>}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="pl-btn pl-btn--quiet pl-btn--compact pl-review__investigate"
+        onClick={() => onInvestigate(finding)}
+        aria-label={t('review.temporalHostInvestigateAria', { host: finding.host })}
+      >
+        {t('review.investigate')}
+      </button>
+    </article>
   );
 };
 
@@ -290,7 +369,7 @@ export const ReviewPage: React.FC<{
     [timeRange.kind, resolvedRange],
   );
   const findingsQ = useAuditFindingsQuery(client, resolvedRange.from, resolvedRange.to, rangeSourceKey, 20);
-  const processChangesQ = useProcessChangesQuery(client, comparison, rangeSourceKey, 20);
+  const temporalFindingsQ = useTemporalFindingsQuery(client, comparison, rangeSourceKey, 20);
   const findings = findingsQ.data;
   const noRun = isNoAccountingRunError(findingsQ.error);
 
@@ -327,9 +406,10 @@ export const ReviewPage: React.FC<{
             <div className="pl-review__intro">{t('review.description')}</div>
             <TemporalReviewSection
               comparison={comparison}
-              query={processChangesQ}
+              query={temporalFindingsQ}
               locale={locale}
               onInvestigate={(finding) => investigateFinding({ process: finding.process })}
+              onHostInvestigate={(finding) => investigateFinding({ host: finding.host })}
             />
             {findingsQ.isLoading ? (
               <SkeletonRows rows={10} />

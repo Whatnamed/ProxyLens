@@ -266,7 +266,8 @@ export interface AuditFindingResult {
 
 export type TemporalFindingKind =
   | 'process_newly_observed_on_proxy'
-  | 'process_proxy_growth';
+  | 'process_proxy_growth'
+  | 'host_gained_proxy_after_direct_baseline';
 
 export type ComparisonStatus =
   | 'ready'
@@ -301,11 +302,13 @@ export interface RouteTrafficEvidence {
   estimatedDownloadBytes: number;
 }
 
-export interface ProcessPeriodEvidence {
+export interface RoutePeriodEvidence {
   proxy: RouteTrafficEvidence;
   direct: RouteTrafficEvidence;
   reject: RouteTrafficEvidence;
 }
+
+export type ProcessPeriodEvidence = RoutePeriodEvidence;
 
 export interface ProcessChangeFinding {
   id: string;
@@ -325,6 +328,25 @@ export interface ProcessChangeResult {
   baseline: ComparisonWindowEvidence;
   recent: ComparisonWindowEvidence;
   items: ProcessChangeFinding[];
+  countsByKind: Partial<Record<TemporalFindingKind, number>>;
+  limitPerKind: number;
+}
+
+export interface HostRouteChangeFinding {
+  id: string;
+  kind: 'host_gained_proxy_after_direct_baseline';
+  host: string;
+  baseline: RoutePeriodEvidence;
+  recent: RoutePeriodEvidence;
+}
+
+export interface TemporalFindingsResult {
+  status: ComparisonStatus;
+  accountingVersion: string;
+  baseline: ComparisonWindowEvidence;
+  recent: ComparisonWindowEvidence;
+  processItems: ProcessChangeFinding[];
+  hostItems: HostRouteChangeFinding[];
   countsByKind: Partial<Record<TemporalFindingKind, number>>;
   limitPerKind: number;
 }

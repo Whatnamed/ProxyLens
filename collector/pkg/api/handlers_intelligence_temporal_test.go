@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/storage"
@@ -37,7 +38,9 @@ func TestProcessChangesAPIContractAndCoverageStatus(t *testing.T) {
 		('run-api-temporal', '2026-09-04T00:00:00Z', 'process', 'api-new.exe', 'DIRECT', 1, 1, 1, 1, 1, 0, 0),
 		('run-api-temporal', '2026-09-05T00:00:00Z', 'process', 'api-new.exe', 'PROXY', 10, 90, 1, 10, 90, 0, 0),
 		('run-api-temporal', '2026-09-04T01:00:00Z', 'process', 'api-growth.exe', 'PROXY', 10, 90, 1, 10, 90, 0, 0),
-		('run-api-temporal', '2026-09-05T01:00:00Z', 'process', 'api-growth.exe', 'PROXY', 50, 450, 1, 50, 450, 0, 0);
+		('run-api-temporal', '2026-09-05T01:00:00Z', 'process', 'api-growth.exe', 'PROXY', 50, 450, 1, 50, 450, 0, 0),
+		('run-api-temporal', '2026-09-04T00:00:00Z', 'host', 'api-host.example', 'DIRECT', 1, 9, 1, 1, 9, 0, 0),
+		('run-api-temporal', '2026-09-05T00:00:00Z', 'host', 'api-host.example', 'PROXY', 20, 180, 1, 20, 180, 0, 0);
 	`)
 	if err != nil {
 		db.Close()
@@ -101,5 +104,105 @@ func TestProcessChangesAPIContractAndCoverageStatus(t *testing.T) {
 	handler.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, "/api/v1/intelligence/process-changes?baselineFrom=2026-09-04T00:00:00Z&baselineTo=2026-09-04T02:00:00Z&recentFrom=2026-09-05T00:00:00Z&recentTo=2026-09-05T02:00:00Z", nil))
 	if unauthenticated.Code != http.StatusUnauthorized {
 		t.Fatalf("missing auth status=%d", unauthenticated.Code)
+	}
+}
+
+func TestTemporalFindingsAPIContractAndBundle(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "temporal-findings-api.db")
+	db, err := storage.OpenDB(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO collector_sessions (
+			session_id, started_at, ended_at, last_event_at, last_frame_sequence, status,
+			collector_version, created_at, updated_at, last_heartbeat_at, heartbeat_interval_ms
+		) VALUES ('sess-api-generic', '2026-09-03T23:00:00Z', '2026-09-05T04:00:00Z', '2026-09-05T03:00:00Z', 1, 'closed_clean', 'test', '2026-09-03T23:00:00Z', '2026-09-05T04:00:00Z', '2026-09-05T03:00:00Z', 5000);
+		INSERT INTO accounting_runs (
+			run_id, algorithm_version, started_at, completed_at, status,
+			source_journal_event_count, source_journal_sequence_max, source_boundary_json, notes
+		) VALUES ('run-api-generic', 'legacy-v1', '2026-09-05T04:00:00Z', '2026-09-05T04:00:00Z', 'completed', 4, 4, '{}', 'api generic temporal');
+		INSERT INTO usage_hourly_dimensions (
+			run_id, bucket_start, dimension_type, dimension_key, route,
+			upload_bytes, download_bytes, connection_count,
+			exact_upload_bytes, exact_download_bytes, estimated_upload_bytes, estimated_download_bytes
+		) VALUES
+		('run-api-generic', '2026-09-04T00:00:00Z', 'process', 'api-new.exe', 'DIRECT', 1, 1, 1, 1, 1, 0, 0),
+		('run-api-generic', '2026-09-05T00:00:00Z', 'process', 'api-new.exe', 'PROXY', 10, 90, 1, 10, 90, 0, 0),
+		('run-api-generic', '2026-09-04T01:00:00Z', 'process', 'api-growth.exe', 'PROXY', 10, 90, 1, 10, 90, 0, 0),
+		('run-api-generic', '2026-09-05T01:00:00Z', 'process', 'api-growth.exe', 'PROXY', 50, 450, 1, 50, 450, 0, 0),
+		('run-api-generic', '2026-09-04T00:00:00Z', 'host', 'api-host.example', 'DIRECT', 1, 9, 1, 1, 9, 0, 0),
+		('run-api-generic', '2026-09-05T00:00:00Z', 'host', 'api-host.example', 'PROXY', 20, 180, 1, 20, 180, 0, 0);
+	`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("seed generic temporal API DB: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close writer DB: %v", err)
+	}
+	roDB, err := storage.OpenReadOnlyDB(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnlyDB failed: %v", err)
+	}
+	defer roDB.Close()
+	server, err := NewServer(ServerConfig{DB: roDB, DBPath: dbPath, Token: "generic-temporal-token"})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+	mux := http.NewServeMux()
+	server.registerRoutes(mux)
+	handler := server.AuthAndCORSMiddleware(mux)
+	call := func(method, path string, authenticated bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		if authenticated {
+			req.Header.Set("Authorization", "Bearer generic-temporal-token")
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w
+	}
+
+	baseURL := "/api/v1/intelligence/temporal-findings?baselineFrom=2026-09-04T00:00:00Z&baselineTo=2026-09-04T02:00:00Z&recentFrom=2026-09-05T00:00:00Z&recentTo=2026-09-05T02:00:00Z&limitPerKind=1"
+	if response := call(http.MethodGet, baseURL, false); response.Code != http.StatusUnauthorized {
+		t.Fatalf("missing auth status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodPost, baseURL, true); response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("method status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodGet, "/api/v1/intelligence/temporal-findings", true); response.Code != http.StatusBadRequest {
+		t.Fatalf("missing boundary status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodGet, strings.Replace(baseURL, "baselineFrom=2026-09-04T00:00:00Z", "baselineFrom=2026-09-04T00:30:00Z", 1), true); response.Code != http.StatusBadRequest {
+		t.Fatalf("unaligned boundary status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodGet, strings.Replace(baseURL, "limitPerKind=1", "limitPerKind=51", 1), true); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid limit status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodGet, strings.Replace(baseURL, "baselineFrom=2026-09-04T00:00:00Z&baselineTo=2026-09-04T02:00:00Z&recentFrom=2026-09-05T00:00:00Z&recentTo=2026-09-05T02:00:00Z", "baselineFrom=2026-09-05T00:00:00Z&baselineTo=2026-09-06T00:00:00Z&recentFrom=2026-09-01T00:00:00Z&recentTo=2026-09-02T00:00:00Z", 1), true); response.Code != http.StatusBadRequest {
+		t.Fatalf("reversed windows status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	valid := call(http.MethodGet, baseURL, true)
+	if valid.Code != http.StatusOK {
+		t.Fatalf("valid status=%d body=%s", valid.Code, valid.Body.String())
+	}
+	var result storage.TemporalFindingsResult
+	if err := json.NewDecoder(valid.Body).Decode(&result); err != nil {
+		t.Fatalf("decode temporal findings result: %v", err)
+	}
+	if result.Status != storage.ComparisonReady || result.LimitPerKind != 1 {
+		t.Fatalf("unexpected generic temporal result metadata: %+v", result)
+	}
+	if len(result.ProcessItems) != 2 || len(result.HostItems) != 1 {
+		t.Fatalf("limit must apply per kind: process=%+v host=%+v", result.ProcessItems, result.HostItems)
+	}
+	if result.CountsByKind[storage.TemporalProcessNewlyObservedOnProxy] != 1 || result.CountsByKind[storage.TemporalProcessProxyGrowth] != 1 || result.CountsByKind[storage.TemporalHostGainedProxyAfterDirect] != 1 {
+		t.Fatalf("generic counts must report all matches: %+v", result.CountsByKind)
+	}
+	if result.ProcessItems[0].Process != "api-new.exe" || result.HostItems[0].Host != "api-host.example" {
+		t.Fatalf("generic process/host items missing: %+v", result)
 	}
 }

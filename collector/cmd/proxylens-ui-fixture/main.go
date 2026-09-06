@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled | review | review-temporal | review-temporal-incomplete")
+	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled | review | review-temporal | review-temporal-incomplete | review-route-shift")
 	outPath := flag.String("out", "", "Output SQLite database path (e.g. ./fixtures/fixture_healthy.db)")
 	anchorStr := flag.String("anchor", "", "Anchor time in RFC3339 (optional, defaults to current UTC time)")
 	scaleCount := flag.Int("scale", 100000, "Event count for scaled profile (default: 100000)")
@@ -73,8 +73,10 @@ func main() {
 	case "review-temporal-incomplete":
 		generateReviewTemporal(ctx, absPath, anchorTime)
 		appendReviewTemporalUnpublishedEvidence(ctx, absPath, anchorTime)
+	case "review-route-shift":
+		generateReviewRouteShift(ctx, absPath, anchorTime)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled, review, review-temporal, review-temporal-incomplete\n", *profile)
+		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled, review, review-temporal, review-temporal-incomplete, review-route-shift\n", *profile)
 		os.Exit(1)
 	}
 
@@ -406,6 +408,106 @@ func generateReviewTemporal(ctx context.Context, dbPath string, anchor time.Time
 		WHERE session_id = ?;
 	`, startedAt, qaEndAt, lastEventAt, anchor.Format(time.RFC3339Nano), anchor.Format(time.RFC3339Nano), sessionID)
 	checkErr("Normalize review-temporal visual session", err)
+}
+
+func generateReviewRouteShift(ctx context.Context, dbPath string, anchor time.Time) {
+	sessionID := "sess-synthetic-review-route-shift"
+	sink, err := storage.OpenSQLiteSink(ctx, dbPath, sessionID, "v1.0.0-synthetic-review-route-shift")
+	checkErr("OpenSQLiteSink review-route-shift", err)
+
+	anchorLocal := anchor.In(time.Local)
+	baselineFromLocal := time.Date(anchorLocal.Year(), anchorLocal.Month(), anchorLocal.Day()-1, 0, 0, 0, 0, time.Local)
+	recentTo := anchor.UTC().Truncate(time.Hour)
+	recentBucket := recentTo.Add(-time.Hour)
+	baselineBucketLocal := recentBucket.In(time.Local)
+	baselineBucketLocal = time.Date(baselineBucketLocal.Year(), baselineBucketLocal.Month(), baselineBucketLocal.Day()-1, baselineBucketLocal.Hour(), 0, 0, 0, time.Local)
+	baselineBucket := baselineBucketLocal.UTC()
+
+	seq := int64(1)
+	emitHost := func(id, host string, route types.RouteType, up, down int64, at time.Time) {
+		emitConnEvent(sink, sessionID, 1, &seq, id, types.EventConnectionNew,
+			"route-shift.exe", "C:\\Synthetic\\route-shift.exe", host, "", "198.51.100.80", "443", "tcp", "DomainSuffix", host,
+			route, []string{"Node-Route-01", "ProxyGroup"}, up, down, at)
+	}
+	emitHostInterval := func(id, host string, up, down int64, at, intervalStart, intervalEnd time.Time) {
+		emitConnEventWithInterval(sink, sessionID, 1, &seq, id, types.EventConnectionNew,
+			"route-shift-interval.exe", "C:\\Synthetic\\route-shift-interval.exe", host, "", "198.51.100.81", "443", "tcp", "DomainSuffix", host,
+			types.RouteProxy, []string{"Node-Route-02", "ProxyGroup"}, up, down, at, intervalStart, intervalEnd)
+	}
+
+	// Positive: exact recorded host has DIRECT in baseline and PROXY recently.
+	emitHost("route-direct-to-proxy-base", "host-direct-to-proxy.example", types.RouteDirect, 100, 900, baselineBucket.Add(10*time.Minute))
+	emitHost("route-direct-to-proxy-recent", "host-direct-to-proxy.example", types.RouteProxy, 200, 1800, recentBucket.Add(10*time.Minute))
+	// Positive mixed case: recent DIRECT remains and must be shown explicitly.
+	emitHost("route-mixed-base", "host-mixed-recent.example", types.RouteDirect, 50, 450, baselineBucket.Add(20*time.Minute))
+	emitHost("route-mixed-proxy", "host-mixed-recent.example", types.RouteProxy, 300, 2700, recentBucket.Add(20*time.Minute))
+	emitHost("route-mixed-direct", "host-mixed-recent.example", types.RouteDirect, 25, 225, recentBucket.Add(30*time.Minute))
+	// Negative: baseline already had PROXY.
+	emitHost("route-already-proxy-base", "host-always-proxy.example", types.RouteProxy, 100, 900, baselineBucket.Add(40*time.Minute))
+	emitHost("route-already-proxy-recent", "host-always-proxy.example", types.RouteProxy, 200, 1800, recentBucket.Add(40*time.Minute))
+	// Negative: remains DIRECT.
+	emitHost("route-stays-direct-base", "host-stays-direct.example", types.RouteDirect, 100, 900, baselineBucket.Add(50*time.Minute))
+	emitHost("route-stays-direct-recent", "host-stays-direct.example", types.RouteDirect, 200, 1800, recentBucket.Add(50*time.Minute))
+	// Negative: recent-only host has no DIRECT baseline evidence.
+	emitHost("route-new-only-recent", "host-new-only.example", types.RouteProxy, 200, 1800, recentBucket.Add(time.Hour))
+	// Negative: REJECT-only baseline is not a DIRECT baseline.
+	emitHost("route-reject-base", "host-reject-baseline.example", types.RouteReject, 100, 900, baselineBucket.Add(70*time.Minute))
+	emitHost("route-reject-recent", "host-reject-baseline.example", types.RouteProxy, 200, 1800, recentBucket.Add(70*time.Minute))
+	// Long recorded host exercises the existing truncation/overflow presentation.
+	longHost := "very-long-recorded-host-name-for-route-transition-review.example"
+	emitHost("route-long-base", longHost, types.RouteDirect, 100, 900, baselineBucket.Add(80*time.Minute))
+	emitHost("route-long-recent", longHost, types.RouteProxy, 400, 3600, recentBucket.Add(80*time.Minute))
+	// Positive interval-derived case preserves estimated evidence in the hourly host dimension.
+	intervalStart := recentBucket.Add(-30 * time.Minute)
+	intervalEnd := recentBucket.Add(30 * time.Minute)
+	emitHostInterval("route-interval-recent", "host-interval.example", 1000, 3000, recentBucket.Add(30*time.Minute), intervalStart, intervalEnd)
+	emitHost("route-interval-base", "host-interval.example", types.RouteDirect, 100, 900, baselineBucket.Add(90*time.Minute))
+
+	// Keep the accepted process temporal and Phase 4A evidence visible in the
+	// same Review page without changing the review-temporal fixture.
+	emitConnEvent(sink, sessionID, 1, &seq, "route-process-alpha-direct", types.EventConnectionNew,
+		"route-alpha.exe", "C:\\Synthetic\\route-alpha.exe", "route-alpha.example", "", "198.51.100.82", "443", "tcp", "DomainSuffix", "route-alpha",
+		types.RouteDirect, []string{"DIRECT"}, 100, 400, baselineBucket.Add(15*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "route-process-alpha-proxy", types.EventConnectionNew,
+		"route-alpha.exe", "C:\\Synthetic\\route-alpha.exe", "route-alpha.example", "", "198.51.100.82", "443", "tcp", "DomainSuffix", "route-alpha",
+		types.RouteProxy, []string{"Node-Route-03", "ProxyGroup"}, 1000, 4000, recentBucket.Add(15*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "route-process-growth-base", types.EventConnectionNew,
+		"route-growth.exe", "C:\\Synthetic\\route-growth.exe", "route-growth.example", "", "198.51.100.83", "443", "tcp", "DomainSuffix", "route-growth",
+		types.RouteProxy, []string{"Node-Route-03", "ProxyGroup"}, 500, 1500, baselineBucket.Add(25*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "route-process-growth-recent", types.EventConnectionNew,
+		"route-growth.exe", "C:\\Synthetic\\route-growth.exe", "route-growth.example", "", "198.51.100.83", "443", "tcp", "DomainSuffix", "route-growth",
+		types.RouteProxy, []string{"Node-Route-03", "ProxyGroup"}, 2000, 4000, recentBucket.Add(25*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "route-match", types.EventConnectionNew,
+		"fallback-route.exe", "C:\\Synthetic\\fallback-route.exe", "fallback-route.example", "", "198.51.100.84", "443", "tcp", "MATCH", "",
+		types.RouteProxy, []string{"Node-Route-04", "ProxyGroup"}, 32768, 196608, recentBucket.Add(35*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "route-udp", types.EventConnectionNew,
+		"media-route.exe", "C:\\Synthetic\\media-route.exe", "", "", "198.51.100.85", "443", "udp", "NETWORK,udp", "",
+		types.RouteProxy, []string{"Node-Route-05", "ProxyGroup"}, 4096, 8192, recentBucket.Add(40*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "route-ip-only", types.EventConnectionNew,
+		"sync-route.exe", "C:\\Synthetic\\sync-route.exe", "", "", "203.0.113.85", "443", "tcp", "DomainSuffix", "example",
+		types.RouteProxy, []string{"Node-Route-06", "ProxyGroup"}, 65536, 524288, recentBucket.Add(45*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "route-large", types.EventConnectionNew,
+		"backup-route.exe", "C:\\Synthetic\\backup-route.exe", "archive-route.example", "", "192.0.2.85", "443", "tcp", "DomainSuffix", "archive-route.example",
+		types.RouteProxy, []string{"Node-Route-07", "ProxyGroup"}, 4*1024*1024, 128*1024*1024, recentBucket.Add(50*time.Minute))
+
+	checkErr("EndSession review-route-shift", sink.EndSession(ctx, sessionID, storage.SessionStatusClosedClean))
+	checkErr("Close sink review-route-shift", sink.Close())
+
+	db, err := storage.OpenDB(ctx, dbPath)
+	checkErr("OpenDB review-route-shift", err)
+	defer db.Close()
+	_, err = storage.RebuildAccounting(ctx, db, "synthetic route-shift review profile build")
+	checkErr("RebuildAccounting review-route-shift", err)
+
+	startedAt := baselineFromLocal.UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	lastEventAt := recentTo.Add(-time.Minute).Format(time.RFC3339Nano)
+	qaEndAt := anchor.Add(time.Hour).Format(time.RFC3339Nano)
+	_, err = db.ExecContext(ctx, `
+		UPDATE collector_sessions
+		SET started_at = ?, ended_at = ?, last_event_at = ?, last_heartbeat_at = ?, updated_at = ?
+		WHERE session_id = ?;
+	`, startedAt, qaEndAt, lastEventAt, anchor.Format(time.RFC3339Nano), anchor.Format(time.RFC3339Nano), sessionID)
+	checkErr("Normalize review-route-shift visual session", err)
 }
 
 func appendReviewTemporalUnpublishedEvidence(ctx context.Context, dbPath string, anchor time.Time) {

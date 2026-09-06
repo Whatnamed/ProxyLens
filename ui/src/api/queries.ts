@@ -200,6 +200,43 @@ export function useProcessChangesQuery(
   });
 }
 
+export function useTemporalFindingsQuery(
+  client: QueryApiClient | null,
+  comparison: TemporalComparisonRange,
+  rangeSourceKey: string,
+  limitPerKind = 20,
+) {
+  const baseline = comparison.baselineEffective;
+  const recent = comparison.recentEffective;
+  return useQuery({
+    queryKey: temporalFindingsQueryKey(rangeSourceKey, comparison, limitPerKind),
+    queryFn: () => client!.getTemporalFindings(
+      baseline!.from,
+      baseline!.to,
+      recent!.from,
+      recent!.to,
+      limitPerKind,
+    ),
+    enabled: !!client && !!baseline && !!recent,
+  });
+}
+
+export function temporalFindingsQueryKey(
+  rangeSourceKey: string,
+  comparison: TemporalComparisonRange,
+  limitPerKind: number,
+): readonly unknown[] {
+  return [
+    'temporalFindings',
+    rangeSourceKey,
+    comparison.baselineEffective?.from,
+    comparison.baselineEffective?.to,
+    comparison.recentEffective?.from,
+    comparison.recentEffective?.to,
+    limitPerKind,
+  ];
+}
+
 export function processChangesQueryKey(
   rangeSourceKey: string,
   comparison: TemporalComparisonRange,

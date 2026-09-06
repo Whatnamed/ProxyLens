@@ -267,7 +267,61 @@ severity, risk, connection count, or inferred intent is part of this contract.
 }
 ```
 
-### 3.9 Connection Detail & Traffic
+### 3.9 Temporal Findings Bundle (Phase 4B2A)
+
+`GET /api/v1/intelligence/temporal-findings?baselineFrom=<rfc3339>&baselineTo=<rfc3339>&recentFrom=<rfc3339>&recentTo=<rfc3339>&limitPerKind=20`
+
+- uses the same four explicit UTC-hour, at-least-one-hour, non-overlapping
+  bounds as the Phase 4B1 process endpoint; `baselineTo <= recentFrom` is
+  required;
+- uses one active v2 or completed legacy accounting authority and the shared
+  monitoring-plus-window-publication readiness contract;
+- returns HTTP 200 with an explicit unavailable status and empty
+  `processItems`/`hostItems` when either effective window is not complete;
+- `processItems` preserves the Phase 4B1 process detector semantics;
+- `hostItems` contains only exact recorded hosts with baseline DIRECT bytes
+  greater than zero, baseline PROXY bytes equal to zero, and recent PROXY bytes
+  greater than zero. Recent DIRECT/REJECT evidence is retained, and mixed
+  recent routing is explicitly described by the UI;
+- `limitPerKind` is applied independently to each detector kind, while
+  `countsByKind` reports the unbounded match count;
+- the endpoint is GET-only, Bearer/CORS protected, read-only, and never starts
+  a Runtime or contacts a Controller.
+
+```json
+{
+  "status": "ready",
+  "accountingVersion": "v2-incremental",
+  "baseline": { "from": "2026-09-05T00:00:00Z", "to": "2026-09-06T00:00:00Z" },
+  "recent": { "from": "2026-09-06T00:00:00Z", "to": "2026-09-07T00:00:00Z" },
+  "processItems": [],
+  "hostItems": [
+    {
+      "id": "host_gained_proxy_after_direct_baseline:example.com",
+      "kind": "host_gained_proxy_after_direct_baseline",
+      "host": "example.com",
+      "baseline": {
+        "proxy": { "uploadBytes": 0, "downloadBytes": 0, "totalBytes": 0, "exactUploadBytes": 0, "exactDownloadBytes": 0, "estimatedUploadBytes": 0, "estimatedDownloadBytes": 0 },
+        "direct": { "uploadBytes": 0, "downloadBytes": 1000, "totalBytes": 1000, "exactUploadBytes": 0, "exactDownloadBytes": 1000, "estimatedUploadBytes": 0, "estimatedDownloadBytes": 0 },
+        "reject": { "uploadBytes": 0, "downloadBytes": 0, "totalBytes": 0, "exactUploadBytes": 0, "exactDownloadBytes": 0, "estimatedUploadBytes": 0, "estimatedDownloadBytes": 0 }
+      },
+      "recent": {
+        "proxy": { "uploadBytes": 0, "downloadBytes": 2000, "totalBytes": 2000, "exactUploadBytes": 0, "exactDownloadBytes": 2000, "estimatedUploadBytes": 0, "estimatedDownloadBytes": 0 },
+        "direct": { "uploadBytes": 0, "downloadBytes": 300, "totalBytes": 300, "exactUploadBytes": 0, "exactDownloadBytes": 300, "estimatedUploadBytes": 0, "estimatedDownloadBytes": 0 },
+        "reject": { "uploadBytes": 0, "downloadBytes": 0, "totalBytes": 0, "exactUploadBytes": 0, "exactDownloadBytes": 0, "estimatedUploadBytes": 0, "estimatedDownloadBytes": 0 }
+      }
+    }
+  ],
+  "countsByKind": {
+    "process_newly_observed_on_proxy": 0,
+    "process_proxy_growth": 0,
+    "host_gained_proxy_after_direct_baseline": 1
+  },
+  "limitPerKind": 20
+}
+```
+
+### 3.10 Connection Detail & Traffic
 - `GET /api/v1/connections/{sessionId}/{epochId}/{connectionId}`
   - **三元组唯一身份检索**: 严格使用 `(session_id, epoch_id, connection_id)` 定位物理连接；
   - **完整事件时序列表**: 返回该连接在 latest completed run 中的所有 `accountingEvents[]` 记录（保留 Rule/Host/Chain/Final Proxy 演化证据），以及汇总的 `accountingSummary`。

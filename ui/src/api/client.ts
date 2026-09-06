@@ -11,6 +11,7 @@ import {
   ConnectionTrafficResponse,
   AuditFindingResult,
   ProcessChangeResult,
+  TemporalFindingsResult,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -131,6 +132,22 @@ export class QueryApiClient {
     limitPerKind = 20,
   ): Promise<ProcessChangeResult> {
     return this.request<ProcessChangeResult>('/api/v1/intelligence/process-changes', {
+      baselineFrom,
+      baselineTo,
+      recentFrom,
+      recentTo,
+      limitPerKind,
+    });
+  }
+
+  async getTemporalFindings(
+    baselineFrom: string,
+    baselineTo: string,
+    recentFrom: string,
+    recentTo: string,
+    limitPerKind = 20,
+  ): Promise<TemporalFindingsResult> {
+    return this.request<TemporalFindingsResult>('/api/v1/intelligence/temporal-findings', {
       baselineFrom,
       baselineTo,
       recentFrom,

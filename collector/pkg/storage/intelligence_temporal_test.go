@@ -101,6 +101,118 @@ func TestProcessChangesLegacyV2Equivalence(t *testing.T) {
 	}
 }
 
+func TestHostRouteChangeDetectorSemanticsAndStableIDs(t *testing.T) {
+	intervalStart := temporalComparisonRecentFrom.Add(time.Hour)
+	intervalEnd := intervalStart.Add(time.Hour)
+	longHost := "very-long-recorded-host-name-for-route-transition-review.example"
+	events := []intelligenceFixtureEvent{
+		{id: "host-direct-base", connectionID: "host-direct-base", host: "host-direct-to-proxy.example", route: types.RouteDirect, up: 100, down: 900, observedAt: temporalComparisonBaselineFrom.Add(10 * time.Minute)},
+		{id: "host-direct-recent", connectionID: "host-direct-recent", host: "host-direct-to-proxy.example", route: types.RouteProxy, up: 200, down: 1800, observedAt: temporalComparisonRecentFrom.Add(10 * time.Minute)},
+		{id: "host-mixed-base", connectionID: "host-mixed-base", host: "host-mixed-recent.example", route: types.RouteDirect, up: 50, down: 450, observedAt: temporalComparisonBaselineFrom.Add(20 * time.Minute)},
+		{id: "host-mixed-proxy", connectionID: "host-mixed-proxy", host: "host-mixed-recent.example", route: types.RouteProxy, up: 300, down: 2700, observedAt: temporalComparisonRecentFrom.Add(20 * time.Minute)},
+		{id: "host-mixed-direct", connectionID: "host-mixed-direct", host: "host-mixed-recent.example", route: types.RouteDirect, up: 25, down: 225, observedAt: temporalComparisonRecentFrom.Add(30 * time.Minute)},
+		{id: "host-always-proxy-base", connectionID: "host-always-proxy-base", host: "host-always-proxy.example", route: types.RouteProxy, up: 100, down: 900, observedAt: temporalComparisonBaselineFrom.Add(40 * time.Minute)},
+		{id: "host-always-proxy-recent", connectionID: "host-always-proxy-recent", host: "host-always-proxy.example", route: types.RouteProxy, up: 200, down: 1800, observedAt: temporalComparisonRecentFrom.Add(40 * time.Minute)},
+		{id: "host-stays-direct-base", connectionID: "host-stays-direct-base", host: "host-stays-direct.example", route: types.RouteDirect, up: 100, down: 900, observedAt: temporalComparisonBaselineFrom.Add(50 * time.Minute)},
+		{id: "host-stays-direct-recent", connectionID: "host-stays-direct-recent", host: "host-stays-direct.example", route: types.RouteDirect, up: 200, down: 1800, observedAt: temporalComparisonRecentFrom.Add(50 * time.Minute)},
+		{id: "host-new-only-recent", connectionID: "host-new-only-recent", host: "host-new-only.example", route: types.RouteProxy, up: 200, down: 1800, observedAt: temporalComparisonRecentFrom.Add(time.Hour)},
+		{id: "host-reject-base", connectionID: "host-reject-base", host: "host-reject-baseline.example", route: types.RouteReject, up: 100, down: 900, observedAt: temporalComparisonBaselineFrom.Add(70 * time.Minute)},
+		{id: "host-reject-recent", connectionID: "host-reject-recent", host: "host-reject-baseline.example", route: types.RouteProxy, up: 200, down: 1800, observedAt: temporalComparisonRecentFrom.Add(70 * time.Minute)},
+		{id: "host-empty-recent", connectionID: "host-empty-recent", host: "", route: types.RouteProxy, up: 200, down: 1800, observedAt: temporalComparisonRecentFrom.Add(80 * time.Minute)},
+		{id: "host-long-base", connectionID: "host-long-base", host: longHost, route: types.RouteDirect, up: 100, down: 900, observedAt: temporalComparisonBaselineFrom.Add(80 * time.Minute)},
+		{id: "host-long-recent", connectionID: "host-long-recent", host: longHost, route: types.RouteProxy, up: 400, down: 3600, observedAt: temporalComparisonRecentFrom.Add(80 * time.Minute)},
+		{id: "host-interval-base", connectionID: "host-interval-base", host: "host-interval.example", route: types.RouteDirect, up: 100, down: 900, observedAt: temporalComparisonBaselineFrom.Add(90 * time.Minute)},
+		{id: "host-interval-recent", connectionID: "host-interval-recent", host: "host-interval.example", route: types.RouteProxy, up: 1000, down: 3000, observedAt: intervalStart, precision: "interval_derived", intervalStart: &intervalStart, intervalEnd: &intervalEnd},
+	}
+
+	for _, useV2 := range []bool{false, true} {
+		name := "legacy"
+		if useV2 {
+			name = "v2"
+		}
+		t.Run(name, func(t *testing.T) {
+			db, cleanup := buildTemporalFixture(t, events, useV2)
+			defer cleanup()
+
+			result, err := NewAuditIntelligenceService(db).ListTemporalFindings(context.Background(), validTemporalFilter())
+			if err != nil {
+				t.Fatalf("ListTemporalFindings failed: %v", err)
+			}
+			if result.Status != ComparisonReady {
+				t.Fatalf("status=%s", result.Status)
+			}
+			if got := result.CountsByKind[TemporalHostGainedProxyAfterDirect]; got != 4 {
+				t.Fatalf("host finding count=%d, want 4; items=%+v", got, result.HostItems)
+			}
+			byHost := make(map[string]HostRouteChangeFinding, len(result.HostItems))
+			for _, item := range result.HostItems {
+				byHost[item.Host] = item
+			}
+			for _, expected := range []string{"host-direct-to-proxy.example", "host-mixed-recent.example", longHost, "host-interval.example"} {
+				if _, ok := byHost[expected]; !ok {
+					t.Fatalf("expected host finding %q in %+v", expected, result.HostItems)
+				}
+			}
+			for _, excluded := range []string{"host-always-proxy.example", "host-stays-direct.example", "host-new-only.example", "host-reject-baseline.example", ""} {
+				if _, ok := byHost[excluded]; ok {
+					t.Fatalf("host %q must not be a route transition finding", excluded)
+				}
+			}
+			mixed := byHost["host-mixed-recent.example"]
+			if mixed.Baseline.Direct.TotalBytes != 500 || mixed.Baseline.Proxy.TotalBytes != 0 || mixed.Recent.Proxy.TotalBytes != 3000 || mixed.Recent.Direct.TotalBytes != 250 {
+				t.Fatalf("mixed route evidence was not preserved: %+v", mixed)
+			}
+			interval := byHost["host-interval.example"]
+			if interval.Recent.Proxy.EstimatedUploadBytes == 0 || interval.Recent.Proxy.EstimatedDownloadBytes == 0 || interval.Recent.Proxy.ExactUploadBytes != 0 {
+				t.Fatalf("interval-derived host evidence was not preserved: %+v", interval.Recent.Proxy)
+			}
+
+			wider := validTemporalFilter()
+			wider.RecentTo = ptrTime(temporalComparisonRecentTo.Add(time.Hour))
+			later, err := NewAuditIntelligenceService(db).ListTemporalFindings(context.Background(), wider)
+			if err != nil {
+				t.Fatalf("wider ListTemporalFindings failed: %v", err)
+			}
+			laterIDs := make(map[string]string, len(later.HostItems))
+			for _, item := range later.HostItems {
+				laterIDs[item.Host] = item.ID
+			}
+			for _, item := range result.HostItems {
+				if laterIDs[item.Host] != item.ID {
+					t.Fatalf("host ID changed across window/evidence boundary for %q: before=%q after=%q", item.Host, item.ID, laterIDs[item.Host])
+				}
+			}
+		})
+	}
+}
+
+func TestTemporalFindingsLegacyV2HostAndProcessEquivalence(t *testing.T) {
+	events := []intelligenceFixtureEvent{
+		{id: "generic-direct", connectionID: "generic-direct", process: "generic.exe", host: "generic.example", route: types.RouteDirect, up: 10, down: 20, observedAt: temporalComparisonBaselineFrom.Add(10 * time.Minute)},
+		{id: "generic-proxy", connectionID: "generic-proxy", process: "generic.exe", host: "generic.example", route: types.RouteProxy, up: 100, down: 200, observedAt: temporalComparisonRecentFrom.Add(10 * time.Minute)},
+		{id: "generic-growth-base", connectionID: "generic-growth-base", process: "growth-generic.exe", host: "growth-generic.example", route: types.RouteProxy, up: 10, down: 20, observedAt: temporalComparisonBaselineFrom.Add(20 * time.Minute)},
+		{id: "generic-growth-recent", connectionID: "generic-growth-recent", process: "growth-generic.exe", host: "growth-generic.example", route: types.RouteProxy, up: 100, down: 200, observedAt: temporalComparisonRecentFrom.Add(20 * time.Minute)},
+	}
+	legacyDB, legacyCleanup := buildTemporalFixture(t, events, false)
+	defer legacyCleanup()
+	v2DB, v2Cleanup := buildTemporalFixture(t, events, true)
+	defer v2Cleanup()
+
+	legacy, err := NewAuditIntelligenceService(legacyDB).ListTemporalFindings(context.Background(), validTemporalFilter())
+	if err != nil {
+		t.Fatalf("legacy temporal findings failed: %v", err)
+	}
+	v2, err := NewAuditIntelligenceService(v2DB).ListTemporalFindings(context.Background(), validTemporalFilter())
+	if err != nil {
+		t.Fatalf("v2 temporal findings failed: %v", err)
+	}
+	legacy.AccountingVersion = ""
+	v2.AccountingVersion = ""
+	if !reflect.DeepEqual(legacy, v2) {
+		t.Fatalf("legacy/v2 generic temporal results differ:\nlegacy=%+v\nv2=%+v", legacy, v2)
+	}
+}
+
 func TestProcessChangesCoverageIsFailClosed(t *testing.T) {
 	events := []intelligenceFixtureEvent{
 		{id: "coverage-baseline", connectionID: "coverage-baseline", process: "covered.exe", route: types.RouteProxy, up: 10, down: 20, observedAt: temporalComparisonBaselineFrom.Add(10 * time.Minute)},
@@ -262,6 +374,58 @@ func TestProcessChangesHighCardinalityTimingsAndQueryPlans(t *testing.T) {
 	}
 }
 
+func TestTemporalFindingsHighCardinalityTimingsAndQueryPlans(t *testing.T) {
+	for _, scale := range []int{10_000, 100_000} {
+		for _, useV2 := range []bool{false, true} {
+			name := fmt.Sprintf("rows_%d_%s", scale, map[bool]string{false: "legacy", true: "v2"}[useV2])
+			t.Run(name, func(t *testing.T) {
+				fixtureStarted := time.Now()
+				db := buildScaledTemporalHourlyDB(t, scale, useV2)
+				fixtureDuration := time.Since(fixtureStarted)
+				defer db.Close()
+
+				plan := explainTemporalCombinedHourlyQuery(t, db, useV2)
+				service := NewAuditIntelligenceService(db)
+				analytics := NewAnalyticsService(db)
+				scope, err := analytics.resolveAccountingScope(context.Background())
+				if err != nil {
+					t.Fatalf("resolve scaled temporal scope: %v", err)
+				}
+				table, keyColumn, keyValue := scope.temporalWindowQuery()
+				baselineReadStarted := time.Now()
+				baseline, err := service.loadHourlyDimensionTotals(context.Background(), table, keyColumn, keyValue, []string{"process", "host"}, temporalComparisonBaselineFrom, temporalComparisonBaselineTo)
+				baselineReadDuration := time.Since(baselineReadStarted)
+				if err != nil {
+					t.Fatalf("scaled baseline combined read: %v", err)
+				}
+				recentReadStarted := time.Now()
+				recent, err := service.loadHourlyDimensionTotals(context.Background(), table, keyColumn, keyValue, []string{"process", "host"}, temporalComparisonRecentFrom, temporalComparisonRecentTo)
+				recentReadDuration := time.Since(recentReadStarted)
+				if err != nil {
+					t.Fatalf("scaled recent combined read: %v", err)
+				}
+				processDetectorStarted := time.Now()
+				processItems, growthItems := buildProcessFindings(baseline["process"], recent["process"], 2, 3)
+				processDetectorDuration := time.Since(processDetectorStarted)
+				hostDetectorStarted := time.Now()
+				hostItems := buildHostRouteChangeFindings(baseline["host"], recent["host"])
+				hostDetectorDuration := time.Since(hostDetectorStarted)
+
+				serviceStarted := time.Now()
+				result, err := service.ListTemporalFindings(context.Background(), validTemporalFilter())
+				totalServiceDuration := time.Since(serviceStarted)
+				if err != nil {
+					t.Fatalf("scaled ListTemporalFindings: %v", err)
+				}
+				if result.Status != ComparisonReady || len(result.ProcessItems) == 0 || len(processItems) == 0 {
+					t.Fatalf("scaled generic temporal query did not produce process findings: %+v", result)
+				}
+				t.Logf("temporal-combined-scale rows=%d authority=%s fixture=%s baselineCombinedRead=%s recentCombinedRead=%s processDetector=%s hostDetector=%s totalService=%s processFindings=%d/%d hostItems=%d eqp=%s", scale, map[bool]string{false: "legacy", true: "v2"}[useV2], fixtureDuration, baselineReadDuration, recentReadDuration, processDetectorDuration, hostDetectorDuration, totalServiceDuration, len(processItems), len(growthItems), len(hostItems), strings.Join(plan, " | "))
+			})
+		}
+	}
+}
+
 func validTemporalFilter() ProcessChangeFilter {
 	return ProcessChangeFilter{
 		BaselineFrom: &temporalComparisonBaselineFrom,
@@ -381,7 +545,7 @@ func buildScaledTemporalHourlyDB(t *testing.T, rows int, useV2 bool) *sql.DB {
 			%s, bucket_start, dimension_type, dimension_key, route,
 			upload_bytes, download_bytes, connection_count,
 			exact_upload_bytes, exact_download_bytes, estimated_upload_bytes, estimated_download_bytes
-		) VALUES (?, ?, 'process', ?, 'PROXY', ?, ?, 1, ?, ?, 0, 0);
+		) VALUES (?, ?, ?, ?, 'PROXY', ?, ?, 1, ?, ?, 0, 0);
 	`, table, map[bool]string{false: "run_id", true: "generation_id"}[useV2]))
 	if err != nil {
 		db.Close()
@@ -394,9 +558,15 @@ func buildScaledTemporalHourlyDB(t *testing.T, rows int, useV2 bool) *sql.DB {
 			bucket = temporalComparisonRecentFrom.Add(time.Duration(index%3) * time.Hour)
 		}
 		bytes := int64(1024 + index%4096)
-		if _, err := stmt.ExecContext(ctx, key, bucket.Format(time.RFC3339Nano), fmt.Sprintf("scale-process-%06d.exe", index), bytes, bytes*2, bytes, bytes*2); err != nil {
+		if _, err := stmt.ExecContext(ctx, key, bucket.Format(time.RFC3339Nano), "process", fmt.Sprintf("scale-process-%06d.exe", index), bytes, bytes*2, bytes, bytes*2); err != nil {
 			db.Close()
 			t.Fatalf("insert scaled hourly row %d: %v", index, err)
+		}
+		if index%2 == 1 {
+			if _, err := stmt.ExecContext(ctx, key, bucket.Format(time.RFC3339Nano), "host", fmt.Sprintf("scale-host-%06d.example", index), bytes, bytes*2, bytes, bytes*2); err != nil {
+				db.Close()
+				t.Fatalf("insert scaled hourly host row %d: %v", index, err)
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -439,6 +609,43 @@ func explainTemporalHourlyQuery(t *testing.T, db *sql.DB, useV2 bool) []string {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("temporal query plan rows: %v", err)
+	}
+	sort.Strings(details)
+	return details
+}
+
+func explainTemporalCombinedHourlyQuery(t *testing.T, db *sql.DB, useV2 bool) []string {
+	t.Helper()
+	table := "usage_hourly_dimensions"
+	keyColumn := "run_id"
+	keyValue := "run-scale-temporal"
+	if useV2 {
+		table = "usage_hourly_dimensions_v2"
+		keyColumn = "generation_id"
+		keyValue = "gen-scale-temporal"
+	}
+	rows, err := db.QueryContext(context.Background(), fmt.Sprintf(`
+		EXPLAIN QUERY PLAN
+		SELECT dimension_type, dimension_key, route, SUM(upload_bytes), SUM(download_bytes)
+		FROM %s
+		WHERE %s = ? AND dimension_type IN ('process', 'host') AND bucket_start >= ? AND bucket_start < ?
+		GROUP BY dimension_type, dimension_key, route;
+	`, table, keyColumn), keyValue, temporalComparisonBaselineFrom.Format(time.RFC3339Nano), temporalComparisonBaselineTo.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("explain combined temporal query: %v", err)
+	}
+	defer rows.Close()
+	var details []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan combined temporal query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("combined temporal query plan rows: %v", err)
 	}
 	sort.Strings(details)
 	return details

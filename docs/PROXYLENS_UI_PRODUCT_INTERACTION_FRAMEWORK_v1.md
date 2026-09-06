@@ -183,27 +183,38 @@ Do not pretend unsupported aggregate dimensions have full drill-down support.
 
 ## 5. Review
 
-Review is the evidence-native handoff between Overview and History. It first
+Review is the evidence-native handoff between Overview and History for Phase
+4A, Phase 4B1, and the narrow Phase 4B2A host-route transition contract. It first
 presents a temporal comparison over complete hourly buckets, then four
 deterministic Phase 4A sections: MATCH fallback, broad `NETWORK,udp`, IP-only
 proxy targets, and large physical proxy connections. Temporal rows explain
-newly observed PROXY processes or strictly higher PROXY bytes/hour; each row
-shows the structured facts that caused inclusion, exact versus interval-derived
-evidence where applicable, and a calm `Investigate in History` action.
+newly observed PROXY processes, strictly higher PROXY bytes/hour, or recorded
+hosts that gained PROXY after a DIRECT-only baseline; each row shows the
+structured facts that caused inclusion, exact versus interval-derived evidence
+where applicable, and a calm `Investigate in History` action.
+
+The host detector requires baseline DIRECT bytes greater than zero, baseline
+PROXY bytes equal to zero, and recent PROXY bytes greater than zero for the
+exact recorded host. Recent DIRECT bytes may remain; the UI labels that mixed
+state and does not claim that all traffic switched. Host findings are ordered
+by recent PROXY bytes and investigate with the exact recorded host.
 
 Temporal comparison uses the existing Review time range. Quick ranges shift by
 local calendar days, custom ranges compare the immediately preceding equal
 interval, and both sides are clipped inward to complete UTC-hour buckets. If
-either side has future time, outside-known-scope time, monitoring gaps, or no
-full hour, Review shows an explicit unavailable state rather than inventing a
-zero-change result. The backend requires all four comparison boundaries and
-fails closed on incomplete coverage.
+either side has future time, outside-known-scope time, monitoring gaps, no full
+hour, or unpublished accounting evidence inside the effective window, Review
+shows an explicit unavailable state rather than inventing a zero-change result.
+Lag after `recentTo` does not block the comparison. The backend requires all
+four comparison boundaries and fails closed on either monitoring or
+window-scoped accounting incompleteness.
 
 Review must not invent score, severity, intent, current node state, or a
 recommendation. Investigation transfers only supported process/host/IP/network/
 exact-rule filters, fixes History route focus to PROXY, and creates a new
-History snapshot. Temporal investigation carries only `process` plus the
-fixed `PROXY` route; it does not carry a growth score or create an anomaly
+History snapshot. Temporal process investigation carries only `process`, while
+host transition investigation carries only the exact recorded `host`; both use
+the fixed `PROXY` route and do not carry a growth score or create an anomaly
 classification.
 
 The Review API reads the reconciled accounting authority through the normal

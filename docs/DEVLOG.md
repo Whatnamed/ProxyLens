@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-09-06 — Phase 4B2A Host Route Transition
+
+**Scope:** 在 Phase 4B1 shared temporal mechanics 上增加窄的 recorded-host
+DIRECT→PROXY comparison；未启动 Phase 4B2B/4C，未修改 accounting writer、
+migration、index 或任何真实网络生命周期。
+
+**Completed:**
+
+- 新增只读 `GET /api/v1/intelligence/temporal-findings`，一次准备 authority、
+  monitoring coverage 与 effective-window accounting publication readiness，返回
+  process + host 两类 findings；`process-changes` 兼容 endpoint 保留；
+- host detector 只接受非空 exact recorded host 且满足 baseline DIRECT>0、
+  baseline PROXY=0、recent PROXY>0；recent mixed DIRECT/REJECT、exact/estimated
+  evidence、stable host IDs 与 deterministic ordering 均保留；
+- Review 增加 EN/中文 host section 与 `route=PROXY` + exact host History drill，
+  `review-route-shift` 使用 synthetic copied temporary DB；1280×800 EN Light
+  query-only real-Tauri targeted acceptance 通过，Phase 4A sections 与 source/copy
+  SHA、owner/runtime/controller=0 均保持；
+- legacy/v2 equivalence、API contract、negative detector、10k/100k EQP/timing、
+  UI tests/build 与 focused validation 持续覆盖；Phase 4B2B/4C 继续 Deferred。
+
 ## 2026-09-06 — Phase 4B1 Final Evidence-Completeness Closure
 
 **Scope:** 只收 temporal comparison 的 accounting completeness、window ordering 与

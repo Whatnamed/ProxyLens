@@ -1,6 +1,6 @@
 # ProxyLens Audit Intelligence v1
 
-- **Status**: Phase 4A foundation and Phase 4B1 temporal process intelligence complete; Phase 4B2/4C deferred
+- **Status**: Phase 4A foundation, Phase 4B1 temporal process intelligence, and Phase 4B2A host-route transition complete; Phase 4B2B/4C deferred
 - **Scope**: deterministic, read-only Review workspace over reconciled accounting
 - **Authority**: the active v2 accounting generation, otherwise the latest completed legacy run
 
@@ -67,7 +67,7 @@ bounded to 1–50. The response carries `route=PROXY`, `accountingVersion`,
 `countsByKind`, and deterministic finding items. No endpoint writes SQLite,
 starts a Runtime, or contacts a Controller.
 
-### 3.1 Temporal process comparison (Phase 4B1)
+### 3.1 Temporal comparison (Phase 4B1 / Phase 4B2A)
 
 Phase 4B1 adds one deterministic, read-only comparison over process hourly
 dimensions:
@@ -105,14 +105,35 @@ only after `recentTo` does not block the comparison. This is a valid
 unavailable state, not a zero-result claim and not a requirement that global
 accounting be fully fresh.
 
-The only Phase 4B1 detectors are:
+The compatibility process endpoint exposes the original Phase 4B1 detectors. The
+generic Review bundle is available at:
+
+```text
+GET /api/v1/intelligence/temporal-findings
+  ?baselineFrom=<rfc3339>&baselineTo=<rfc3339>
+  &recentFrom=<rfc3339>&recentTo=<rfc3339>&limitPerKind=20
+```
+
+It uses the same prepared comparison context and returns `processItems` and
+`hostItems` together. The process detector semantics are:
 
 - `process_newly_observed_on_proxy`: recent PROXY bytes are positive while
   baseline PROXY bytes are zero;
 - `process_proxy_growth`: both periods have PROXY bytes and recent
   `bytes/hour` is strictly greater than baseline `bytes/hour`.
 
-The response reports process identity, PROXY/DIRECT/REJECT route evidence,
+The Phase 4B2A host detector is
+`host_gained_proxy_after_direct_baseline`: the exact recorded `host` must be
+non-empty, baseline DIRECT bytes must be positive, baseline PROXY bytes must be
+zero, and recent PROXY bytes must be positive. Recent DIRECT bytes may remain;
+when they do, the UI states that this is mixed recent routing rather than a
+claim that all traffic switched. Host findings are sorted by recent PROXY bytes
+descending and host ascending, and preserve exact versus interval-derived route
+evidence. Their stable IDs use detector kind plus the exact recorded host; no
+sniffing, IP inference, current node state, or canonical target substitution is
+performed.
+
+The response reports process/host identity, PROXY/DIRECT/REJECT route evidence,
 exact versus interval-derived bytes, and for growth the baseline rate, recent
 rate, delta rate, and `growthRatio`. Its exact formula is
 `(recentProxyBytesPerHour - baselineProxyBytesPerHour) /
@@ -144,16 +165,19 @@ Controller config, nodes, system proxy, TUN, DNS, or routes.
 The temporal comparison is shown before the Phase 4A detector sections. It
 uses the existing Review time range, reports its effective baseline/recent
 windows and coverage state, and offers the same read-only History handoff with
-`route=PROXY` plus the process filter. It does not add a second navigation
-surface or a general-purpose time-series explorer.
+`route=PROXY` plus either the process or exact recorded-host filter. Host
+investigation clears unrelated History filters, resets pagination, and creates
+a fresh snapshot. It does not add a second navigation surface or a
+general-purpose time-series explorer.
 
 ## 5. Fixtures and acceptance
 
-The `review` and `review-temporal` fixtures are synthetic and deterministic.
-The latter includes positive and negative process-comparison cases, a
-long/high-cardinality process identity, interval-derived bytes, and the
-Phase 4A examples. They are used only through copied temporary DBs in
-query-only Tauri visual QA.
+The `review`, `review-temporal`, and `review-route-shift` fixtures are
+synthetic and deterministic. The route-shift fixture includes positive and
+negative direct-to-PROXY host cases, mixed recent routing, long recorded host
+identities, interval-derived bytes, process comparison cases, and the Phase 4A
+examples. They are used only through copied temporary DBs in query-only Tauri
+visual QA.
 
 The Phase 4B1 visual gate covers the temporal Review at 1280×800 and
 1600×1000 in EN/ZH × Light/Dark. The runner records requested size, actual CDP
@@ -171,8 +195,8 @@ acceptance remains independent.
 
 ## 6. Deferred boundary
 
-Phase 4B2/4C are not started. Future candidates such as historical route-change
-comparisons, first-seen/background-service semantics beyond the delivered
-process comparison, rule suggestions, final-proxy analysis, scoring, and real
-FLClash/Mihomo validation require separate evidence and contracts. They must
-not be inferred from this foundation.
+Phase 4B2A is limited to the delivered recorded-host direct-to-PROXY
+comparison. Phase 4B2B/4C are not started. Future candidates such as broader
+first-seen/background-service semantics, rule suggestions, final-proxy
+analysis, scoring, and real FLClash/Mihomo validation require separate evidence
+and contracts. They must not be inferred from this foundation.

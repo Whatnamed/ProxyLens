@@ -28,7 +28,7 @@ if (!fs.existsSync(fixtureDir)) {
   fs.mkdirSync(fixtureDir, { recursive: true });
 }
 
-const profiles = ['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete'];
+const profiles = ['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete', 'review-route-shift'];
 
 console.log('================================================================');
 console.log('Generating Deterministic Synthetic UI Fixtures');

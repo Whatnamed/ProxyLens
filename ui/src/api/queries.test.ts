@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { keepLiveTickOnly, isLiveRangeKey, processChangesQueryKey } from './queries.js';
+import { keepLiveTickOnly, isLiveRangeKey, processChangesQueryKey, temporalFindingsQueryKey } from './queries.js';
 import { deriveTemporalComparisonRange } from '../utils/time.js';
 
 describe('Query caching: keepLiveTickOnly semantic scope guard', () => {
@@ -183,5 +183,26 @@ describe('Temporal process comparison query policy', () => {
     ]);
     assert.notDeepEqual(key, processChangesQueryKey('today', comparison, 50));
     assert.notDeepEqual(key, processChangesQueryKey('7d', comparison, 20));
+  });
+});
+
+describe('Generic temporal findings query policy', () => {
+  it('keys by source identity, all effective boundaries, and limit', () => {
+    const comparison = deriveTemporalComparisonRange('today', {
+      from: '2026-09-06T00:00:00.000Z',
+      to: '2026-09-06T13:45:00.000Z',
+    });
+    const key = temporalFindingsQueryKey('today', comparison, 20);
+    assert.deepEqual(key, [
+      'temporalFindings',
+      'today',
+      comparison.baselineEffective?.from,
+      comparison.baselineEffective?.to,
+      comparison.recentEffective?.from,
+      comparison.recentEffective?.to,
+      20,
+    ]);
+    assert.notDeepEqual(key, temporalFindingsQueryKey('today', comparison, 50));
+    assert.notDeepEqual(key, temporalFindingsQueryKey('7d', comparison, 20));
   });
 });

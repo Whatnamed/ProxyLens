@@ -5,21 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Whatnamed/ProxyLens/collector/pkg/types"
 )
 
-// TemporalFindingKind is a stable, non-localized Phase 4B1 detector name.
+// TemporalFindingKind is a stable, non-localized temporal detector name.
 type TemporalFindingKind string
 
 const (
 	TemporalProcessNewlyObservedOnProxy TemporalFindingKind = "process_newly_observed_on_proxy"
 	TemporalProcessProxyGrowth          TemporalFindingKind = "process_proxy_growth"
+	TemporalHostGainedProxyAfterDirect  TemporalFindingKind = "host_gained_proxy_after_direct_baseline"
 )
 
 // ComparisonStatus describes whether both effective hourly windows are safe to
-// compare. A coverage failure is a valid 200 response state, not a query error.
+// compare. A coverage/publication failure is a valid 200 response state, not
+// a query error.
 type ComparisonStatus string
 
 const (
@@ -36,17 +39,33 @@ const (
 )
 
 const (
-	ProcessChangesDefaultLimit = 20
-	ProcessChangesMaxLimit     = 50
+	ProcessChangesDefaultLimit   = 20
+	ProcessChangesMaxLimit       = 50
+	TemporalFindingsDefaultLimit = ProcessChangesDefaultLimit
+	TemporalFindingsMaxLimit     = ProcessChangesMaxLimit
 )
 
 var (
-	ErrInvalidProcessChangeRange = errors.New("invalid process change comparison range")
-	ErrInvalidProcessChangeLimit = errors.New("invalid process change limit")
+	ErrInvalidTemporalComparisonRange = errors.New("invalid temporal comparison range")
+	ErrInvalidTemporalComparisonLimit = errors.New("invalid temporal comparison limit")
+
+	// Keep the Phase 4B1 error names as aliases so existing callers and tests
+	// retain their error identity while the shared contract gets a generic name.
+	ErrInvalidProcessChangeRange = ErrInvalidTemporalComparisonRange
+	ErrInvalidProcessChangeLimit = ErrInvalidTemporalComparisonLimit
 )
 
-// ProcessChangeFilter is deliberately explicit: the API caller supplies all
-// four effective UTC-hour boundaries and the backend never guesses a baseline.
+// TemporalComparisonBounds is the shared explicit four-boundary contract.
+// Callers must provide complete UTC-hour windows; the backend never guesses a
+// baseline or compares a partial hour.
+type TemporalComparisonBounds struct {
+	BaselineFrom *time.Time
+	BaselineTo   *time.Time
+	RecentFrom   *time.Time
+	RecentTo     *time.Time
+}
+
+// ProcessChangeFilter is the compatibility Phase 4B1 request shape.
 type ProcessChangeFilter struct {
 	BaselineFrom *time.Time
 	BaselineTo   *time.Time
@@ -54,6 +73,10 @@ type ProcessChangeFilter struct {
 	RecentTo     *time.Time
 	LimitPerKind int
 }
+
+// TemporalFindingsFilter is the generic Phase 4B2A request shape. It is an
+// alias deliberately sharing the compatibility fields and validation.
+type TemporalFindingsFilter = ProcessChangeFilter
 
 type ComparisonWindowEvidence struct {
 	From                time.Time `json:"from"`
@@ -76,11 +99,16 @@ type RouteTrafficEvidence struct {
 	EstimatedDownloadBytes int64 `json:"estimatedDownloadBytes"`
 }
 
-type ProcessPeriodEvidence struct {
+// RoutePeriodEvidence is the common route-period evidence shape for process
+// and recorded-host temporal findings. The alias preserves the Phase 4B1 JSON
+// and Go type name for existing consumers.
+type RoutePeriodEvidence struct {
 	Proxy  RouteTrafficEvidence `json:"proxy"`
 	Direct RouteTrafficEvidence `json:"direct"`
 	Reject RouteTrafficEvidence `json:"reject"`
 }
+
+type ProcessPeriodEvidence = RoutePeriodEvidence
 
 type ProcessChangeFinding struct {
 	ID                        string                `json:"id"`
@@ -96,6 +124,14 @@ type ProcessChangeFinding struct {
 	GrowthRatio *float64 `json:"growthRatio,omitempty"`
 }
 
+type HostRouteChangeFinding struct {
+	ID       string              `json:"id"`
+	Kind     TemporalFindingKind `json:"kind"`
+	Host     string              `json:"host"`
+	Baseline RoutePeriodEvidence `json:"baseline"`
+	Recent   RoutePeriodEvidence `json:"recent"`
+}
+
 type ProcessChangeResult struct {
 	Status            ComparisonStatus            `json:"status"`
 	AccountingVersion string                      `json:"accountingVersion"`
@@ -106,37 +142,58 @@ type ProcessChangeResult struct {
 	LimitPerKind      int                         `json:"limitPerKind"`
 }
 
-type processHourlyTotals struct {
+// TemporalFindingsResult is the coherent Review-facing bundle. Both detector
+// families are built from one prepared authority/readiness context and the
+// response stays empty whenever that shared context is not ready.
+type TemporalFindingsResult struct {
+	Status            ComparisonStatus            `json:"status"`
+	AccountingVersion string                      `json:"accountingVersion"`
+	Baseline          ComparisonWindowEvidence    `json:"baseline"`
+	Recent            ComparisonWindowEvidence    `json:"recent"`
+	ProcessItems      []ProcessChangeFinding      `json:"processItems"`
+	HostItems         []HostRouteChangeFinding    `json:"hostItems"`
+	CountsByKind      map[TemporalFindingKind]int `json:"countsByKind"`
+	LimitPerKind      int                         `json:"limitPerKind"`
+}
+
+type routePeriodTotals struct {
 	proxy  RouteTrafficEvidence
 	direct RouteTrafficEvidence
 	reject RouteTrafficEvidence
 }
 
-type processHourlyRow struct {
-	process string
-	route   types.RouteType
-	totals  RouteTrafficEvidence
+type temporalComparisonContext struct {
+	scope        *accountingScope
+	baselineFrom time.Time
+	baselineTo   time.Time
+	recentFrom   time.Time
+	recentTo     time.Time
+	baseline     ComparisonWindowEvidence
+	recent       ComparisonWindowEvidence
+	status       ComparisonStatus
+	limitPerKind int
 }
 
 func (s *accountingScope) temporalWindowQuery() (string, string, string) {
 	return s.hourlyDimensionsTable()
 }
 
-// ListProcessChanges compares process-only hourly dimensions. It intentionally
-// never reads accounted traffic rows and never writes storage.
-func (s *AuditIntelligenceService) ListProcessChanges(ctx context.Context, filter ProcessChangeFilter) (*ProcessChangeResult, error) {
+// prepareTemporalComparison is the one temporal readiness contract used by
+// both the compatibility process endpoint and the generic temporal endpoint:
+// bounds -> one authority -> monitoring coverage -> window publication.
+func (s *AuditIntelligenceService) prepareTemporalComparison(ctx context.Context, filter ProcessChangeFilter) (*temporalComparisonContext, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("temporal intelligence requires a database")
 	}
-	if err := validateProcessChangeFilter(filter); err != nil {
+	if err := validateTemporalComparisonBounds(temporalBoundsFromFilter(filter)); err != nil {
 		return nil, err
 	}
 	limit := filter.LimitPerKind
 	if limit == 0 {
-		limit = ProcessChangesDefaultLimit
+		limit = TemporalFindingsDefaultLimit
 	}
-	if limit < 1 || limit > ProcessChangesMaxLimit {
-		return nil, ErrInvalidProcessChangeLimit
+	if limit < 1 || limit > TemporalFindingsMaxLimit {
+		return nil, ErrInvalidTemporalComparisonLimit
 	}
 
 	baselineFrom := filter.BaselineFrom.UTC()
@@ -149,7 +206,6 @@ func (s *AuditIntelligenceService) ListProcessChanges(ctx context.Context, filte
 	if err != nil {
 		return nil, err
 	}
-
 	baselineCoverage, err := analytics.GetCoverage(ctx, &baselineFrom, &baselineTo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate baseline comparison coverage: %w", err)
@@ -159,153 +215,198 @@ func (s *AuditIntelligenceService) ListProcessChanges(ctx context.Context, filte
 		return nil, fmt.Errorf("failed to calculate recent comparison coverage: %w", err)
 	}
 
-	result := &ProcessChangeResult{
-		Status:            ComparisonReady,
-		AccountingVersion: scope.algorithmVersion,
-		Baseline:          comparisonWindowEvidence(baselineFrom, baselineTo, baselineCoverage),
-		Recent:            comparisonWindowEvidence(recentFrom, recentTo, recentCoverage),
-		Items:             make([]ProcessChangeFinding, 0),
-		CountsByKind: map[TemporalFindingKind]int{
-			TemporalProcessNewlyObservedOnProxy: 0,
-			TemporalProcessProxyGrowth:          0,
-		},
-		LimitPerKind: limit,
+	prepared := &temporalComparisonContext{
+		scope:        scope,
+		baselineFrom: baselineFrom,
+		baselineTo:   baselineTo,
+		recentFrom:   recentFrom,
+		recentTo:     recentTo,
+		baseline:     comparisonWindowEvidence(baselineFrom, baselineTo, baselineCoverage),
+		recent:       comparisonWindowEvidence(recentFrom, recentTo, recentCoverage),
+		status:       ComparisonReady,
+		limitPerKind: limit,
 	}
 
 	if status := comparisonCoverageStatus("baseline", baselineCoverage); status != ComparisonReady {
-		result.Status = status
-		return result, nil
+		prepared.status = status
+		return prepared, nil
 	}
 	if status := comparisonCoverageStatus("recent", recentCoverage); status != ComparisonReady {
-		result.Status = status
-		return result, nil
+		prepared.status = status
+		return prepared, nil
 	}
 	if !scope.journalBoundaryAvailable {
-		result.Status = ComparisonAccountingBoundaryUnavailable
-		return result, nil
+		prepared.status = ComparisonAccountingBoundaryUnavailable
+		return prepared, nil
 	}
 	baselineIncomplete, err := s.hasUnpublishedJournalEvidence(ctx, scope.journalBoundary, baselineFrom, baselineTo)
 	if err != nil {
 		return nil, err
 	}
 	if baselineIncomplete {
-		result.Status = ComparisonBaselineAccountingIncomplete
-		return result, nil
+		prepared.status = ComparisonBaselineAccountingIncomplete
+		return prepared, nil
 	}
 	recentIncomplete, err := s.hasUnpublishedJournalEvidence(ctx, scope.journalBoundary, recentFrom, recentTo)
 	if err != nil {
 		return nil, err
 	}
 	if recentIncomplete {
-		result.Status = ComparisonRecentAccountingIncomplete
+		prepared.status = ComparisonRecentAccountingIncomplete
+		return prepared, nil
+	}
+	return prepared, nil
+}
+
+// ListProcessChanges keeps the accepted Phase 4B1 process-only endpoint and
+// semantics while using the shared temporal preparation and dimension loader.
+func (s *AuditIntelligenceService) ListProcessChanges(ctx context.Context, filter ProcessChangeFilter) (*ProcessChangeResult, error) {
+	prepared, err := s.prepareTemporalComparison(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	result := newProcessChangeResult(prepared)
+	if prepared.status != ComparisonReady {
 		return result, nil
 	}
 
-	table, keyColumn, keyValue := scope.temporalWindowQuery()
-	baseline, err := s.loadProcessHourlyTotals(ctx, table, keyColumn, keyValue, baselineFrom, baselineTo)
+	table, keyColumn, keyValue := prepared.scope.temporalWindowQuery()
+	baseline, err := s.loadHourlyDimensionTotals(ctx, table, keyColumn, keyValue, []string{"process"}, prepared.baselineFrom, prepared.baselineTo)
 	if err != nil {
 		return nil, err
 	}
-	recent, err := s.loadProcessHourlyTotals(ctx, table, keyColumn, keyValue, recentFrom, recentTo)
+	recent, err := s.loadHourlyDimensionTotals(ctx, table, keyColumn, keyValue, []string{"process"}, prepared.recentFrom, prepared.recentTo)
 	if err != nil {
 		return nil, err
 	}
-
-	newlyObserved := make([]ProcessChangeFinding, 0)
-	growth := make([]ProcessChangeFinding, 0)
-	baselineHours := baselineTo.Sub(baselineFrom).Hours()
-	recentHours := recentTo.Sub(recentFrom).Hours()
-
-	processes := make(map[string]struct{}, len(baseline)+len(recent))
-	for process := range baseline {
-		processes[process] = struct{}{}
-	}
-	for process := range recent {
-		processes[process] = struct{}{}
-	}
-	for process := range processes {
-		base := baseline[process]
-		current := recent[process]
-		if current.proxy.TotalBytes > 0 && base.proxy.TotalBytes == 0 {
-			newlyObserved = append(newlyObserved, ProcessChangeFinding{
-				ID:       temporalFindingID(TemporalProcessNewlyObservedOnProxy, process),
-				Kind:     TemporalProcessNewlyObservedOnProxy,
-				Process:  process,
-				Baseline: processPeriodEvidence(base),
-				Recent:   processPeriodEvidence(current),
-			})
-		}
-		if base.proxy.TotalBytes > 0 && current.proxy.TotalBytes > 0 {
-			baseRate := float64(base.proxy.TotalBytes) / baselineHours
-			currentRate := float64(current.proxy.TotalBytes) / recentHours
-			if currentRate > baseRate {
-				delta := currentRate - baseRate
-				ratio := delta / baseRate
-				growth = append(growth, ProcessChangeFinding{
-					ID:                        temporalFindingID(TemporalProcessProxyGrowth, process),
-					Kind:                      TemporalProcessProxyGrowth,
-					Process:                   process,
-					Baseline:                  processPeriodEvidence(base),
-					Recent:                    processPeriodEvidence(current),
-					BaselineProxyBytesPerHour: baseRate,
-					RecentProxyBytesPerHour:   currentRate,
-					DeltaBytesPerHour:         delta,
-					GrowthRatio:               &ratio,
-				})
-			}
-		}
-	}
-
-	sort.Slice(newlyObserved, func(i, j int) bool {
-		if newlyObserved[i].Recent.Proxy.TotalBytes != newlyObserved[j].Recent.Proxy.TotalBytes {
-			return newlyObserved[i].Recent.Proxy.TotalBytes > newlyObserved[j].Recent.Proxy.TotalBytes
-		}
-		return newlyObserved[i].Process < newlyObserved[j].Process
-	})
-	sort.Slice(growth, func(i, j int) bool {
-		if growth[i].DeltaBytesPerHour != growth[j].DeltaBytesPerHour {
-			return growth[i].DeltaBytesPerHour > growth[j].DeltaBytesPerHour
-		}
-		if growth[i].RecentProxyBytesPerHour != growth[j].RecentProxyBytesPerHour {
-			return growth[i].RecentProxyBytesPerHour > growth[j].RecentProxyBytesPerHour
-		}
-		return growth[i].Process < growth[j].Process
-	})
-
+	newlyObserved, growth := buildProcessFindings(
+		baseline["process"], recent["process"],
+		prepared.baselineTo.Sub(prepared.baselineFrom).Hours(),
+		prepared.recentTo.Sub(prepared.recentFrom).Hours(),
+	)
 	result.CountsByKind[TemporalProcessNewlyObservedOnProxy] = len(newlyObserved)
 	result.CountsByKind[TemporalProcessProxyGrowth] = len(growth)
-	if len(newlyObserved) > limit {
-		newlyObserved = newlyObserved[:limit]
-	}
-	if len(growth) > limit {
-		growth = growth[:limit]
-	}
-	result.Items = append(result.Items, newlyObserved...)
-	result.Items = append(result.Items, growth...)
+	result.Items = appendLimitedProcessFindings(result.Items, newlyObserved, prepared.limitPerKind)
+	result.Items = appendLimitedProcessFindings(result.Items, growth, prepared.limitPerKind)
 	return result, nil
 }
 
+// ListTemporalFindings is the coherent Review-facing temporal query. It
+// resolves authority/readiness once, reads process and recorded-host hourly
+// dimensions in one grouped query per effective window, and returns empty
+// findings for every non-ready status.
+func (s *AuditIntelligenceService) ListTemporalFindings(ctx context.Context, filter TemporalFindingsFilter) (*TemporalFindingsResult, error) {
+	prepared, err := s.prepareTemporalComparison(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	result := newTemporalFindingsResult(prepared)
+	if prepared.status != ComparisonReady {
+		return result, nil
+	}
+
+	table, keyColumn, keyValue := prepared.scope.temporalWindowQuery()
+	baseline, err := s.loadHourlyDimensionTotals(ctx, table, keyColumn, keyValue, []string{"process", "host"}, prepared.baselineFrom, prepared.baselineTo)
+	if err != nil {
+		return nil, err
+	}
+	recent, err := s.loadHourlyDimensionTotals(ctx, table, keyColumn, keyValue, []string{"process", "host"}, prepared.recentFrom, prepared.recentTo)
+	if err != nil {
+		return nil, err
+	}
+
+	newlyObserved, growth := buildProcessFindings(
+		baseline["process"], recent["process"],
+		prepared.baselineTo.Sub(prepared.baselineFrom).Hours(),
+		prepared.recentTo.Sub(prepared.recentFrom).Hours(),
+	)
+	hostFindings := buildHostRouteChangeFindings(baseline["host"], recent["host"])
+
+	result.CountsByKind[TemporalProcessNewlyObservedOnProxy] = len(newlyObserved)
+	result.CountsByKind[TemporalProcessProxyGrowth] = len(growth)
+	result.CountsByKind[TemporalHostGainedProxyAfterDirect] = len(hostFindings)
+	result.ProcessItems = appendLimitedProcessFindings(result.ProcessItems, newlyObserved, prepared.limitPerKind)
+	result.ProcessItems = appendLimitedProcessFindings(result.ProcessItems, growth, prepared.limitPerKind)
+	if len(hostFindings) > prepared.limitPerKind {
+		hostFindings = hostFindings[:prepared.limitPerKind]
+	}
+	result.HostItems = append(result.HostItems, hostFindings...)
+	return result, nil
+}
+
+func newProcessChangeResult(prepared *temporalComparisonContext) *ProcessChangeResult {
+	return &ProcessChangeResult{
+		Status:            prepared.status,
+		AccountingVersion: prepared.scope.algorithmVersion,
+		Baseline:          prepared.baseline,
+		Recent:            prepared.recent,
+		Items:             make([]ProcessChangeFinding, 0),
+		CountsByKind: map[TemporalFindingKind]int{
+			TemporalProcessNewlyObservedOnProxy: 0,
+			TemporalProcessProxyGrowth:          0,
+		},
+		LimitPerKind: prepared.limitPerKind,
+	}
+}
+
+func newTemporalFindingsResult(prepared *temporalComparisonContext) *TemporalFindingsResult {
+	return &TemporalFindingsResult{
+		Status:            prepared.status,
+		AccountingVersion: prepared.scope.algorithmVersion,
+		Baseline:          prepared.baseline,
+		Recent:            prepared.recent,
+		ProcessItems:      make([]ProcessChangeFinding, 0),
+		HostItems:         make([]HostRouteChangeFinding, 0),
+		CountsByKind: map[TemporalFindingKind]int{
+			TemporalProcessNewlyObservedOnProxy: 0,
+			TemporalProcessProxyGrowth:          0,
+			TemporalHostGainedProxyAfterDirect:  0,
+		},
+		LimitPerKind: prepared.limitPerKind,
+	}
+}
+
+func appendLimitedProcessFindings(dst, findings []ProcessChangeFinding, limit int) []ProcessChangeFinding {
+	if len(findings) > limit {
+		findings = findings[:limit]
+	}
+	return append(dst, findings...)
+}
+
 func validateProcessChangeFilter(filter ProcessChangeFilter) error {
+	return validateTemporalComparisonBounds(temporalBoundsFromFilter(filter))
+}
+
+func temporalBoundsFromFilter(filter ProcessChangeFilter) TemporalComparisonBounds {
+	return TemporalComparisonBounds{
+		BaselineFrom: filter.BaselineFrom,
+		BaselineTo:   filter.BaselineTo,
+		RecentFrom:   filter.RecentFrom,
+		RecentTo:     filter.RecentTo,
+	}
+}
+
+func validateTemporalComparisonBounds(filter TemporalComparisonBounds) error {
 	if filter.BaselineFrom == nil || filter.BaselineTo == nil || filter.RecentFrom == nil || filter.RecentTo == nil {
-		return ErrInvalidProcessChangeRange
+		return ErrInvalidTemporalComparisonRange
 	}
 	values := []*time.Time{filter.BaselineFrom, filter.BaselineTo, filter.RecentFrom, filter.RecentTo}
 	for _, value := range values {
 		utc := value.UTC()
 		if utc.Minute() != 0 || utc.Second() != 0 || utc.Nanosecond() != 0 {
-			return ErrInvalidProcessChangeRange
+			return ErrInvalidTemporalComparisonRange
 		}
 	}
 	baselineFrom, baselineTo := filter.BaselineFrom.UTC(), filter.BaselineTo.UTC()
 	recentFrom, recentTo := filter.RecentFrom.UTC(), filter.RecentTo.UTC()
 	if !baselineTo.After(baselineFrom) || !recentTo.After(recentFrom) {
-		return ErrInvalidProcessChangeRange
+		return ErrInvalidTemporalComparisonRange
 	}
 	if baselineTo.Sub(baselineFrom) < time.Hour || recentTo.Sub(recentFrom) < time.Hour {
-		return ErrInvalidProcessChangeRange
+		return ErrInvalidTemporalComparisonRange
 	}
 	if baselineTo.After(recentFrom) {
-		return ErrInvalidProcessChangeRange
+		return ErrInvalidTemporalComparisonRange
 	}
 	return nil
 }
@@ -372,59 +473,175 @@ func comparisonWindowEvidence(from, to time.Time, coverage *CoverageSummary) Com
 	return evidence
 }
 
-func (s *AuditIntelligenceService) loadProcessHourlyTotals(ctx context.Context, table, keyColumn, keyValue string, from, to time.Time) (map[string]processHourlyTotals, error) {
+// loadHourlyDimensionTotals is a bounded, internal whitelist loader. It uses
+// the same hourly authority selected by accountingScope and never accepts a
+// user-provided table or dimension SQL fragment.
+func (s *AuditIntelligenceService) loadHourlyDimensionTotals(ctx context.Context, table, keyColumn, keyValue string, dimensionTypes []string, from, to time.Time) (map[string]map[string]routePeriodTotals, error) {
+	if len(dimensionTypes) == 0 {
+		return nil, fmt.Errorf("temporal dimension loader requires at least one dimension type")
+	}
+	seen := make(map[string]struct{}, len(dimensionTypes))
+	placeholders := make([]string, 0, len(dimensionTypes))
+	args := make([]any, 0, len(dimensionTypes)+3)
+	args = append(args, keyValue)
+	for _, dimensionType := range dimensionTypes {
+		if dimensionType != "process" && dimensionType != "host" {
+			return nil, fmt.Errorf("unsupported temporal dimension type %q", dimensionType)
+		}
+		if _, ok := seen[dimensionType]; ok {
+			continue
+		}
+		seen[dimensionType] = struct{}{}
+		placeholders = append(placeholders, "?")
+		args = append(args, dimensionType)
+	}
+	args = append(args, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano))
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT
-			dimension_key, route,
+			dimension_type, dimension_key, route,
 			COALESCE(SUM(upload_bytes), 0), COALESCE(SUM(download_bytes), 0),
 			COALESCE(SUM(exact_upload_bytes), 0), COALESCE(SUM(exact_download_bytes), 0),
 			COALESCE(SUM(estimated_upload_bytes), 0), COALESCE(SUM(estimated_download_bytes), 0)
 		FROM %s
 		WHERE %s = ?
-		  AND dimension_type = 'process'
+		  AND dimension_type IN (%s)
 		  AND bucket_start >= ?
 		  AND bucket_start < ?
-		GROUP BY dimension_key, route;
-	`, table, keyColumn), keyValue, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano))
+		GROUP BY dimension_type, dimension_key, route;
+	`, table, keyColumn, strings.Join(placeholders, ", ")), args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query process hourly dimensions: %w", err)
+		return nil, fmt.Errorf("failed to query temporal hourly dimensions: %w", err)
 	}
 	defer rows.Close()
 
-	result := make(map[string]processHourlyTotals)
+	result := make(map[string]map[string]routePeriodTotals, len(seen))
+	for dimensionType := range seen {
+		result[dimensionType] = make(map[string]routePeriodTotals)
+	}
 	for rows.Next() {
-		var row processHourlyRow
-		var route string
+		var dimensionType, dimensionKey, route string
+		var totals RouteTrafficEvidence
 		if err := rows.Scan(
-			&row.process, &route,
-			&row.totals.UploadBytes, &row.totals.DownloadBytes,
-			&row.totals.ExactUploadBytes, &row.totals.ExactDownloadBytes,
-			&row.totals.EstimatedUploadBytes, &row.totals.EstimatedDownloadBytes,
+			&dimensionType, &dimensionKey, &route,
+			&totals.UploadBytes, &totals.DownloadBytes,
+			&totals.ExactUploadBytes, &totals.ExactDownloadBytes,
+			&totals.EstimatedUploadBytes, &totals.EstimatedDownloadBytes,
 		); err != nil {
-			return nil, fmt.Errorf("failed to scan process hourly dimension: %w", err)
+			return nil, fmt.Errorf("failed to scan temporal hourly dimension: %w", err)
 		}
-		if row.process == "" {
+		if dimensionKey == "" {
 			continue
 		}
-		row.route = types.RouteType(route)
-		row.totals.TotalBytes = row.totals.UploadBytes + row.totals.DownloadBytes
-		period := result[row.process]
-		switch row.route {
+		totals.TotalBytes = totals.UploadBytes + totals.DownloadBytes
+		periods, ok := result[dimensionType]
+		if !ok {
+			continue
+		}
+		period := periods[dimensionKey]
+		switch types.RouteType(route) {
 		case types.RouteProxy:
-			period.proxy = addRouteTraffic(period.proxy, row.totals)
+			period.proxy = addRouteTraffic(period.proxy, totals)
 		case types.RouteDirect:
-			period.direct = addRouteTraffic(period.direct, row.totals)
+			period.direct = addRouteTraffic(period.direct, totals)
 		case types.RouteReject:
-			period.reject = addRouteTraffic(period.reject, row.totals)
+			period.reject = addRouteTraffic(period.reject, totals)
 		default:
 			continue
 		}
-		result[row.process] = period
+		periods[dimensionKey] = period
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error reading process hourly dimensions: %w", err)
+		return nil, fmt.Errorf("error reading temporal hourly dimensions: %w", err)
 	}
 	return result, nil
+}
+
+func buildProcessFindings(baseline, recent map[string]routePeriodTotals, baselineHours, recentHours float64) ([]ProcessChangeFinding, []ProcessChangeFinding) {
+	newlyObserved := make([]ProcessChangeFinding, 0)
+	growth := make([]ProcessChangeFinding, 0)
+	processes := make(map[string]struct{}, len(baseline)+len(recent))
+	for process := range baseline {
+		processes[process] = struct{}{}
+	}
+	for process := range recent {
+		processes[process] = struct{}{}
+	}
+	for process := range processes {
+		base := baseline[process]
+		current := recent[process]
+		if current.proxy.TotalBytes > 0 && base.proxy.TotalBytes == 0 {
+			newlyObserved = append(newlyObserved, ProcessChangeFinding{
+				ID:       temporalFindingID(TemporalProcessNewlyObservedOnProxy, process),
+				Kind:     TemporalProcessNewlyObservedOnProxy,
+				Process:  process,
+				Baseline: processPeriodEvidence(base),
+				Recent:   processPeriodEvidence(current),
+			})
+		}
+		if base.proxy.TotalBytes > 0 && current.proxy.TotalBytes > 0 {
+			baseRate := float64(base.proxy.TotalBytes) / baselineHours
+			currentRate := float64(current.proxy.TotalBytes) / recentHours
+			if currentRate > baseRate {
+				delta := currentRate - baseRate
+				ratio := delta / baseRate
+				growth = append(growth, ProcessChangeFinding{
+					ID:                        temporalFindingID(TemporalProcessProxyGrowth, process),
+					Kind:                      TemporalProcessProxyGrowth,
+					Process:                   process,
+					Baseline:                  processPeriodEvidence(base),
+					Recent:                    processPeriodEvidence(current),
+					BaselineProxyBytesPerHour: baseRate,
+					RecentProxyBytesPerHour:   currentRate,
+					DeltaBytesPerHour:         delta,
+					GrowthRatio:               &ratio,
+				})
+			}
+		}
+	}
+
+	sort.Slice(newlyObserved, func(i, j int) bool {
+		if newlyObserved[i].Recent.Proxy.TotalBytes != newlyObserved[j].Recent.Proxy.TotalBytes {
+			return newlyObserved[i].Recent.Proxy.TotalBytes > newlyObserved[j].Recent.Proxy.TotalBytes
+		}
+		return newlyObserved[i].Process < newlyObserved[j].Process
+	})
+	sort.Slice(growth, func(i, j int) bool {
+		if growth[i].DeltaBytesPerHour != growth[j].DeltaBytesPerHour {
+			return growth[i].DeltaBytesPerHour > growth[j].DeltaBytesPerHour
+		}
+		if growth[i].RecentProxyBytesPerHour != growth[j].RecentProxyBytesPerHour {
+			return growth[i].RecentProxyBytesPerHour > growth[j].RecentProxyBytesPerHour
+		}
+		return growth[i].Process < growth[j].Process
+	})
+	return newlyObserved, growth
+}
+
+func buildHostRouteChangeFindings(baseline, recent map[string]routePeriodTotals) []HostRouteChangeFinding {
+	findings := make([]HostRouteChangeFinding, 0)
+	for host, current := range recent {
+		if host == "" {
+			continue
+		}
+		base := baseline[host]
+		if base.direct.TotalBytes <= 0 || base.proxy.TotalBytes != 0 || current.proxy.TotalBytes <= 0 {
+			continue
+		}
+		findings = append(findings, HostRouteChangeFinding{
+			ID:       temporalFindingID(TemporalHostGainedProxyAfterDirect, host),
+			Kind:     TemporalHostGainedProxyAfterDirect,
+			Host:     host,
+			Baseline: routePeriodEvidence(base),
+			Recent:   routePeriodEvidence(current),
+		})
+	}
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].Recent.Proxy.TotalBytes != findings[j].Recent.Proxy.TotalBytes {
+			return findings[i].Recent.Proxy.TotalBytes > findings[j].Recent.Proxy.TotalBytes
+		}
+		return findings[i].Host < findings[j].Host
+	})
+	return findings
 }
 
 func addRouteTraffic(left, right RouteTrafficEvidence) RouteTrafficEvidence {
@@ -438,10 +655,14 @@ func addRouteTraffic(left, right RouteTrafficEvidence) RouteTrafficEvidence {
 	return left
 }
 
-func processPeriodEvidence(t processHourlyTotals) ProcessPeriodEvidence {
-	return ProcessPeriodEvidence{Proxy: t.proxy, Direct: t.direct, Reject: t.reject}
+func routePeriodEvidence(t routePeriodTotals) RoutePeriodEvidence {
+	return RoutePeriodEvidence{Proxy: t.proxy, Direct: t.direct, Reject: t.reject}
 }
 
-func temporalFindingID(kind TemporalFindingKind, process string) string {
-	return string(kind) + ":" + process
+func processPeriodEvidence(t routePeriodTotals) ProcessPeriodEvidence {
+	return routePeriodEvidence(t)
+}
+
+func temporalFindingID(kind TemporalFindingKind, subject string) string {
+	return string(kind) + ":" + subject
 }

@@ -238,7 +238,7 @@ real-data validation remains a separate deferred acceptance boundary.
 
 ---
 
-## Phase 4 — Audit Intelligence [IN PROGRESS — 4A + 4B1 COMPLETE]
+## Phase 4 — Audit Intelligence [IN PROGRESS — 4A + 4B1 + 4B2A COMPLETE]
 
 目标：在可靠历史之上，用透明、可解释的规则筛选“值得检查的代理流量”，辅助用户优化分流。
 
@@ -277,9 +277,16 @@ real-data validation remains a separate deferred acceptance boundary.
 - [x] active v2 / completed legacy hourly authority read path、legacy/v2 equivalence、coverage-negative、high-cardinality EQP/timing 与 API contract tests；未修改 accounting writer、migration 或 production storage implementation；
 - [x] Review integration、process + fixed-PROXY History drill、synthetic temporal fixture 与 1280×800 / 1600×1000 × EN/ZH × Light/Dark query-only Tauri evidence；
 
-### Phase 4B2 / 4C — Deferred
+### Phase 4B2A — Host Route Transition [COMPLETED]
 
-- [ ] historical route-change comparison、broader first-seen/background-service candidates、suggested rules or scoring；
+- [x] 在共享 temporal readiness contract 上增加 generic `temporal-findings` bundle，同时保持 `process-changes` compatibility endpoint；
+- [x] 仅对 exact recorded host 检测 baseline DIRECT>0、baseline PROXY=0、recent PROXY>0，保留 mixed recent DIRECT/REJECT 与 exact/estimated evidence；
+- [x] Review host section、`route=PROXY` + exact host History drill、`review-route-shift` synthetic fixture 与 targeted query-only Tauri evidence；
+- [x] 未新增 accounting writer、migration、index 或自动网络动作；
+
+### Phase 4B2B / 4C — Deferred
+
+- [ ] broader historical route-change comparison、first-seen/background-service candidates、suggested rules or scoring；
 - [ ] richer rule/final-proxy/port dimensions、real FLClash/Mihomo and real-data validation；
 - [ ] any automatic configuration or network action remains explicitly out of scope。
 
