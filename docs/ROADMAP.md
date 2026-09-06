@@ -271,7 +271,7 @@ real-data validation remains a separate deferred acceptance boundary.
 
 ### Phase 4B1 — Temporal Process Intelligence [COMPLETED]
 
-- [x] Review temporal comparison over explicit, non-overlapping complete UTC-hour baseline/recent windows；quick ranges use local-calendar-day comparison and custom ranges use the preceding equal interval；
+- [x] Review temporal comparison over explicit complete UTC-hour baseline/recent windows with `baselineTo <= recentFrom`；quick ranges use local-calendar-day comparison and custom ranges use the preceding equal interval；
 - [x] complete Coverage gate：future、outside-known-scope、monitoring gap 或 non-unit coverage 时返回事实 unavailable status，不输出 misleading zero-change findings；
 - [x] `process_newly_observed_on_proxy` 与 `process_proxy_growth` 两个 deterministic detector；growth 使用 bytes/hour，包含 PROXY/DIRECT/REJECT 与 exact/estimated evidence，不含 score/severity/risk/connection count；
 - [x] active v2 / completed legacy hourly authority read path、legacy/v2 equivalence、coverage-negative、high-cardinality EQP/timing 与 API contract tests；未修改 accounting writer、migration 或 production storage implementation；

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -62,6 +63,9 @@ func TestProcessChangesDetectorsAndRates(t *testing.T) {
 			growth := growthItems[0]
 			if growth.BaselineProxyBytesPerHour != 1000 {
 				t.Fatalf("baseline rate=%v, want 1000", growth.BaselineProxyBytesPerHour)
+			}
+			if growth.GrowthRatio == nil || math.Abs(*growth.GrowthRatio-(5.0/3.0)) > 1e-9 {
+				t.Fatalf("growth ratio=%v, want 1.666666...", growth.GrowthRatio)
 			}
 			if growth.RecentProxyBytesPerHour <= growth.BaselineProxyBytesPerHour || growth.DeltaBytesPerHour <= 0 {
 				t.Fatalf("growth rate evidence=%+v", growth)
@@ -139,6 +143,102 @@ func TestProcessChangesValidatesExplicitFullHourWindows(t *testing.T) {
 			t.Fatalf("case %d should be rejected", index)
 		}
 	}
+	if err := validateProcessChangeFilter(ProcessChangeFilter{
+		BaselineFrom: ptrTime(time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)),
+		BaselineTo:   ptrTime(time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)),
+		RecentFrom:   ptrTime(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)),
+		RecentTo:     ptrTime(time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)),
+	}); err == nil {
+		t.Fatal("baseline chronologically after recent should be rejected")
+	}
+}
+
+func TestProcessChangesGrowthRatioContract(t *testing.T) {
+	events := []intelligenceFixtureEvent{
+		{id: "ratio-baseline", connectionID: "ratio-baseline", process: "ratio.exe", route: types.RouteProxy, up: 500, down: 1500, observedAt: temporalComparisonBaselineFrom.Add(10 * time.Minute)},
+		{id: "ratio-recent", connectionID: "ratio-recent", process: "ratio.exe", route: types.RouteProxy, up: 1500, down: 3000, observedAt: temporalComparisonRecentFrom.Add(10 * time.Minute)},
+	}
+	db, cleanup := buildTemporalFixture(t, events, false)
+	defer cleanup()
+
+	result := listTemporalChanges(t, db, validTemporalFilter())
+	growth := temporalItemsOfKind(result.Items, TemporalProcessProxyGrowth)
+	if len(growth) != 1 || growth[0].GrowthRatio == nil {
+		t.Fatalf("expected one growth ratio finding, got %+v", result)
+	}
+	if *growth[0].GrowthRatio != 0.5 {
+		t.Fatalf("growthRatio=%v, want 0.5 (+50%%)", *growth[0].GrowthRatio)
+	}
+}
+
+func TestProcessChangesAccountingWindowCompleteness(t *testing.T) {
+	for _, useV2 := range []bool{false, true} {
+		name := "legacy"
+		if useV2 {
+			name = "v2"
+		}
+		t.Run(name, func(t *testing.T) {
+			baseEvents := []intelligenceFixtureEvent{
+				{id: "completeness-base", connectionID: "completeness-base", process: "covered.exe", route: types.RouteProxy, up: 10, down: 20, observedAt: temporalComparisonBaselineFrom.Add(10 * time.Minute)},
+				{id: "completeness-recent", connectionID: "completeness-recent", process: "covered.exe", route: types.RouteProxy, up: 30, down: 40, observedAt: temporalComparisonRecentFrom.Add(10 * time.Minute)},
+			}
+
+			t.Run("baseline-incomplete", func(t *testing.T) {
+				db, cleanup := buildTemporalFixture(t, baseEvents, useV2)
+				defer cleanup()
+				insertUnpublishedTemporalJournalEvent(t, db, temporalComparisonBaselineFrom.Add(30*time.Minute), "baseline")
+				result := listTemporalChanges(t, db, validTemporalFilter())
+				if result.Status != ComparisonBaselineAccountingIncomplete || len(result.Items) != 0 {
+					t.Fatalf("baseline unpublished evidence must suppress findings: status=%s items=%+v", result.Status, result.Items)
+				}
+			})
+
+			t.Run("recent-incomplete", func(t *testing.T) {
+				db, cleanup := buildTemporalFixture(t, baseEvents, useV2)
+				defer cleanup()
+				insertUnpublishedTemporalJournalEvent(t, db, temporalComparisonRecentFrom.Add(30*time.Minute), "recent")
+				result := listTemporalChanges(t, db, validTemporalFilter())
+				if result.Status != ComparisonRecentAccountingIncomplete || len(result.Items) != 0 {
+					t.Fatalf("recent unpublished evidence must suppress findings: status=%s items=%+v", result.Status, result.Items)
+				}
+			})
+
+			t.Run("lag-after-window-does-not-block", func(t *testing.T) {
+				db, cleanup := buildTemporalFixture(t, baseEvents, useV2)
+				defer cleanup()
+				before := listTemporalChanges(t, db, validTemporalFilter())
+				insertUnpublishedTemporalJournalEvent(t, db, temporalComparisonRecentTo.Add(10*time.Minute), "after-window")
+				after := listTemporalChanges(t, db, validTemporalFilter())
+				if after.Status != ComparisonReady || !reflect.DeepEqual(before.Items, after.Items) {
+					t.Fatalf("post-window journal lag must not change comparison: before=%+v after=%+v", before, after)
+				}
+			})
+
+			t.Run("published-boundary-preserves-detectors", func(t *testing.T) {
+				db, cleanup := buildTemporalFixture(t, baseEvents, useV2)
+				defer cleanup()
+				result := listTemporalChanges(t, db, validTemporalFilter())
+				if result.Status != ComparisonReady || len(result.Items) != 1 || result.Items[0].Process != "covered.exe" {
+					t.Fatalf("published boundary must preserve detector output: %+v", result)
+				}
+			})
+		})
+	}
+}
+
+func TestProcessChangesLegacyWithoutAccountingBoundaryFailsClosed(t *testing.T) {
+	events := []intelligenceFixtureEvent{
+		{id: "boundary-unavailable", connectionID: "boundary-unavailable", process: "covered.exe", route: types.RouteProxy, up: 10, down: 20, observedAt: temporalComparisonRecentFrom.Add(10 * time.Minute)},
+	}
+	db, cleanup := buildTemporalFixture(t, events, false)
+	defer cleanup()
+	if _, err := db.ExecContext(context.Background(), `UPDATE accounting_runs SET source_journal_sequence_max = NULL WHERE run_id = (SELECT run_id FROM accounting_runs WHERE status = 'completed' ORDER BY started_at DESC LIMIT 1);`); err != nil {
+		t.Fatalf("clear legacy authority boundary: %v", err)
+	}
+	result := listTemporalChanges(t, db, validTemporalFilter())
+	if result.Status != ComparisonAccountingBoundaryUnavailable || len(result.Items) != 0 {
+		t.Fatalf("missing legacy boundary must fail closed: status=%s items=%+v", result.Status, result.Items)
+	}
 }
 
 func TestProcessChangesHighCardinalityTimingsAndQueryPlans(t *testing.T) {
@@ -172,6 +272,23 @@ func validTemporalFilter() ProcessChangeFilter {
 }
 
 func ptrTime(value time.Time) *time.Time { return &value }
+
+func insertUnpublishedTemporalJournalEvent(t *testing.T, db *sql.DB, observedAt time.Time, label string) {
+	t.Helper()
+	var journalSequence int64
+	if err := db.QueryRowContext(context.Background(), `SELECT COALESCE(MAX(journal_sequence), 0) + 1 FROM event_journal;`).Scan(&journalSequence); err != nil {
+		t.Fatalf("next journal sequence for unpublished %s evidence: %v", label, err)
+	}
+	_, err := db.ExecContext(context.Background(), `
+		INSERT INTO event_journal (
+			event_id, session_id, epoch_id, frame_sequence, event_sequence, event_type,
+			observed_at, connection_id, event_json, event_sha256, ingested_at, journal_sequence
+		) VALUES (?, 'sess-intelligence', 1, ?, 1, 'ConnectionDelta', ?, ?, '{}', ?, ?, ?);
+	`, "unpublished-"+label+fmt.Sprintf("-%d", journalSequence), 10000+journalSequence, observedAt.Format(time.RFC3339Nano), "unpublished-"+label, fmt.Sprintf("%064x", journalSequence), time.Now().UTC().Format(time.RFC3339Nano), journalSequence)
+	if err != nil {
+		t.Fatalf("insert unpublished %s evidence: %v", label, err)
+	}
+}
 
 func listTemporalChanges(t *testing.T, db *sql.DB, filter ProcessChangeFilter) *ProcessChangeResult {
 	t.Helper()
@@ -246,8 +363,8 @@ func buildScaledTemporalHourlyDB(t *testing.T, rows int, useV2 bool) *sql.DB {
 	} else if _, err := tx.ExecContext(ctx, `
 		INSERT INTO accounting_runs (
 			run_id, algorithm_version, started_at, completed_at, status,
-			source_journal_event_count, source_boundary_json, notes
-		) VALUES ('run-scale-temporal', 'legacy-v1', ?, ?, 'completed', ?, '{}', 'temporal scale');
+			source_journal_event_count, source_journal_sequence_max, source_boundary_json, notes
+		) VALUES ('run-scale-temporal', 'legacy-v1', ?, ?, 'completed', ?, 0, '{}', 'temporal scale');
 	`, started, started, rows); err != nil {
 		db.Close()
 		t.Fatalf("insert scaled legacy run: %v", err)

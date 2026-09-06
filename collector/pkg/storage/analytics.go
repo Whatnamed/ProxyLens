@@ -26,10 +26,12 @@ func NewAnalyticsService(db *sql.DB) *AnalyticsService {
 // the active incremental accounting v2 generation when one exists, otherwise
 // the latest completed legacy accounting run (Phase 3S fallback contract).
 type accountingScope struct {
-	useV2            bool
-	runID            string
-	generationID     string
-	algorithmVersion string
+	useV2                    bool
+	runID                    string
+	generationID             string
+	algorithmVersion         string
+	journalBoundary          int64
+	journalBoundaryAvailable bool
 }
 
 // accountedTable returns the derived traffic table and key predicate for the scope.
@@ -57,17 +59,24 @@ func (a *AnalyticsService) resolveAccountingScope(ctx context.Context) (*account
 	}
 	if gen != nil {
 		return &accountingScope{
-			useV2:            true,
-			generationID:     gen.GenerationID,
-			runID:            gen.GenerationID,
-			algorithmVersion: gen.AlgorithmVersion,
+			useV2:                    true,
+			generationID:             gen.GenerationID,
+			runID:                    gen.GenerationID,
+			algorithmVersion:         gen.AlgorithmVersion,
+			journalBoundary:          gen.PublishedJournalSequence,
+			journalBoundaryAvailable: true,
 		}, nil
 	}
 	run, err := a.GetLatestCompletedAccountingRun(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &accountingScope{runID: run.RunID, algorithmVersion: run.AlgorithmVersion}, nil
+	scope := &accountingScope{runID: run.RunID, algorithmVersion: run.AlgorithmVersion}
+	if run.SourceJournalSequenceMax != nil {
+		scope.journalBoundary = *run.SourceJournalSequenceMax
+		scope.journalBoundaryAvailable = true
+	}
+	return scope, nil
 }
 
 // GetLatestCompletedAccountingRun 获取最新已完成的核算轮次

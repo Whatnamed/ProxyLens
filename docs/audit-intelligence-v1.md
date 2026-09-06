@@ -79,17 +79,31 @@ GET /api/v1/intelligence/process-changes
 ```
 
 All four boundaries are required, UTC-hour aligned, at least one hour long,
-and non-overlapping. The UI derives the previous equal local-calendar-day
-window for quick ranges and the immediately preceding equal interval for a
-custom range, then clips both windows inward to complete UTC-hour buckets.
-The API never guesses a missing baseline or silently compares a partial hour.
+and chronologically ordered so `baselineTo <= recentFrom`. Adjacent windows
+and same-shaped windows separated by a gap are allowed; a baseline that ends
+after the recent window begins is rejected. The UI derives the previous equal
+local-calendar-day window for quick ranges and the immediately preceding equal
+interval for a custom range, then clips both windows inward to complete
+UTC-hour buckets. The API never guesses a missing baseline or silently
+compares a partial hour.
 
-Both windows must be fully covered: `futureDurationMs`,
-`outsideKnownScopeMs`, and `uncoveredDurationMs` must be zero and
-`coverageRatio` must be `1`. Otherwise the endpoint returns HTTP 200 with an
-explicit `status` such as `baseline_has_monitoring_gaps` or
-`recent_outside_known_scope` and no findings. This is a valid unavailable
-state, not a zero-result claim.
+Both windows must pass two independent readiness layers. First, monitoring
+coverage must be complete: `futureDurationMs`, `outsideKnownScopeMs`, and
+`uncoveredDurationMs` must be zero and `coverageRatio` must be `1`. Second,
+the selected accounting authority must have published every raw journal row
+whose sequence is after its authority boundary and whose `observed_at` falls
+inside that effective window. The active v2 boundary is
+`accounting_generations.published_journal_sequence`; the legacy boundary is
+`accounting_runs.source_journal_sequence_max`. A legacy run without the latter
+is not treated as complete.
+
+If either layer fails, the endpoint returns HTTP 200 with an explicit status
+such as `baseline_has_monitoring_gaps`, `recent_outside_known_scope`,
+`baseline_accounting_incomplete`, `recent_accounting_incomplete`, or
+`accounting_boundary_unavailable`, and no findings. A journal lag occurring
+only after `recentTo` does not block the comparison. This is a valid
+unavailable state, not a zero-result claim and not a requirement that global
+accounting be fully fresh.
 
 The only Phase 4B1 detectors are:
 
@@ -100,7 +114,9 @@ The only Phase 4B1 detectors are:
 
 The response reports process identity, PROXY/DIRECT/REJECT route evidence,
 exact versus interval-derived bytes, and for growth the baseline rate, recent
-rate, delta rate, and growth ratio. It deliberately has no anomaly score,
+rate, delta rate, and `growthRatio`. Its exact formula is
+`(recentProxyBytesPerHour - baselineProxyBytesPerHour) /
+baselineProxyBytesPerHour`; `0.5` means `+50%`. It deliberately has no anomaly score,
 severity, risk, threshold, or inferred intent. IDs are stable detector-kind
 plus process identities. The read path uses the selected active v2 or latest
 completed legacy hourly authority through one grouped query per window; it

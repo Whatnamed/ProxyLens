@@ -24,8 +24,10 @@ GET /api/v1/intelligence/process-changes
   &recentFrom=<rfc3339>&recentTo=<rfc3339>&limitPerKind=20
 ```
 
-Each bound must be RFC3339, UTC-hour aligned, and part of a non-overlapping
-window at least one hour long. `limitPerKind` defaults to 20 and is bounded to
+Each bound must be RFC3339, UTC-hour aligned, and part of a window at least one
+hour long. The windows must be ordered `baselineTo <= recentFrom`; adjacent
+windows and separated same-shaped windows are valid, while a baseline after
+the recent window is rejected. `limitPerKind` defaults to 20 and is bounded to
 1–50. The endpoint is GET-only, read-only, and uses the normal API auth/error
 boundary.
 
@@ -40,13 +42,14 @@ uncoveredDurationMs == 0
 coverageRatio == 1.0
 ```
 
-If either window fails the gate, the response remains HTTP 200 with an
-explicit status (`baseline_*` or `recent_*`) and an empty `items` array. The
-UI presents this as unavailable evidence, never as zero changes. The
-supported statuses are `ready`, `baseline_outside_known_scope`,
-`baseline_has_monitoring_gaps`, `baseline_future`,
-`recent_outside_known_scope`, `recent_has_monitoring_gaps`, and
-`recent_future`.
+If either window fails either layer, the response remains HTTP 200 with an
+explicit status (`baseline_*`, `recent_*`, or
+`accounting_boundary_unavailable`) and an empty `items` array. The UI presents
+this as unavailable evidence, never as zero changes. The supported statuses
+also include `baseline_accounting_incomplete` and
+`recent_accounting_incomplete`. A lagging journal event after `recentTo` does
+not block a ready comparison; global accounting freshness is not used as the
+sole gate.
 
 ## Detectors and evidence
 
@@ -61,7 +64,8 @@ The only detectors are:
 Findings have stable `kind:process` IDs, PROXY/DIRECT/REJECT route evidence,
 exact and interval-derived byte fields, and no connection count, score,
 severity, risk, anomaly threshold, or inferred intent. Growth additionally
-reports baseline rate, recent rate, delta rate, and growth ratio. Review
+reports baseline rate, recent rate, delta rate, and `growthRatio`, defined as
+`(recentRate - baselineRate) / baselineRate`; `0.5` means `+50%`. Review
 investigation carries only `process` and fixed `route=PROXY` to History.
 
 ## Storage authority and performance
@@ -105,6 +109,20 @@ Focused checks:
 - `go test ./pkg/api -run 'TestProcessChangesAPIContractAndCoverageStatus' -count=1 -v`: passed;
 - `go vet ./pkg/storage ./pkg/api`: passed;
 - `git diff --check`: passed.
+
+The new targeted regression coverage includes baseline/recent unpublished
+journal evidence for both legacy and v2 authorities, post-window lag that
+remains ready, published-boundary detector preservation, missing legacy
+boundary fail-closed behavior, reversed chronological windows (storage and
+HTTP 400), exact `growthRatio` semantics, and EN/中文 accounting-status
+translation parity.
+
+A single additional query-only WebView2 recheck used the synthetic
+`review-temporal-incomplete` fixture at 1280×800 EN Light. It showed the
+accounting-publication unavailable message while Phase 4A sections remained
+present (`unavailable=1 phase4a=1 rows=0 overflow=0`); the run also confirmed
+`owner=0 runtime=0 controller=0`, exact viewport, and unchanged source/copy
+SHA. The full eight-state matrix was not rerun for this closure.
 
 Final semantic matrix evidence (all `queryOnly=1 owner=0 runtime=0 controller=0`,
 actual viewport exact, source/copy unchanged, `rows=9`,

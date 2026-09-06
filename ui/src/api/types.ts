@@ -273,9 +273,12 @@ export type ComparisonStatus =
   | 'baseline_outside_known_scope'
   | 'baseline_has_monitoring_gaps'
   | 'baseline_future'
+  | 'baseline_accounting_incomplete'
   | 'recent_outside_known_scope'
   | 'recent_has_monitoring_gaps'
-  | 'recent_future';
+  | 'recent_future'
+  | 'recent_accounting_incomplete'
+  | 'accounting_boundary_unavailable';
 
 export interface ComparisonWindowEvidence {
   from: string;

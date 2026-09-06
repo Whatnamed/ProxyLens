@@ -23,13 +23,16 @@ const (
 type ComparisonStatus string
 
 const (
-	ComparisonReady                     ComparisonStatus = "ready"
-	ComparisonBaselineOutsideKnownScope ComparisonStatus = "baseline_outside_known_scope"
-	ComparisonBaselineHasMonitoringGaps ComparisonStatus = "baseline_has_monitoring_gaps"
-	ComparisonBaselineFuture            ComparisonStatus = "baseline_future"
-	ComparisonRecentOutsideKnownScope   ComparisonStatus = "recent_outside_known_scope"
-	ComparisonRecentHasMonitoringGaps   ComparisonStatus = "recent_has_monitoring_gaps"
-	ComparisonRecentFuture              ComparisonStatus = "recent_future"
+	ComparisonReady                         ComparisonStatus = "ready"
+	ComparisonBaselineOutsideKnownScope     ComparisonStatus = "baseline_outside_known_scope"
+	ComparisonBaselineHasMonitoringGaps     ComparisonStatus = "baseline_has_monitoring_gaps"
+	ComparisonBaselineFuture                ComparisonStatus = "baseline_future"
+	ComparisonBaselineAccountingIncomplete  ComparisonStatus = "baseline_accounting_incomplete"
+	ComparisonRecentOutsideKnownScope       ComparisonStatus = "recent_outside_known_scope"
+	ComparisonRecentHasMonitoringGaps       ComparisonStatus = "recent_has_monitoring_gaps"
+	ComparisonRecentFuture                  ComparisonStatus = "recent_future"
+	ComparisonRecentAccountingIncomplete    ComparisonStatus = "recent_accounting_incomplete"
+	ComparisonAccountingBoundaryUnavailable ComparisonStatus = "accounting_boundary_unavailable"
 )
 
 const (
@@ -88,7 +91,9 @@ type ProcessChangeFinding struct {
 	BaselineProxyBytesPerHour float64               `json:"baselineProxyBytesPerHour,omitempty"`
 	RecentProxyBytesPerHour   float64               `json:"recentProxyBytesPerHour,omitempty"`
 	DeltaBytesPerHour         float64               `json:"deltaBytesPerHour,omitempty"`
-	GrowthRatio               *float64              `json:"growthRatio,omitempty"`
+	// GrowthRatio is the relative increase: (recentRate - baselineRate) / baselineRate.
+	// A value of 0.5 means recent bytes/hour is 50% higher than baseline.
+	GrowthRatio *float64 `json:"growthRatio,omitempty"`
 }
 
 type ProcessChangeResult struct {
@@ -173,6 +178,26 @@ func (s *AuditIntelligenceService) ListProcessChanges(ctx context.Context, filte
 	}
 	if status := comparisonCoverageStatus("recent", recentCoverage); status != ComparisonReady {
 		result.Status = status
+		return result, nil
+	}
+	if !scope.journalBoundaryAvailable {
+		result.Status = ComparisonAccountingBoundaryUnavailable
+		return result, nil
+	}
+	baselineIncomplete, err := s.hasUnpublishedJournalEvidence(ctx, scope.journalBoundary, baselineFrom, baselineTo)
+	if err != nil {
+		return nil, err
+	}
+	if baselineIncomplete {
+		result.Status = ComparisonBaselineAccountingIncomplete
+		return result, nil
+	}
+	recentIncomplete, err := s.hasUnpublishedJournalEvidence(ctx, scope.journalBoundary, recentFrom, recentTo)
+	if err != nil {
+		return nil, err
+	}
+	if recentIncomplete {
+		result.Status = ComparisonRecentAccountingIncomplete
 		return result, nil
 	}
 
@@ -279,10 +304,27 @@ func validateProcessChangeFilter(filter ProcessChangeFilter) error {
 	if baselineTo.Sub(baselineFrom) < time.Hour || recentTo.Sub(recentFrom) < time.Hour {
 		return ErrInvalidProcessChangeRange
 	}
-	if baselineFrom.Before(recentTo) && recentFrom.Before(baselineTo) {
+	if baselineTo.After(recentFrom) {
 		return ErrInvalidProcessChangeRange
 	}
 	return nil
+}
+
+func (s *AuditIntelligenceService) hasUnpublishedJournalEvidence(ctx context.Context, boundary int64, from, to time.Time) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM event_journal
+			WHERE journal_sequence > ?
+			  AND observed_at >= ?
+			  AND observed_at < ?
+		);
+	`, boundary, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano)).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check unpublished journal evidence: %w", err)
+	}
+	return exists != 0, nil
 }
 
 func comparisonCoverageStatus(prefix string, coverage *CoverageSummary) ComparisonStatus {

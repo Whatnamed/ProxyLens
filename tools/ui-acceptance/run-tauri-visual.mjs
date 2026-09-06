@@ -21,7 +21,7 @@ const rootDir = path.resolve(__dirname, '..', '..');
 const uiDir = path.join(rootDir, 'ui');
 const fixtureDir = path.join(rootDir, 'fixtures');
 const evidenceRoot = path.join(rootDir, 'tmp', 'phase3-final-acceptance');
-const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal']);
+const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete']);
 const sizes = new Set(['1280x800', '1440x900', '1600x1000', 'max']);
 const locales = new Set(['en', 'zh-CN']);
 const themes = new Set(['light', 'dark']);
@@ -31,7 +31,7 @@ const profile = args.profile || 'healthy';
 const size = args.size || '1600x1000';
 const locale = args.locale || 'en';
 const theme = args.theme || 'light';
-const view = args.view || (profile === 'review' || profile === 'review-temporal' ? 'review' : 'overview');
+const view = args.view || (profile === 'review' || profile === 'review-temporal' || profile === 'review-temporal-incomplete' ? 'review' : 'overview');
 const runId = safeRunId(args['run-id'] || `${profile}-${size}-${Date.now()}`);
 const autoExitMs = parsePositiveInt(args['auto-exit-ms'] || '30000', 'auto-exit-ms');
 const cdpPort = parsePositiveInt(args['cdp-port'] || '9223', 'cdp-port');
@@ -137,7 +137,9 @@ try {
   const actualState = await waitForWebviewState(cdpPort, size, locale, theme, view, 30000);
   const temporalEvidence = profile === 'review-temporal'
     ? await assertTemporalReviewEvidence(cdpPort, locale)
-    : null;
+    : profile === 'review-temporal-incomplete'
+      ? await assertTemporalAccountingIncompleteEvidence(cdpPort, locale)
+      : null;
   const actualViewport = { width: actualState.width, height: actualState.height, dpr: actualState.dpr };
   await waitForProcessExit(child, autoExitMs + 15000, 'Tauri visual QA auto-exit');
   if (child.exitCode !== 0) {
@@ -341,6 +343,42 @@ function isCompleteTemporalEvidence(evidence) {
     && evidence.hasLongProcess && evidence.hasPhase4AFallback && evidence.temporalRows >= 2
     && evidence.investigateButtons >= 2 && evidence.noHorizontalOverflow
     && evidence.documentNoHorizontalOverflow);
+}
+
+async function assertTemporalAccountingIncompleteEvidence(port, locale) {
+  const deadline = Date.now() + 30000;
+  let evidence = null;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      evidence = JSON.parse(await evaluateWebview(port, `(() => {
+        const text = document.body.innerText || '';
+        const reviewScroll = document.querySelector('[data-pl-page="review"] .pl-page__scroll');
+        return JSON.stringify({
+          comparisonTitle: ${JSON.stringify(locale === 'zh-CN' ? '与对比时段相比的变化' : 'Changes from comparison period')},
+          hasComparisonTitle: text.includes(${JSON.stringify(locale === 'zh-CN' ? '与对比时段相比的变化' : 'Changes from comparison period')}),
+          hasAccountingIncomplete: text.includes(${JSON.stringify(locale === 'zh-CN'
+            ? '近期对比时段内仍有证据尚未完成核算发布'
+            : 'accounting has not yet published all evidence in the recent comparison window')}),
+          hasPhase4AFallback: text.includes('MATCH fallback') || text.includes('MATCH 兜底'),
+          temporalRows: document.querySelectorAll('.pl-review__temporal-finding').length,
+          noHorizontalOverflow: !reviewScroll || reviewScroll.scrollWidth <= reviewScroll.clientWidth + 2,
+          documentNoHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
+        });
+      })()`));
+      if (evidence.hasComparisonTitle && evidence.hasAccountingIncomplete && evidence.hasPhase4AFallback
+        && evidence.temporalRows === 0 && evidence.noHorizontalOverflow && evidence.documentNoHorizontalOverflow) break;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (!evidence?.hasComparisonTitle || !evidence?.hasAccountingIncomplete || !evidence?.hasPhase4AFallback
+    || evidence.temporalRows !== 0 || !evidence.noHorizontalOverflow || !evidence.documentNoHorizontalOverflow) {
+    throw new Error(`Temporal accounting-incomplete evidence failed: ${JSON.stringify(evidence)}${lastError ? ` (${lastError.message})` : ''}`);
+  }
+  console.log('PROXYLENS_VISUAL_QA_TEMPORAL_ACCOUNTING_INCOMPLETE unavailable=1 phase4a=1 rows=0 overflow=0');
+  return evidence;
 }
 
 async function waitForWebviewState(port, requestedSize, expectedLocale, expectedTheme, expectedView, timeoutMs) {

@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled | review | review-temporal")
+	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled | review | review-temporal | review-temporal-incomplete")
 	outPath := flag.String("out", "", "Output SQLite database path (e.g. ./fixtures/fixture_healthy.db)")
 	anchorStr := flag.String("anchor", "", "Anchor time in RFC3339 (optional, defaults to current UTC time)")
 	scaleCount := flag.Int("scale", 100000, "Event count for scaled profile (default: 100000)")
@@ -70,8 +70,11 @@ func main() {
 		generateReview(ctx, absPath, anchorTime)
 	case "review-temporal":
 		generateReviewTemporal(ctx, absPath, anchorTime)
+	case "review-temporal-incomplete":
+		generateReviewTemporal(ctx, absPath, anchorTime)
+		appendReviewTemporalUnpublishedEvidence(ctx, absPath, anchorTime)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled, review, review-temporal\n", *profile)
+		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled, review, review-temporal, review-temporal-incomplete\n", *profile)
 		os.Exit(1)
 	}
 
@@ -403,6 +406,25 @@ func generateReviewTemporal(ctx context.Context, dbPath string, anchor time.Time
 		WHERE session_id = ?;
 	`, startedAt, qaEndAt, lastEventAt, anchor.Format(time.RFC3339Nano), anchor.Format(time.RFC3339Nano), sessionID)
 	checkErr("Normalize review-temporal visual session", err)
+}
+
+func appendReviewTemporalUnpublishedEvidence(ctx context.Context, dbPath string, anchor time.Time) {
+	db, err := storage.OpenDB(ctx, dbPath)
+	checkErr("OpenDB review-temporal-incomplete", err)
+	defer db.Close()
+
+	var journalSequence int64
+	err = db.QueryRowContext(ctx, `SELECT COALESCE(MAX(journal_sequence), 0) + 1 FROM event_journal;`).Scan(&journalSequence)
+	checkErr("Read review-temporal-incomplete journal sequence", err)
+	observedAt := anchor.UTC().Truncate(time.Hour).Add(-30 * time.Minute)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO event_journal (
+			event_id, session_id, epoch_id, frame_sequence, event_sequence, event_type,
+			observed_at, connection_id, event_json, event_sha256, ingested_at, journal_sequence
+		) VALUES ('review-temporal-unpublished', 'sess-synthetic-review-temporal', 1, 100000, 1,
+			'ConnectionDelta', ?, 'review-temporal-unpublished', '{"synthetic":"unpublished"}', ?, ?, ?);
+	`, observedAt.Format(time.RFC3339Nano), fmt.Sprintf("%064x", journalSequence), time.Now().UTC().Format(time.RFC3339Nano), journalSequence)
+	checkErr("Append review-temporal unpublished evidence", err)
 }
 
 func emitReviewResidual(sink *storage.SQLiteEventSink, sessionID string, epoch int, frame int64, seq *int64, ts time.Time) {

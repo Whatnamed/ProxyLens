@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-09-06 — Phase 4B1 Final Evidence-Completeness Closure
+
+**Scope:** 只收 temporal comparison 的 accounting completeness、window ordering 与
+`growthRatio` contract；未修改 accounting publication、writer、migration 或 index。
+
+**Completed:**
+
+- Temporal readiness 现在同时要求 monitoring Coverage 完整，以及 active v2 / legacy authority boundary 对各自 effective window 内 raw journal evidence 完成发布；baseline/recent accounting lag 分别 fail-closed，recentTo 之后的 lag 不阻塞比较，legacy 缺少可靠 boundary 也不被当作 complete；
+- comparison 明确要求 `baselineTo <= recentFrom`，允许相邻或有 gap 的窗口，拒绝时间倒序；
+- `growthRatio` 正式定义为 `(recentRate - baselineRate) / baselineRate`，`0.5` 表示 `+50%`；新增 EN/中文 accounting-incomplete 文案，保持 monitoring gap 与 accounting unpublished 事实区分；
+- targeted storage/API/UI regressions 与 `go vet`、UI full tests/build、`git diff --check` 通过；未重跑完整 Tauri matrix，Phase 4B2/4C 继续 Deferred。
+
+---
+
 ## 2026-09-06 — Phase 4B1 Temporal Process Intelligence
 
 **Scope:** 在 Phase 4A Review 之上增加确定性的 process temporal comparison；未启动

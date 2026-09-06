@@ -196,7 +196,8 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 
 - all four boundaries are required RFC3339 timestamps, normalized to UTC,
   aligned to exact UTC-hour boundaries, at least one hour long, and
-  non-overlapping;
+  chronologically ordered so `baselineTo <= recentFrom` (adjacent windows and
+  same-shaped windows separated by a gap are allowed);
 - `limitPerKind` defaults to 20 and is bounded to 1–50;
 - the endpoint reads the active v2 or latest completed legacy hourly process
   dimensions through the normal read-only API boundary; it does not write
@@ -204,22 +205,34 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 - both windows must have zero `futureDurationMs`, zero
   `outsideKnownScopeMs`, zero `uncoveredDurationMs`, and
   `coverageRatio === 1`;
-- incomplete coverage is returned as HTTP 200 with an explicit `status` and
-  an empty `items` array, not as a successful zero-change result;
+- incomplete monitoring coverage is returned as HTTP 200 with an explicit
+  `status` and an empty `items` array, not as a successful zero-change result;
+- accounting readiness is checked independently for each effective window:
+  the active v2 `published_journal_sequence` or legacy completed run's
+  `source_journal_sequence_max` must cover every `event_journal` row whose
+  `journal_sequence` is later than that boundary and whose `observed_at` is
+  inside the window; otherwise the endpoint returns
+  `baseline_accounting_incomplete` or `recent_accounting_incomplete`;
+- a legacy authority without a reliable source journal boundary returns
+  `accounting_boundary_unavailable` rather than being treated as complete;
 - invalid/missing boundaries or limits return HTTP 400 using the standard
   error envelope; missing accounting authority returns
   `NO_COMPLETED_ACCOUNTING_RUN`.
 
 The supported statuses are `ready`, `baseline_outside_known_scope`,
 `baseline_has_monitoring_gaps`, `baseline_future`,
-`recent_outside_known_scope`, `recent_has_monitoring_gaps`, and
-`recent_future`. A ready response contains only the two deterministic
+`baseline_accounting_incomplete`, `recent_outside_known_scope`,
+`recent_has_monitoring_gaps`, `recent_future`,
+`recent_accounting_incomplete`, and `accounting_boundary_unavailable`. A
+ready response contains only the two deterministic
 detectors `process_newly_observed_on_proxy` and `process_proxy_growth`.
 Process findings include PROXY/DIRECT/REJECT route evidence and exact versus
 estimated byte fields; growth findings additionally include
 `baselineProxyBytesPerHour`, `recentProxyBytesPerHour`, `deltaBytesPerHour`,
-and `growthRatio`. No anomaly score, severity, risk, connection count, or
-inferred intent is part of this contract.
+and `growthRatio`, where
+`growthRatio = (recentProxyBytesPerHour - baselineProxyBytesPerHour) /
+baselineProxyBytesPerHour`; `0.5` means a `+50%` increase. No anomaly score,
+severity, risk, connection count, or inferred intent is part of this contract.
 
 ```json
 {

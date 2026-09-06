@@ -54,8 +54,8 @@ test('visual runner only launches a query-only Tauri process and verifies read-o
   assert.match(runnerSource, /noHorizontalOverflow/);
 });
 
-test('fixture runner generates all seven profiles from one recorded anchor', () => {
-  assert.match(fixtureRunnerSource, /\['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal'\]/);
+test('fixture runner generates all eight profiles from one recorded anchor', () => {
+  assert.match(fixtureRunnerSource, /\['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete'\]/);
   assert.match(fixtureRunnerSource, /const anchor = explicitAnchor \|\| new Date\(\)\.toISOString\(\)/);
   assert.match(fixtureRunnerSource, /--anchor', anchor/);
   assert.match(fixtureRunnerSource, /ui-fixtures-metadata\.json/);

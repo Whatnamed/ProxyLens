@@ -27,8 +27,8 @@ func TestProcessChangesAPIContractAndCoverageStatus(t *testing.T) {
 		) VALUES ('sess-api-temporal', '2026-09-03T23:00:00Z', '2026-09-05T04:00:00Z', '2026-09-05T03:00:00Z', 1, 'closed_clean', 'test', '2026-09-03T23:00:00Z', '2026-09-05T04:00:00Z', '2026-09-05T03:00:00Z', 5000);
 		INSERT INTO accounting_runs (
 			run_id, algorithm_version, started_at, completed_at, status,
-			source_journal_event_count, source_boundary_json, notes
-		) VALUES ('run-api-temporal', 'legacy-v1', '2026-09-05T04:00:00Z', '2026-09-05T04:00:00Z', 'completed', 4, '{}', 'api temporal');
+			source_journal_event_count, source_journal_sequence_max, source_boundary_json, notes
+		) VALUES ('run-api-temporal', 'legacy-v1', '2026-09-05T04:00:00Z', '2026-09-05T04:00:00Z', 'completed', 4, 4, '{}', 'api temporal');
 		INSERT INTO usage_hourly_dimensions (
 			run_id, bucket_start, dimension_type, dimension_key, route,
 			upload_bytes, download_bytes, connection_count,
@@ -90,6 +90,11 @@ func TestProcessChangesAPIContractAndCoverageStatus(t *testing.T) {
 	}
 	if result.Status != storage.ComparisonReady || result.LimitPerKind != 1 || len(result.Items) != 2 {
 		t.Fatalf("unexpected temporal API result: %+v", result)
+	}
+
+	reversed := call(http.MethodGet, "/api/v1/intelligence/process-changes?baselineFrom=2026-09-05T00:00:00Z&baselineTo=2026-09-06T00:00:00Z&recentFrom=2026-09-01T00:00:00Z&recentTo=2026-09-02T00:00:00Z")
+	if reversed.Code != http.StatusBadRequest {
+		t.Fatalf("chronologically reversed comparison status=%d body=%s", reversed.Code, reversed.Body.String())
 	}
 
 	unauthenticated := httptest.NewRecorder()

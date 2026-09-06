@@ -27,8 +27,9 @@
 ### Phase 4B1 Temporal Process Intelligence (Complete)
 
 - 已新增只读 `GET /api/v1/intelligence/process-changes`：显式 `baselineFrom` / `baselineTo` / `recentFrom` / `recentTo` 四边界、UTC-hour 对齐、非重叠、至少一小时、bounded `limitPerKind`；
-- 已实现 complete-hour comparison：UI quick range 使用 local-calendar-day shift，custom 使用前一段等长区间，双方向内裁剪到完整 UTC hour；baseline/recent 任一存在 future、outside-known-scope、monitoring gap 或 coverageRatio 非 1 时返回事实 `status` 与空 findings，不伪造 zero-change；
-- 仅实现两个无评分 detector：`process_newly_observed_on_proxy` 与 `process_proxy_growth`；增长使用 bytes/hour，响应含 PROXY/DIRECT/REJECT 与 exact/estimated evidence，不含 anomaly/risk/severity/connection count；
+- 已实现 complete-hour comparison：UI quick range 使用 local-calendar-day shift，custom 使用前一段等长区间，双方向内裁剪到完整 UTC hour；Temporal API 要求 `baselineTo <= recentFrom`，baseline/recent 任一存在 future、outside-known-scope、monitoring gap 或 coverageRatio 非 1 时返回事实 `status` 与空 findings，不伪造 zero-change；
+- readiness 另有 window-aware accounting publication gate：active v2 使用 `published_journal_sequence`、legacy 使用 `source_journal_sequence_max`，仅检查 authority boundary 之后且落在对应 effective window 的 raw journal evidence；baseline/recent 分别返回 `*_accounting_incomplete`，legacy 无可靠 boundary 返回 `accounting_boundary_unavailable`；window 外（包括 recentTo 之后）的 journal lag 不阻塞比较，不要求 global accounting 全局 fresh；
+- 仅实现两个无评分 detector：`process_newly_observed_on_proxy` 与 `process_proxy_growth`；增长使用 bytes/hour，`growthRatio = (recentRate - baselineRate) / baselineRate`（`0.5` 即 `+50%`），响应含 PROXY/DIRECT/REJECT 与 exact/estimated evidence，不含 anomaly/risk/severity/connection count；
 - temporal read path 复用 active v2 / completed legacy hourly authority，一窗一条 grouped query；legacy/v2 等价性、coverage-negative、10k/100k high-cardinality 与 indexed EQP 聚焦测试通过，未修改 accounting writer、migration 或 production storage implementation；
 - Review 已集成 temporal comparison 与 process + fixed PROXY History drill；`review-temporal` synthetic fixture 只通过 copied temporary DB 用于 query-only Tauri acceptance；
 - 真实 Tauri temporal matrix：1280×800 与 1600×1000 × EN/中文 × Light/Dark 全部通过，actual viewport、temporal rows、Investigate actions、无横向溢出、source/copy SHA 不变及 `owner=0 runtime=0 controller=0` 均有 evidence；

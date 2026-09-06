@@ -52,6 +52,13 @@ describe('UI locale', () => {
     assert.deepEqual(localeMessageKeys('zh-CN').sort(), localeMessageKeys('en').sort());
   });
 
+  it('distinguishes accounting publication incompleteness from monitoring gaps', () => {
+    assert.match(translate('en', 'review.comparisonStatus.recent_accounting_incomplete'), /accounting has not yet published all evidence/);
+    assert.match(translate('zh-CN', 'review.comparisonStatus.recent_accounting_incomplete'), /证据尚未完成核算发布/);
+    assert.match(translate('en', 'review.comparisonStatus.recent_has_monitoring_gaps'), /monitoring gap/);
+    assert.match(translate('zh-CN', 'review.comparisonStatus.recent_has_monitoring_gaps'), /监控缺口/);
+  });
+
   it('keeps static UI translation keys backed by the English dictionary', () => {
     const knownKeys = new Set(localeMessageKeys('en'));
     const missingKeys = [...collectStaticTranslationKeys()].filter((key) => !knownKeys.has(key)).sort();
