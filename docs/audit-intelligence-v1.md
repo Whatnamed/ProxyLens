@@ -156,8 +156,13 @@ detector `cataloged_background_process_proxy`. It is fixed to positive accounted
 case-insensitive process-name match plus an event-time `process_path` match in
 the embedded, versioned `background-processes-v1` catalog. Missing paths and
 same-name paths outside the catalog rule are excluded; matching uses an O(1)
-normalized process-name candidate lookup followed by exact or
-under-directory Windows path rules.
+normalized process-name candidate lookup followed by exact or strict
+versioned-child Windows path rules. The production Defender platform rule only
+accepts one direct child directory whose name begins with `4.18.` and then the
+matching executable basename; arbitrary descendants and lexical `.` / `..`
+segments are rejected without filesystem canonicalization. The three entries
+also include their documented exact `C:\\Program Files\\Windows Defender\\*.exe`
+paths.
 
 The v1 production catalog contains exactly three Microsoft Defender entries:
 `MsMpEng.exe`, `MpDefenderCoreService.exe`, and `NisSrv.exe`, backed by the

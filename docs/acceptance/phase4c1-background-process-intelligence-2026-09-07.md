@@ -13,9 +13,9 @@ The exact three production entries are:
 
 | Entry | Process | Path contract |
 | --- | --- | --- |
-| `microsoft-defender-antivirus-service` | `MsMpEng.exe` | under `C:\ProgramData\Microsoft\Windows Defender\Platform` |
-| `microsoft-defender-core-service` | `MpDefenderCoreService.exe` | under the Defender Platform directory, or exact `C:\Program Files\Windows Defender\MpDefenderCoreService.exe` |
-| `microsoft-defender-network-inspection-service` | `NisSrv.exe` | under the Defender Platform directory, or exact `C:\Program Files\Windows Defender\NisSrv.exe` |
+| `microsoft-defender-antivirus-service` | `MsMpEng.exe` | direct child version directory beginning with `4.18.` under `C:\ProgramData\Microsoft\Windows Defender\Platform`, or exact `C:\Program Files\Windows Defender\MsMpEng.exe` |
+| `microsoft-defender-core-service` | `MpDefenderCoreService.exe` | direct child version directory beginning with `4.18.` under `C:\ProgramData\Microsoft\Windows Defender\Platform`, or exact `C:\Program Files\Windows Defender\MpDefenderCoreService.exe` |
+| `microsoft-defender-network-inspection-service` | `NisSrv.exe` | direct child version directory beginning with `4.18.` under `C:\ProgramData\Microsoft\Windows Defender\Platform`, or exact `C:\Program Files\Windows Defender\NisSrv.exe` |
 
 Provenance uses only these official Microsoft Learn sources:
 
@@ -24,10 +24,30 @@ Provenance uses only these official Microsoft Learn sources:
 
 URLs are embedded metadata only; the binary does not fetch them. Matching is
 case-insensitive normalized process name → O(1) catalog candidate → exact or
-under-directory Windows path rule. Normalization trims whitespace/one quote pair,
-converts `/` to `\\`, collapses repeated separators, preserves drive roots,
-removes non-root trailing separators, and lowercases. No filesystem, symlink,
+versioned-child Windows path rule. The Platform rule requires exactly one direct
+child directory beginning with `4.18.` followed immediately by the executable
+basename; arbitrary descendants are rejected. Normalization trims whitespace/
+one quote pair, converts `/` to `\\`, collapses repeated separators, preserves
+drive roots, removes non-root trailing separators, and lowercases. Any complete
+`.` or `..` path segment is rejected; no filesystem canonicalization, symlink,
 service manager, Authenticode, or signature inspection is used.
+
+### Provenance path semantics closure
+
+The production catalog now accepts only `exact` and structured
+`versioned_child` rules. Each Defender Platform match requires exactly one
+direct child directory beginning with `4.18.` followed by the matching
+executable basename; arbitrary descendants and any complete `.` / `..` path
+segment fail closed. The three entries each have their documented exact
+`C:\Program Files\Windows Defender\*.exe` path, and `NisSrv.exe` cites both
+Microsoft Defender provenance sources. Parser validation rejects exact rules
+whose basename is not one of the entry process names.
+
+A focused real Tauri query-only recheck
+(`phase4c1-path-1280-en-light`) passed with actual viewport `1280x800`,
+`catalogRows=3`, all expected positives, all negative cases absent, and
+`owner=0 runtime=0 controller=0`; the copied fixture and source SHA values
+remained unchanged.
 
 ## Detector and API
 
@@ -62,9 +82,10 @@ It also contains explicit negatives that were absent from catalog findings:
 The `NisSrv.exe` positive uses interval-derived evidence and renders as
 estimated. The Go fixture regression generated the profile at anchors
 `2026-09-06T13:05:00Z` and `2026-09-06T13:55:00Z`; both produced the same exact
-ordered three-process/target set. Storage tests also cover exact and
-under-directory matching, case/path normalization, wrong-path/pathless
-exclusion, duplicate catalog validation, provenance validation, path-version
+ordered three-process/target set. Storage tests also cover exact and strict
+versioned-child matching, all three Platform positives, all three Program Files
+exact paths, unversioned/wrong-path/nested/pathless/dot-segment exclusion,
+duplicate and malformed catalog validation, provenance validation, path-version
 stable identity, direct exclusion, and legacy/v2 equivalence.
 
 ## Static timing

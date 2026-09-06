@@ -36,9 +36,18 @@ entry's path rules are then checked.
 
 Windows path normalization trims whitespace and one surrounding quote pair,
 converts `/` to `\\`, collapses repeated separators, removes a non-root
-trailing separator, and lowercases. Path rules are deliberately limited to
-`exact` and `under_directory`. The latter requires the executable path to be
-under the directory and its basename to equal the observed process name.
+trailing separator, and lowercases. An observed path containing a complete `.`
+or `..` segment is rejected; the matcher never canonicalizes or resolves the
+filesystem path. Path rules are deliberately limited to `exact` and
+`versioned_child`:
+
+- `exact` matches the normalized path exactly. Its basename must match one of
+  the entry's normalized process names;
+- `versioned_child` requires the normalized path to contain exactly one child
+  directory and then the executable basename below the configured directory.
+  The child directory must begin with the configured `childPrefix` (the
+  production Defender prefix is `4.18.`), and the basename must equal the
+  observed process name. Arbitrary descendants are not accepted.
 
 ## Version and provenance
 
@@ -54,9 +63,9 @@ The seed is intentionally limited to exactly three Microsoft Defender entries:
 
 | Entry | Process | Path rule | Family |
 | --- | --- | --- | --- |
-| `microsoft-defender-antivirus-service` | `MsMpEng.exe` | under `C:\\ProgramData\\Microsoft\\Windows Defender\\Platform` | Microsoft Defender Antivirus |
-| `microsoft-defender-core-service` | `MpDefenderCoreService.exe` | under the Defender Platform directory, or exact `C:\\Program Files\\Windows Defender\\MpDefenderCoreService.exe` | Microsoft Defender Core Service |
-| `microsoft-defender-network-inspection-service` | `NisSrv.exe` | under the Defender Platform directory, or exact `C:\\Program Files\\Windows Defender\\NisSrv.exe` | Microsoft Defender Network Inspection Service |
+| `microsoft-defender-antivirus-service` | `MsMpEng.exe` | direct child version directory beginning with `4.18.` under `C:\\ProgramData\\Microsoft\\Windows Defender\\Platform`, or exact `C:\\Program Files\\Windows Defender\\MsMpEng.exe` | Microsoft Defender Antivirus |
+| `microsoft-defender-core-service` | `MpDefenderCoreService.exe` | direct child version directory beginning with `4.18.` under `C:\\ProgramData\\Microsoft\\Windows Defender\\Platform`, or exact `C:\\Program Files\\Windows Defender\\MpDefenderCoreService.exe` | Microsoft Defender Core Service |
+| `microsoft-defender-network-inspection-service` | `NisSrv.exe` | direct child version directory beginning with `4.18.` under `C:\\ProgramData\\Microsoft\\Windows Defender\\Platform`, or exact `C:\\Program Files\\Windows Defender\\NisSrv.exe` | Microsoft Defender Network Inspection Service |
 
 The v1 catalog does not include `svchost.exe`, Windows Update processes,
 `SecurityHealthService.exe`, third-party updaters, browser background

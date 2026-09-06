@@ -40,9 +40,10 @@ type BackgroundProcessCatalogEntry struct {
 }
 
 type BackgroundProcessPathRule struct {
-	Kind      string `json:"kind"`
-	Path      string `json:"path,omitempty"`
-	Directory string `json:"directory,omitempty"`
+	Kind        string `json:"kind"`
+	Path        string `json:"path,omitempty"`
+	Directory   string `json:"directory,omitempty"`
+	ChildPrefix string `json:"childPrefix,omitempty"`
 }
 
 type BackgroundProcessMatch struct {
@@ -148,13 +149,22 @@ func parseBackgroundProcessCatalog(data []byte) (*BackgroundProcessCatalog, erro
 			kind := strings.TrimSpace(rule.Kind)
 			switch kind {
 			case "exact":
-				if normalizeWindowsObservedPath(rule.Path) == "" || strings.TrimSpace(rule.Directory) != "" {
+				normalizedPath := normalizeWindowsObservedPath(rule.Path)
+				if normalizedPath == "" || hasWindowsDotSegment(normalizedPath) || strings.TrimSpace(rule.Directory) != "" || strings.TrimSpace(rule.ChildPrefix) != "" {
 					return nil, fmt.Errorf("background process catalog entry %q path rule %d has invalid exact fields", entry.ID, ruleIndex)
 				}
-			case "under_directory":
-				if normalizeWindowsObservedPath(rule.Directory) == "" || strings.TrimSpace(rule.Path) != "" {
-					return nil, fmt.Errorf("background process catalog entry %q path rule %d has invalid under_directory fields", entry.ID, ruleIndex)
+				if !entryHasProcessName(entry, pathBaseWindows(normalizedPath)) {
+					return nil, fmt.Errorf("background process catalog entry %q path rule %d exact basename does not match a process name", entry.ID, ruleIndex)
 				}
+				entry.PathRules[ruleIndex].Path = normalizedPath
+			case "versioned_child":
+				normalizedDirectory := normalizeWindowsObservedPath(rule.Directory)
+				childPrefix := strings.ToLower(strings.TrimSpace(rule.ChildPrefix))
+				if normalizedDirectory == "" || hasWindowsDotSegment(normalizedDirectory) || strings.TrimSpace(rule.Path) != "" || childPrefix == "" || strings.ContainsAny(childPrefix, `\/`) {
+					return nil, fmt.Errorf("background process catalog entry %q path rule %d has invalid versioned_child fields", entry.ID, ruleIndex)
+				}
+				entry.PathRules[ruleIndex].Directory = normalizedDirectory
+				entry.PathRules[ruleIndex].ChildPrefix = childPrefix
 			default:
 				return nil, fmt.Errorf("background process catalog entry %q uses unsupported path rule %q", entry.ID, kind)
 			}
@@ -194,6 +204,25 @@ func normalizeWindowsObservedPath(value string) string {
 	return strings.ToLower(value)
 }
 
+func hasWindowsDotSegment(value string) bool {
+	for _, segment := range strings.Split(value, "\\") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func entryHasProcessName(entry *BackgroundProcessCatalogEntry, processName string) bool {
+	normalizedProcessName := normalizeBackgroundProcessName(processName)
+	for _, candidate := range entry.ProcessNames {
+		if normalizeBackgroundProcessName(candidate) == normalizedProcessName {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *BackgroundProcessCatalog) Match(process, processPath string) *BackgroundProcessMatch {
 	if c == nil {
 		return nil
@@ -203,15 +232,23 @@ func (c *BackgroundProcessCatalog) Match(process, processPath string) *Backgroun
 		return nil
 	}
 	normalizedPath := normalizeWindowsObservedPath(processPath)
+	if hasWindowsDotSegment(normalizedPath) {
+		return nil
+	}
 	normalizedProcess := normalizeBackgroundProcessName(process)
 	for _, rule := range entry.PathRules {
 		matched := false
 		switch rule.Kind {
 		case "exact":
 			matched = normalizedPath == normalizeWindowsObservedPath(rule.Path)
-		case "under_directory":
+		case "versioned_child":
 			directory := normalizeWindowsObservedPath(rule.Directory)
-			matched = strings.HasPrefix(normalizedPath, directory+"\\") && pathBaseWindows(normalizedPath) == normalizedProcess
+			directoryPrefix := strings.TrimRight(directory, "\\") + "\\"
+			if strings.HasPrefix(normalizedPath, directoryPrefix) {
+				relative := strings.TrimPrefix(normalizedPath, directoryPrefix)
+				segments := strings.Split(relative, "\\")
+				matched = len(segments) == 2 && segments[0] != "" && strings.HasPrefix(segments[0], strings.ToLower(rule.ChildPrefix)) && segments[1] == normalizedProcess
+			}
 		}
 		if matched {
 			return &BackgroundProcessMatch{

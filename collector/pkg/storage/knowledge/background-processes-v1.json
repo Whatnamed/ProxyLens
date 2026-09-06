@@ -22,8 +22,13 @@
       "processNames": ["MsMpEng.exe"],
       "pathRules": [
         {
-          "kind": "under_directory",
-          "directory": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform"
+          "kind": "versioned_child",
+          "directory": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform",
+          "childPrefix": "4.18."
+        },
+        {
+          "kind": "exact",
+          "path": "C:\\Program Files\\Windows Defender\\MsMpEng.exe"
         }
       ],
       "sourceIds": ["microsoft-defender-processes", "microsoft-defender-connectivity-binaries"]
@@ -36,8 +41,9 @@
       "processNames": ["MpDefenderCoreService.exe"],
       "pathRules": [
         {
-          "kind": "under_directory",
-          "directory": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform"
+          "kind": "versioned_child",
+          "directory": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform",
+          "childPrefix": "4.18."
         },
         {
           "kind": "exact",
@@ -54,15 +60,16 @@
       "processNames": ["NisSrv.exe"],
       "pathRules": [
         {
-          "kind": "under_directory",
-          "directory": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform"
+          "kind": "versioned_child",
+          "directory": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform",
+          "childPrefix": "4.18."
         },
         {
           "kind": "exact",
           "path": "C:\\Program Files\\Windows Defender\\NisSrv.exe"
         }
       ],
-      "sourceIds": ["microsoft-defender-connectivity-binaries"]
+      "sourceIds": ["microsoft-defender-processes", "microsoft-defender-connectivity-binaries"]
     }
   ]
 }

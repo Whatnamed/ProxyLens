@@ -19,6 +19,13 @@ func TestBackgroundCatalogParsesBuiltInV1(t *testing.T) {
 			t.Fatalf("built-in catalog missing process %q", process)
 		}
 	}
+	nis := catalog.byProcessName[normalizeBackgroundProcessName("NisSrv.exe")]
+	if len(nis.PathRules) != 2 || nis.PathRules[0].Kind != "versioned_child" || nis.PathRules[0].ChildPrefix != "4.18." {
+		t.Fatalf("built-in catalog has unexpected NisSrv platform rule: %+v", nis.PathRules)
+	}
+	if !containsString(nis.SourceIDs, "microsoft-defender-processes") {
+		t.Fatalf("NisSrv provenance is missing microsoft-defender-processes: %v", nis.SourceIDs)
+	}
 }
 
 func TestBackgroundCatalogRejectsDuplicateEntryID(t *testing.T) {
@@ -47,6 +54,21 @@ func TestBackgroundCatalogRejectsInvalidPathRule(t *testing.T) {
 	assertCatalogRejected(t, catalog, "unsupported path rule")
 }
 
+func TestBackgroundCatalogRejectsBroadUnderDirectoryRule(t *testing.T) {
+	catalog := builtInCatalogCopy(t)
+	catalog.Entries[0].PathRules[0].Kind = "under_directory"
+	assertCatalogRejected(t, catalog, "broad under-directory path rule")
+}
+
+func TestBackgroundCatalogRejectsExactRuleWithUnknownProcessBasename(t *testing.T) {
+	catalog := builtInCatalogCopy(t)
+	catalog.Entries[0].PathRules = []BackgroundProcessPathRule{{
+		Kind: "exact",
+		Path: `C:\Program Files\Example\Bar.exe`,
+	}}
+	assertCatalogRejected(t, catalog, "exact basename mismatch")
+}
+
 func TestBackgroundCatalogRejectsNonHTTPSProvenance(t *testing.T) {
 	catalog := builtInCatalogCopy(t)
 	source := catalog.Sources["microsoft-defender-processes"]
@@ -72,7 +94,7 @@ func TestNormalizeWindowsObservedPath(t *testing.T) {
 	}
 }
 
-func TestBackgroundCatalogExactAndUnderDirectoryMatches(t *testing.T) {
+func TestBackgroundCatalogExactAndVersionedChildMatches(t *testing.T) {
 	catalog, err := builtInBackgroundProcessCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -83,8 +105,11 @@ func TestBackgroundCatalogExactAndUnderDirectoryMatches(t *testing.T) {
 	}{
 		{"MsMpEng.exe", `C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.999\MsMpEng.exe`},
 		{"msmpeng.EXE", `c:/programdata/microsoft/windows defender/platform/4.18.999/MSMPENG.EXE`},
+		{"MpDefenderCoreService.exe", `C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.999\MpDefenderCoreService.exe`},
+		{"NisSrv.exe", `C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.999\NisSrv.exe`},
+		{"MsMpEng.exe", `C:\Program Files\Windows Defender\MsMpEng.exe`},
 		{"MpDefenderCoreService.exe", `C:\Program Files\Windows Defender\MpDefenderCoreService.exe`},
-		{"NisSrv.exe", `C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.synthetic\NisSrv.exe`},
+		{"NisSrv.exe", `C:\Program Files\Windows Defender\NisSrv.exe`},
 	}
 	for _, tt := range positive {
 		if match := catalog.Match(tt.process, tt.path); match == nil {
@@ -106,6 +131,38 @@ func TestBackgroundCatalogRejectsWrongPathWithSameProcessName(t *testing.T) {
 	}
 }
 
+func TestBackgroundCatalogRejectsUnversionedOrNestedPlatformPaths(t *testing.T) {
+	catalog, err := builtInBackgroundProcessCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		`C:\ProgramData\Microsoft\Windows Defender\Platform\anything\MsMpEng.exe`,
+		`C:\ProgramData\Microsoft\Windows Defender\Platform\4.17.foo\MsMpEng.exe`,
+		`C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.foo\extra\MsMpEng.exe`,
+	} {
+		if match := catalog.Match("MsMpEng.exe", path); match != nil {
+			t.Fatalf("non-versioned or nested platform path unexpectedly matched: %q -> %+v", path, match)
+		}
+	}
+}
+
+func TestBackgroundCatalogRejectsLexicalDotSegments(t *testing.T) {
+	catalog, err := builtInBackgroundProcessCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		`C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.foo\..\MsMpEng.exe`,
+		`C:\ProgramData\Microsoft\Windows Defender\Platform\foo\..\..\Other\MsMpEng.exe`,
+		`C:\ProgramData\Microsoft\Windows Defender\Platform\.\4.18.foo\MsMpEng.exe`,
+	} {
+		if match := catalog.Match("MsMpEng.exe", path); match != nil {
+			t.Fatalf("dot-segment path unexpectedly matched: %q -> %+v", path, match)
+		}
+	}
+}
+
 func builtInCatalogCopy(t *testing.T) BackgroundProcessCatalog {
 	t.Helper()
 	var catalog BackgroundProcessCatalog
@@ -124,4 +181,13 @@ func assertCatalogRejected(t *testing.T, catalog BackgroundProcessCatalog, label
 	if _, err := parseBackgroundProcessCatalog(data); err == nil || strings.TrimSpace(err.Error()) == "" {
 		t.Fatalf("expected %s catalog to be rejected", label)
 	}
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }

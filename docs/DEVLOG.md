@@ -16,8 +16,8 @@ Review context；未启动 Phase 4B2B/4C2，未修改 accounting writer、migrat
 - `background-processes-v1` 仅包含三条 Microsoft Defender entry：`MsMpEng.exe`、
   `MpDefenderCoreService.exe`、`NisSrv.exe`；source URL 只作为 Microsoft Learn
   provenance metadata，运行时不 fetch；matcher 使用 O(1) normalized process-name
-  lookup，再执行 exact/under-directory Windows path rule，wrong-path/pathless/DIRECT
-  负例 fail closed；
+  lookup，再执行 exact/strict versioned-child Windows path rule，明确拒绝任意
+  descendants、dot segments、wrong-path/pathless/DIRECT 负例并 fail closed；
 - `/api/v1/intelligence/findings` 在既有一次 accounting scan 内新增
   `cataloged_background_process_proxy`、`processPath`、`knowledge` 与 catalog version；
   finding identity 排除 path/bytes/count/provenance/live-to，legacy/v2 equivalence 通过；

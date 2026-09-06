@@ -287,7 +287,7 @@ real-data validation remains a separate deferred acceptance boundary.
 ### Phase 4C1 — Background/Security Process Catalog Intelligence [COMPLETED]
 
 - [x] embedded/versioned `background-processes-v1` catalog with exactly three Microsoft Defender entries and official Microsoft Learn provenance；
-- [x] fixed PROXY detector requiring case-insensitive process name plus event-time `process_path` exact/under-directory match；missing/wrong-path/DIRECT cases fail closed；
+- [x] fixed PROXY detector requiring case-insensitive process name plus event-time `process_path` exact/strict versioned-child match；Defender Platform 仅接受 `4.18.*` direct child directory + executable basename，并覆盖 documented Program Files exact paths；missing/wrong-path/DIRECT cases fail closed；
 - [x] additive `/api/v1/intelligence/findings` knowledge/process-path contract、stable catalog-entry/process/target identity、legacy/v2 equivalence and 10k/100k static timing coverage；
 - [x] dedicated Review section、EN/中文、Light/Dark、process+target History drill、deterministic `review-background-services` fixture and final query-only Tauri 8-state evidence；
 - [x] no filesystem/service/signature inspection, runtime fetch, writer/migration/index, automatic DIRECT rule or network lifecycle；

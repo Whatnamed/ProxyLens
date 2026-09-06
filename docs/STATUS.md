@@ -46,7 +46,7 @@
 ### Phase 4C1 Provenance-backed Background/Security Process Intelligence (Complete)
 
 - 已新增 embedded/versioned `background-processes-v1` catalog，生产 catalog 严格只有 `MsMpEng.exe`、`MpDefenderCoreService.exe`、`NisSrv.exe` 三条 Microsoft Defender entry；source URL 仅作 Microsoft Learn provenance metadata，运行时不 fetch；
-- catalog matching 使用 normalized process name 的 O(1) candidate lookup，再检查 event-time `process_path` 的 case-insensitive exact / under-directory 规则；missing path、wrong path、DIRECT 与 `svchost.exe` 等未审 entry 不匹配；不读 filesystem、不查 service/signature、不改 writer/migration/index；
+- catalog matching 使用 normalized process name 的 O(1) candidate lookup，再检查 event-time `process_path` 的 case-insensitive exact / strict versioned-child 规则；Defender Platform 只接受 `4.18.*` 直接子目录加 executable basename，并补充三个 documented Program Files exact path；arbitrary descendants、dot segments、missing path、wrong path、DIRECT 与 `svchost.exe` 等未审 entry 不匹配；不做 filesystem canonicalization、不查 service/signature、不改 writer/migration/index；
 - `/api/v1/intelligence/findings` 在现有一次 accounting scan 内新增 `cataloged_background_process_proxy`、`subject.processPath`、`knowledge` 与 `knowledgeCatalogVersion`；finding identity 为 catalog entry + normalized process + Phase 4 target bucket，排除 path/bytes/count/provenance/live-to；legacy/v2 等价；
 - Review 已新增后台 / 安全服务目录匹配 section，保持中性 evidence 语义（catalog match ≠ signature verification），History 下钻只携带 `route=PROXY`、process 与现有 target context；EN/中文、Light/Dark 与 Design System v1 Frozen 保持一致；
 - `review-background-services` fixture 精确包含三个正例、wrong-path/pathless/DIRECT 负例和一个 interval-derived 正例；13:05/13:55 anchor regression、10k/100k static timing、Go/API/UI/Node checks 与 1280×800 / 1600×1000 × EN/中文 query-only Tauri 八态均通过；每态 owner/runtime/controller=0，source/copy unchanged；
