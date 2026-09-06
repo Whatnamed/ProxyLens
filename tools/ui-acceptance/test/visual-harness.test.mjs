@@ -50,10 +50,12 @@ test('visual runner only launches a query-only Tauri process and verifies read-o
   assert.match(runnerSource, /actualLocale/);
   assert.match(runnerSource, /actualTheme/);
   assert.match(runnerSource, /view=\$\{view\}/);
+  assert.match(runnerSource, /assertTemporalReviewEvidence/);
+  assert.match(runnerSource, /noHorizontalOverflow/);
 });
 
-test('fixture runner generates all six profiles from one recorded anchor', () => {
-  assert.match(fixtureRunnerSource, /\['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review'\]/);
+test('fixture runner generates all seven profiles from one recorded anchor', () => {
+  assert.match(fixtureRunnerSource, /\['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal'\]/);
   assert.match(fixtureRunnerSource, /const anchor = explicitAnchor \|\| new Date\(\)\.toISOString\(\)/);
   assert.match(fixtureRunnerSource, /--anchor', anchor/);
   assert.match(fixtureRunnerSource, /ui-fixtures-metadata\.json/);

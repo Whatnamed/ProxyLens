@@ -10,6 +10,7 @@ import {
   ConnectionDetailResponse,
   ConnectionTrafficResponse,
   AuditFindingResult,
+  ProcessChangeResult,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -120,6 +121,22 @@ export class QueryApiClient {
 
   async getAuditFindings(from: string, to: string, limitPerKind = 20): Promise<AuditFindingResult> {
     return this.request<AuditFindingResult>('/api/v1/intelligence/findings', { from, to, limitPerKind });
+  }
+
+  async getProcessChanges(
+    baselineFrom: string,
+    baselineTo: string,
+    recentFrom: string,
+    recentTo: string,
+    limitPerKind = 20,
+  ): Promise<ProcessChangeResult> {
+    return this.request<ProcessChangeResult>('/api/v1/intelligence/process-changes', {
+      baselineFrom,
+      baselineTo,
+      recentFrom,
+      recentTo,
+      limitPerKind,
+    });
   }
 
   async getConnectionDetail(sessionId: string, epochId: number, connectionId: string): Promise<ConnectionDetailResponse> {

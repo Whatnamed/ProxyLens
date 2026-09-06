@@ -40,6 +40,16 @@ func (s *accountingScope) accountedTable() (table string, keyCol string, keyVal 
 	return "accounted_traffic", "run_id", s.runID
 }
 
+// hourlyDimensionsTable returns the hourly materialization that belongs to the
+// same authority as accountedTable. Temporal intelligence must not resolve a
+// second, independent accounting source.
+func (s *accountingScope) hourlyDimensionsTable() (table string, keyCol string, keyVal string) {
+	if s.useV2 {
+		return "usage_hourly_dimensions_v2", "generation_id", s.generationID
+	}
+	return "usage_hourly_dimensions", "run_id", s.runID
+}
+
 func (a *AnalyticsService) resolveAccountingScope(ctx context.Context) (*accountingScope, error) {
 	gen, err := GetActiveAccountingGeneration(ctx, a.db)
 	if err != nil && !errors.Is(err, ErrNoActiveGeneration) && !errors.Is(err, sql.ErrNoRows) {
@@ -421,10 +431,10 @@ func (a *AnalyticsService) GetTopDimensions(ctx context.Context, dimType string,
 		route types.RouteType
 	}
 	type itemAgg struct {
-		up, down               int64
-		exactUp, exactDown     int64
-		estUp, estDown         int64
-		distinctConns          map[string]bool
+		up, down           int64
+		exactUp, exactDown int64
+		estUp, estDown     int64
+		distinctConns      map[string]bool
 	}
 
 	aggMap := make(map[itemKey]*itemAgg)
@@ -598,10 +608,10 @@ func (a *AnalyticsService) GetTopRulesDetailed(ctx context.Context, filter Analy
 		route       types.RouteType
 	}
 	type ruleAgg struct {
-		up, down               int64
-		exactUp, exactDown     int64
-		estUp, estDown         int64
-		distinctConns          map[string]bool
+		up, down           int64
+		exactUp, exactDown int64
+		estUp, estDown     int64
+		distinctConns      map[string]bool
 	}
 
 	aggMap := make(map[ruleKey]*ruleAgg)

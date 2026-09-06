@@ -11,6 +11,16 @@ export interface TimeRangeRFC3339 {
 
 export type QuickWindowType = 'today' | 'yesterday' | '7d' | '30d';
 
+export type TemporalWindowKind = QuickWindowType | 'custom';
+
+export interface TemporalComparisonRange {
+  baselineRequested: TimeRangeRFC3339;
+  recentRequested: TimeRangeRFC3339;
+  baselineEffective: TimeRangeRFC3339 | null;
+  recentEffective: TimeRangeRFC3339 | null;
+  unavailableReason?: 'insufficient_full_hours';
+}
+
 export function getQuickWindow(type: QuickWindowType, now = new Date()): TimeRangeRFC3339 {
   const current = new Date(now);
   const year = current.getFullYear();
@@ -48,6 +58,77 @@ export function getQuickWindow(type: QuickWindowType, now = new Date()): TimeRan
       };
     }
   }
+}
+
+function shiftLocalCalendarDays(isoString: string, days: number): string {
+  const value = new Date(isoString);
+  value.setDate(value.getDate() + days);
+  return value.toISOString();
+}
+
+export function floorToUtcHour(value: Date | string): Date {
+  const input = typeof value === 'string' ? new Date(value) : new Date(value);
+  return new Date(Date.UTC(
+    input.getUTCFullYear(),
+    input.getUTCMonth(),
+    input.getUTCDate(),
+    input.getUTCHours(),
+    0,
+    0,
+    0,
+  ));
+}
+
+export function ceilToUtcHour(value: Date | string): Date {
+  const input = typeof value === 'string' ? new Date(value) : new Date(value);
+  const floored = floorToUtcHour(input);
+  return floored.getTime() === input.getTime()
+    ? floored
+    : new Date(floored.getTime() + 60 * 60 * 1000);
+}
+
+function effectiveFullHourRange(requested: TimeRangeRFC3339): TimeRangeRFC3339 | null {
+  const from = ceilToUtcHour(requested.from);
+  const to = floorToUtcHour(requested.to);
+  if (!(to.getTime() > from.getTime())) return null;
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+/**
+ * Derives the explicit comparison interval from the Review range, then clips
+ * both sides inward to complete UTC-hour buckets only. The comparison query
+ * must never claim precision for a partial hourly materialization.
+ */
+export function deriveTemporalComparisonRange(
+  kind: TemporalWindowKind,
+  recentRequested: TimeRangeRFC3339,
+): TemporalComparisonRange {
+  let baselineRequested: TimeRangeRFC3339;
+  if (kind === 'custom') {
+    const recentFrom = new Date(recentRequested.from);
+    const recentTo = new Date(recentRequested.to);
+    const duration = recentTo.getTime() - recentFrom.getTime();
+    baselineRequested = {
+      from: new Date(recentFrom.getTime() - duration).toISOString(),
+      to: recentFrom.toISOString(),
+    };
+  } else {
+    const shiftDays = kind === 'today' || kind === 'yesterday' ? -1 : kind === '7d' ? -7 : -30;
+    baselineRequested = {
+      from: shiftLocalCalendarDays(recentRequested.from, shiftDays),
+      to: shiftLocalCalendarDays(recentRequested.to, shiftDays),
+    };
+  }
+
+  const baselineEffective = effectiveFullHourRange(baselineRequested);
+  const recentEffective = effectiveFullHourRange(recentRequested);
+  return {
+    baselineRequested,
+    recentRequested,
+    baselineEffective,
+    recentEffective,
+    ...(baselineEffective && recentEffective ? {} : { unavailableReason: 'insufficient_full_hours' as const }),
+  };
 }
 
 export function formatLocalDateTime(

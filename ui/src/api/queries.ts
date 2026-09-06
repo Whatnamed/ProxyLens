@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { QueryApiClient } from './client';
 import { ConnectionKey } from '../state/AuditContext';
 import { HistoryFilters } from '../state/AuditContext';
+import { TemporalComparisonRange } from '../utils/time';
 
 export function useMetaQuery(client: QueryApiClient | null) {
   return useQuery({
@@ -176,6 +177,43 @@ export function useAuditFindingsQuery(
     enabled: !!client,
     placeholderData: keepLiveTickOnly(from, to, 'PROXY', rangeKey),
   });
+}
+
+export function useProcessChangesQuery(
+  client: QueryApiClient | null,
+  comparison: TemporalComparisonRange,
+  rangeSourceKey: string,
+  limitPerKind = 20,
+) {
+  const baseline = comparison.baselineEffective;
+  const recent = comparison.recentEffective;
+  return useQuery({
+    queryKey: processChangesQueryKey(rangeSourceKey, comparison, limitPerKind),
+    queryFn: () => client!.getProcessChanges(
+      baseline!.from,
+      baseline!.to,
+      recent!.from,
+      recent!.to,
+      limitPerKind,
+    ),
+    enabled: !!client && !!baseline && !!recent,
+  });
+}
+
+export function processChangesQueryKey(
+  rangeSourceKey: string,
+  comparison: TemporalComparisonRange,
+  limitPerKind: number,
+): readonly unknown[] {
+  return [
+    'processChanges',
+    rangeSourceKey,
+    comparison.baselineEffective?.from,
+    comparison.baselineEffective?.to,
+    comparison.recentEffective?.from,
+    comparison.recentEffective?.to,
+    limitPerKind,
+  ];
 }
 
 export function useConnectionsQuery(

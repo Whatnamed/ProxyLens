@@ -10,6 +10,7 @@
  * - empty   : 有效 Schema 但无流量记录
  * - scaled  : 100,000 events / 5,000 distinct connections / 30 days
  * - review  : deterministic candidates for all four Phase 4A detector families
+ * - review-temporal : Phase 4B1 comparison fixture plus Phase 4A candidates
  */
 
 import { execFileSync } from 'node:child_process';
@@ -26,7 +27,7 @@ if (!fs.existsSync(fixtureDir)) {
   fs.mkdirSync(fixtureDir, { recursive: true });
 }
 
-const profiles = ['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review'];
+const profiles = ['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal'];
 
 console.log('================================================================');
 console.log('Generating Deterministic Synthetic UI Fixtures');

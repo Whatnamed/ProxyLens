@@ -21,7 +21,7 @@ const rootDir = path.resolve(__dirname, '..', '..');
 const uiDir = path.join(rootDir, 'ui');
 const fixtureDir = path.join(rootDir, 'fixtures');
 const evidenceRoot = path.join(rootDir, 'tmp', 'phase3-final-acceptance');
-const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review']);
+const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal']);
 const sizes = new Set(['1280x800', '1440x900', '1600x1000', 'max']);
 const locales = new Set(['en', 'zh-CN']);
 const themes = new Set(['light', 'dark']);
@@ -31,7 +31,7 @@ const profile = args.profile || 'healthy';
 const size = args.size || '1600x1000';
 const locale = args.locale || 'en';
 const theme = args.theme || 'light';
-const view = args.view || (profile === 'review' ? 'review' : 'overview');
+const view = args.view || (profile === 'review' || profile === 'review-temporal' ? 'review' : 'overview');
 const runId = safeRunId(args['run-id'] || `${profile}-${size}-${Date.now()}`);
 const autoExitMs = parsePositiveInt(args['auto-exit-ms'] || '30000', 'auto-exit-ms');
 const cdpPort = parsePositiveInt(args['cdp-port'] || '9223', 'cdp-port');
@@ -135,6 +135,9 @@ try {
   await waitForWebviewPreferences(cdpPort, locale, theme, 30000);
   await selectWebviewView(cdpPort, view);
   const actualState = await waitForWebviewState(cdpPort, size, locale, theme, view, 30000);
+  const temporalEvidence = profile === 'review-temporal'
+    ? await assertTemporalReviewEvidence(cdpPort, locale)
+    : null;
   const actualViewport = { width: actualState.width, height: actualState.height, dpr: actualState.dpr };
   await waitForProcessExit(child, autoExitMs + 15000, 'Tauri visual QA auto-exit');
   if (child.exitCode !== 0) {
@@ -174,6 +177,7 @@ try {
     copyUnchanged: copyShaAfter === copyShaBefore,
     cdpPort,
     webviewProbe: expectedProbe,
+    temporalEvidence,
     evidenceDir: path.relative(rootDir, runDir),
   };
   fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
@@ -291,6 +295,52 @@ async function selectWebviewView(port, view) {
     button.click();
     return true;
   })()`);
+}
+
+async function assertTemporalReviewEvidence(port, locale) {
+  const deadline = Date.now() + 30000;
+  let evidence = null;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      evidence = JSON.parse(await evaluateWebview(port, `(() => {
+    const text = document.body.innerText || '';
+    const reviewScroll = document.querySelector('[data-pl-page="review"] .pl-page__scroll');
+    const temporalRows = document.querySelectorAll('.pl-review__temporal-finding');
+    const investigateButtons = document.querySelectorAll('.pl-review__temporal-finding .pl-review__investigate');
+    return JSON.stringify({
+      comparisonTitle: ${JSON.stringify(locale === 'zh-CN' ? '与对比时段相比的变化' : 'Changes from comparison period')},
+      hasComparisonTitle: text.includes(${JSON.stringify(locale === 'zh-CN' ? '与对比时段相比的变化' : 'Changes from comparison period')}),
+      hasRateEvidence: text.includes('/h') || text.includes('每小时'),
+      hasTemporalProcess: text.includes('alpha.exe') && text.includes('growth.exe'),
+      hasLongProcess: text.includes('very-long-observed-process-name-for-temporal-review.exe'),
+      hasPhase4AFallback: text.includes('MATCH fallback') || text.includes('MATCH 兜底'),
+      temporalRows: temporalRows.length,
+      investigateButtons: investigateButtons.length,
+      noHorizontalOverflow: !reviewScroll || reviewScroll.scrollWidth <= reviewScroll.clientWidth + 2,
+      documentNoHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
+    });
+      })()`));
+      if (isCompleteTemporalEvidence(evidence)) break;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (!isCompleteTemporalEvidence(evidence)) {
+    throw new Error(`Temporal Review evidence failed: ${JSON.stringify(evidence)}${lastError ? ` (${lastError.message})` : ''}`);
+  }
+  console.log(
+    `PROXYLENS_VISUAL_QA_TEMPORAL comparison=1 rate=1 process=1 longProcess=1 phase4a=1 rows=${evidence.temporalRows} investigate=${evidence.investigateButtons} overflow=0`,
+  );
+  return evidence;
+}
+
+function isCompleteTemporalEvidence(evidence) {
+  return Boolean(evidence?.hasComparisonTitle && evidence.hasRateEvidence && evidence.hasTemporalProcess
+    && evidence.hasLongProcess && evidence.hasPhase4AFallback && evidence.temporalRows >= 2
+    && evidence.investigateButtons >= 2 && evidence.noHorizontalOverflow
+    && evidence.documentNoHorizontalOverflow);
 }
 
 async function waitForWebviewState(port, requestedSize, expectedLocale, expectedTheme, expectedView, timeoutMs) {

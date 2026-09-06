@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { keepLiveTickOnly, isLiveRangeKey } from './queries.js';
+import { keepLiveTickOnly, isLiveRangeKey, processChangesQueryKey } from './queries.js';
+import { deriveTemporalComparisonRange } from '../utils/time.js';
 
 describe('Query caching: keepLiveTickOnly semantic scope guard', () => {
   const previousData = { proxyBytes: 1024, directBytes: 2048 };
@@ -161,5 +162,26 @@ describe('History query policy: useConnectionsQuery scope isolation', () => {
     assert.notDeepEqual(key1, keyNextPage);
     assert.notDeepEqual(key1, keyDiffHost);
     assert.notDeepEqual(key1, keyDiffRoute);
+  });
+});
+
+describe('Temporal process comparison query policy', () => {
+  it('keys by source identity, all effective boundaries, and limit', () => {
+    const comparison = deriveTemporalComparisonRange('today', {
+      from: '2026-09-06T00:00:00.000Z',
+      to: '2026-09-06T13:45:00.000Z',
+    });
+    const key = processChangesQueryKey('today', comparison, 20);
+    assert.deepEqual(key, [
+      'processChanges',
+      'today',
+      comparison.baselineEffective?.from,
+      comparison.baselineEffective?.to,
+      comparison.recentEffective?.from,
+      comparison.recentEffective?.to,
+      20,
+    ]);
+    assert.notDeepEqual(key, processChangesQueryKey('today', comparison, 50));
+    assert.notDeepEqual(key, processChangesQueryKey('7d', comparison, 20));
   });
 });

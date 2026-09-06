@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled | review")
+	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled | review | review-temporal")
 	outPath := flag.String("out", "", "Output SQLite database path (e.g. ./fixtures/fixture_healthy.db)")
 	anchorStr := flag.String("anchor", "", "Anchor time in RFC3339 (optional, defaults to current UTC time)")
 	scaleCount := flag.Int("scale", 100000, "Event count for scaled profile (default: 100000)")
@@ -68,8 +68,10 @@ func main() {
 		generateScaled(ctx, absPath, anchorTime, *scaleCount)
 	case "review":
 		generateReview(ctx, absPath, anchorTime)
+	case "review-temporal":
+		generateReviewTemporal(ctx, absPath, anchorTime)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled, review\n", *profile)
+		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled, review, review-temporal\n", *profile)
 		os.Exit(1)
 	}
 
@@ -324,6 +326,83 @@ func generateReview(ctx context.Context, dbPath string, anchor time.Time) {
 		WHERE session_id = ?;
 	`, startedAt, qaEndAt, lastEventAt, anchor.Format(time.RFC3339Nano), anchor.Format(time.RFC3339Nano), sessionID)
 	checkErr("Normalize review visual session", err)
+}
+
+func generateReviewTemporal(ctx context.Context, dbPath string, anchor time.Time) {
+	sessionID := "sess-synthetic-review-temporal"
+	sink, err := storage.OpenSQLiteSink(ctx, dbPath, sessionID, "v1.0.0-synthetic-review-temporal")
+	checkErr("OpenSQLiteSink review-temporal", err)
+
+	anchorLocal := anchor.In(time.Local)
+	baselineFromLocal := time.Date(anchorLocal.Year(), anchorLocal.Month(), anchorLocal.Day()-1, 0, 0, 0, 0, time.Local)
+	recentTo := anchor.UTC().Truncate(time.Hour)
+	recentBucket := recentTo.Add(-time.Hour)
+	baselineBucketLocal := recentBucket.In(time.Local)
+	baselineBucketLocal = time.Date(baselineBucketLocal.Year(), baselineBucketLocal.Month(), baselineBucketLocal.Day()-1, baselineBucketLocal.Hour(), 0, 0, 0, time.Local)
+	baselineBucket := baselineBucketLocal.UTC()
+
+	seq := int64(1)
+	emitTemporal := func(id, process string, route types.RouteType, up, down int64, at time.Time) {
+		emitConnEvent(sink, sessionID, 1, &seq, id, types.EventConnectionNew,
+			process, "C:\\Synthetic\\"+process, process+".example", "", "198.51.100.20", "443", "tcp", "DomainSuffix", process,
+			route, []string{"Node-Temporal-01", "ProxyGroup"}, up, down, at)
+	}
+
+	// Process A: baseline DIRECT/REJECT context, recent PROXY.
+	emitTemporal("temporal-alpha-direct", "alpha.exe", types.RouteDirect, 100, 400, baselineBucket.Add(10*time.Minute))
+	emitTemporal("temporal-alpha-reject", "alpha.exe", types.RouteReject, 50, 50, baselineBucket.Add(20*time.Minute))
+	emitTemporal("temporal-alpha-proxy", "alpha.exe", types.RouteProxy, 1000, 4000, recentBucket.Add(10*time.Minute))
+	// Process B: no baseline evidence, recent PROXY.
+	emitTemporal("temporal-beta-proxy", "beta.exe", types.RouteProxy, 3000, 4000, recentBucket.Add(20*time.Minute))
+	// Long raw process identity keeps truncation/overflow evidence honest.
+	emitTemporal("temporal-long-process", "very-long-observed-process-name-for-temporal-review.exe", types.RouteProxy, 512, 2048, recentBucket.Add(25*time.Minute))
+	// Process C: higher recent PROXY bytes/hour, with interval-derived evidence.
+	emitTemporal("temporal-growth-base", "growth.exe", types.RouteProxy, 500, 1500, baselineBucket.Add(30*time.Minute))
+	emitTemporal("temporal-growth-recent", "growth.exe", types.RouteProxy, 2000, 4000, recentBucket.Add(30*time.Minute))
+	emitConnEventWithInterval(sink, sessionID, 1, &seq, "temporal-growth-interval", types.EventConnectionNew,
+		"growth.exe", "C:\\Synthetic\\growth.exe", "growth.example", "", "198.51.100.21", "443", "tcp", "DomainSuffix", "growth.exe",
+		types.RouteProxy, []string{"Node-Temporal-01", "ProxyGroup"}, 1000, 1000, recentBucket.Add(30*time.Minute), recentBucket.Add(-30*time.Minute), recentBucket.Add(30*time.Minute))
+	// Processes D/E prove equal-rate and lower-rate cases are excluded.
+	emitTemporal("temporal-same-base", "same.exe", types.RouteProxy, 1000, 3000, baselineBucket.Add(40*time.Minute))
+	emitTemporal("temporal-same-recent", "same.exe", types.RouteProxy, 1500, 4500, recentBucket.Add(40*time.Minute))
+	emitTemporal("temporal-lower-base", "lower.exe", types.RouteProxy, 2000, 4000, baselineBucket.Add(50*time.Minute))
+	emitTemporal("temporal-lower-recent", "lower.exe", types.RouteProxy, 300, 700, recentBucket.Add(50*time.Minute))
+	// Process F is recent DIRECT-only and must not enter either detector.
+	emitTemporal("temporal-direct-only", "direct-only.exe", types.RouteDirect, 100, 200, recentBucket.Add(time.Hour))
+
+	// Keep the established Phase 4A Review sections visible below the temporal
+	// sections in the same query-only fixture.
+	emitConnEvent(sink, sessionID, 1, &seq, "temporal-match", types.EventConnectionNew,
+		"fallback-app.exe", "C:\\Synthetic\\fallback-app.exe", "fallback.example", "", "198.51.100.30", "443", "tcp", "MATCH", "",
+		types.RouteProxy, []string{"Node-Temporal-02", "ProxyGroup"}, 32768, 196608, recentBucket.Add(15*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "temporal-udp", types.EventConnectionNew,
+		"media.exe", "C:\\Synthetic\\media.exe", "", "", "198.51.100.31", "443", "udp", "NETWORK,udp", "",
+		types.RouteProxy, []string{"Node-Temporal-03", "ProxyGroup"}, 4096, 8192, recentBucket.Add(25*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "temporal-ip-only", types.EventConnectionNew,
+		"sync.exe", "C:\\Synthetic\\sync.exe", "", "", "203.0.113.17", "443", "tcp", "DomainSuffix", "example",
+		types.RouteProxy, []string{"Node-Temporal-04", "ProxyGroup"}, 65536, 524288, recentBucket.Add(35*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "temporal-large", types.EventConnectionNew,
+		"backup.exe", "C:\\Synthetic\\backup.exe", "archive.example", "", "192.0.2.44", "443", "tcp", "DomainSuffix", "archive.example",
+		types.RouteProxy, []string{"Node-Temporal-05", "ProxyGroup"}, 4*1024*1024, 128*1024*1024, recentBucket.Add(45*time.Minute))
+
+	checkErr("EndSession review-temporal", sink.EndSession(ctx, sessionID, storage.SessionStatusClosedClean))
+	checkErr("Close sink review-temporal", sink.Close())
+
+	db, err := storage.OpenDB(ctx, dbPath)
+	checkErr("OpenDB review-temporal", err)
+	defer db.Close()
+	_, err = storage.RebuildAccounting(ctx, db, "synthetic temporal review profile build")
+	checkErr("RebuildAccounting review-temporal", err)
+
+	startedAt := baselineFromLocal.UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	lastEventAt := recentTo.Add(-time.Minute).Format(time.RFC3339Nano)
+	qaEndAt := anchor.Add(time.Hour).Format(time.RFC3339Nano)
+	_, err = db.ExecContext(ctx, `
+		UPDATE collector_sessions
+		SET started_at = ?, ended_at = ?, last_event_at = ?, last_heartbeat_at = ?, updated_at = ?
+		WHERE session_id = ?;
+	`, startedAt, qaEndAt, lastEventAt, anchor.Format(time.RFC3339Nano), anchor.Format(time.RFC3339Nano), sessionID)
+	checkErr("Normalize review-temporal visual session", err)
 }
 
 func emitReviewResidual(sink *storage.SQLiteEventSink, sessionID string, epoch int, frame int64, seq *int64, ts time.Time) {

@@ -156,6 +156,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/analytics/protocols", s.handleProtocols)
 	mux.HandleFunc("/api/v1/coverage", s.handleCoverage)
 	mux.HandleFunc("/api/v1/intelligence/findings", s.handleIntelligenceFindings)
+	mux.HandleFunc("/api/v1/intelligence/process-changes", s.handleIntelligenceProcessChanges)
 	mux.HandleFunc("/api/v1/connections", s.handleConnections)
 	mux.HandleFunc("/api/v1/connections/", s.handleConnectionDetailRouter)
 }
