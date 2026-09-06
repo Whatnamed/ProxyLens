@@ -1,6 +1,6 @@
 # ProxyLens Audit Intelligence v1
 
-- **Status**: Phase 4A foundation and semantic closure complete; Phase 4B/4C deferred
+- **Status**: Phase 4A foundation and Phase 4B1 temporal process intelligence complete; Phase 4B2/4C deferred
 - **Scope**: deterministic, read-only Review workspace over reconciled accounting
 - **Authority**: the active v2 accounting generation, otherwise the latest completed legacy run
 
@@ -67,6 +67,46 @@ bounded to 1–50. The response carries `route=PROXY`, `accountingVersion`,
 `countsByKind`, and deterministic finding items. No endpoint writes SQLite,
 starts a Runtime, or contacts a Controller.
 
+### 3.1 Temporal process comparison (Phase 4B1)
+
+Phase 4B1 adds one deterministic, read-only comparison over process hourly
+dimensions:
+
+```text
+GET /api/v1/intelligence/process-changes
+  ?baselineFrom=<rfc3339>&baselineTo=<rfc3339>
+  &recentFrom=<rfc3339>&recentTo=<rfc3339>&limitPerKind=20
+```
+
+All four boundaries are required, UTC-hour aligned, at least one hour long,
+and non-overlapping. The UI derives the previous equal local-calendar-day
+window for quick ranges and the immediately preceding equal interval for a
+custom range, then clips both windows inward to complete UTC-hour buckets.
+The API never guesses a missing baseline or silently compares a partial hour.
+
+Both windows must be fully covered: `futureDurationMs`,
+`outsideKnownScopeMs`, and `uncoveredDurationMs` must be zero and
+`coverageRatio` must be `1`. Otherwise the endpoint returns HTTP 200 with an
+explicit `status` such as `baseline_has_monitoring_gaps` or
+`recent_outside_known_scope` and no findings. This is a valid unavailable
+state, not a zero-result claim.
+
+The only Phase 4B1 detectors are:
+
+- `process_newly_observed_on_proxy`: recent PROXY bytes are positive while
+  baseline PROXY bytes are zero;
+- `process_proxy_growth`: both periods have PROXY bytes and recent
+  `bytes/hour` is strictly greater than baseline `bytes/hour`.
+
+The response reports process identity, PROXY/DIRECT/REJECT route evidence,
+exact versus interval-derived bytes, and for growth the baseline rate, recent
+rate, delta rate, and growth ratio. It deliberately has no anomaly score,
+severity, risk, threshold, or inferred intent. IDs are stable detector-kind
+plus process identities. The read path uses the selected active v2 or latest
+completed legacy hourly authority through one grouped query per window; it
+does not add a writer, migration, connection-count semantics, or raw-event
+scan.
+
 History adds one narrow exact `rule` filter for Review investigation. Rule
 payload, final proxy, port filtering, sorting changes, and arbitrary detector
 query languages remain out of scope.
@@ -85,26 +125,38 @@ detector-relevant read-only filters, sets History route focus to `PROXY`, resets
 pagination, and creates a fresh History snapshot. Review never edits rules,
 Controller config, nodes, system proxy, TUN, DNS, or routes.
 
+The temporal comparison is shown before the Phase 4A detector sections. It
+uses the existing Review time range, reports its effective baseline/recent
+windows and coverage state, and offers the same read-only History handoff with
+`route=PROXY` plus the process filter. It does not add a second navigation
+surface or a general-purpose time-series explorer.
+
 ## 5. Fixtures and acceptance
 
-The `review` fixture is synthetic and deterministic. It includes positive and
-negative cases for all four detector families, an interval-derived example,
-and a large-connection threshold example. It is used only through a copied
-temporary DB in query-only Tauri visual QA.
+The `review` and `review-temporal` fixtures are synthetic and deterministic.
+The latter includes positive and negative process-comparison cases, a
+long/high-cardinality process identity, interval-derived bytes, and the
+Phase 4A examples. They are used only through copied temporary DBs in
+query-only Tauri visual QA.
 
-The Phase 4A visual gate covers Review at 1280×800 and 1600×1000 in EN/ZH ×
-Light/Dark. The runner records requested size, actual CDP CSS viewport,
-locale/theme/page state, fixture SHA before/after, and explicit
-`owner=0 runtime=0 controller=0` evidence.
+The Phase 4B1 visual gate covers the temporal Review at 1280×800 and
+1600×1000 in EN/ZH × Light/Dark. The runner records requested size, actual CDP
+CSS viewport, locale/theme/page state, fixture SHA before/after, temporal row
+evidence, and explicit `owner=0 runtime=0 controller=0` evidence. The
+canonical 1280×800 and 1600×1000 matrix remains query-only; 1440×900 is kept
+as a geometry review size.
 
-The focused storage timing fixture records 10k and 100k row construction plus
-read timings. It is diagnostic evidence for the bounded read path, not a
-production accounting benchmark; the existing 1.5M E-drive scale acceptance
-remains independent.
+The focused storage timing fixture records 10k and 100k high-cardinality
+read timings, with 100k reads completing in roughly 0.4–0.5 seconds per
+authority in the current environment and indexed query plans. Legacy/v2
+results are equivalent. This is diagnostic evidence for the bounded read
+path, not a production accounting benchmark; the existing 1.5M E-drive scale
+acceptance remains independent.
 
 ## 6. Deferred boundary
 
-Phase 4B/4C are not started. Future candidates such as historical route-change
-comparisons, first-seen background services, rule suggestions, final-proxy
-analysis, scoring, and real FLClash/Mihomo validation require separate
-evidence and contracts. They must not be inferred from this foundation.
+Phase 4B2/4C are not started. Future candidates such as historical route-change
+comparisons, first-seen/background-service semantics beyond the delivered
+process comparison, rule suggestions, final-proxy analysis, scoring, and real
+FLClash/Mihomo validation require separate evidence and contracts. They must
+not be inferred from this foundation.

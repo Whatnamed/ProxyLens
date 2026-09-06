@@ -29,7 +29,7 @@ Phase 3E Desktop Runtime Integration              [CORE COMPLETE — real-enviro
    ↓
 Phase 3S Production Storage & Accounting Scale    [COMPLETED]
    ↓
-Phase 4  Audit Intelligence                       [IN PROGRESS — 4A FOUNDATION COMPLETE]
+Phase 4  Audit Intelligence                       [IN PROGRESS — 4A + 4B1 COMPLETE]
    ↓
 Later    长期增强                                 [PLANNED]
 ```
@@ -238,7 +238,7 @@ real-data validation remains a separate deferred acceptance boundary.
 
 ---
 
-## Phase 4 — Audit Intelligence [IN PROGRESS — PHASE 4A COMPLETE]
+## Phase 4 — Audit Intelligence [IN PROGRESS — 4A + 4B1 COMPLETE]
 
 目标：在可靠历史之上，用透明、可解释的规则筛选“值得检查的代理流量”，辅助用户优化分流。
 
@@ -269,9 +269,17 @@ real-data validation remains a separate deferred acceptance boundary.
 - [x] synthetic review fixture、10k/100k timing evidence 与 8-state query-only Tauri acceptance；
 - [x] no score/severity/black-box inference and no Controller/network lifecycle side effects。
 
-### Phase 4B / 4C — Deferred
+### Phase 4B1 — Temporal Process Intelligence [COMPLETED]
 
-- [ ] historical route-change comparison、first-seen/background-service candidates、suggested rules or scoring；
+- [x] Review temporal comparison over explicit, non-overlapping complete UTC-hour baseline/recent windows；quick ranges use local-calendar-day comparison and custom ranges use the preceding equal interval；
+- [x] complete Coverage gate：future、outside-known-scope、monitoring gap 或 non-unit coverage 时返回事实 unavailable status，不输出 misleading zero-change findings；
+- [x] `process_newly_observed_on_proxy` 与 `process_proxy_growth` 两个 deterministic detector；growth 使用 bytes/hour，包含 PROXY/DIRECT/REJECT 与 exact/estimated evidence，不含 score/severity/risk/connection count；
+- [x] active v2 / completed legacy hourly authority read path、legacy/v2 equivalence、coverage-negative、high-cardinality EQP/timing 与 API contract tests；未修改 accounting writer、migration 或 production storage implementation；
+- [x] Review integration、process + fixed-PROXY History drill、synthetic temporal fixture 与 1280×800 / 1600×1000 × EN/ZH × Light/Dark query-only Tauri evidence；
+
+### Phase 4B2 / 4C — Deferred
+
+- [ ] historical route-change comparison、broader first-seen/background-service candidates、suggested rules or scoring；
 - [ ] richer rule/final-proxy/port dimensions、real FLClash/Mihomo and real-data validation；
 - [ ] any automatic configuration or network action remains explicitly out of scope。
 

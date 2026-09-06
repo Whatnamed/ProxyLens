@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-09-06 — Phase 4B1 Temporal Process Intelligence
+
+**Scope:** 在 Phase 4A Review 之上增加确定性的 process temporal comparison；未启动
+Phase 4B2/4C，未修改 accounting writer、migration 或 production storage implementation。
+
+**Completed:**
+
+- 新增只读 `GET /api/v1/intelligence/process-changes`，要求四个显式、非重叠、UTC-hour 对齐且至少一小时的 baseline/recent bounds；UI 对 quick/custom range 分别做 local-calendar-day / preceding-equal-interval comparison，并向内裁剪到完整小时；
+- Coverage 必须完整（无 future、outside-known-scope、uncovered gap 且 ratio 为 1），否则返回事实 status 与空 findings；detector 仅为 `process_newly_observed_on_proxy` 与 `process_proxy_growth`，增长按 bytes/hour，不引入 score、severity、risk 或 connection count；
+- read path 复用 active v2 / completed legacy hourly authority，一窗一条 grouped query；legacy/v2 equivalence、coverage-negative、API contract 与 high-cardinality EQP/timing tests 通过，100k authority read 约 0.4–0.5s；
+- Review temporal section、process + fixed-PROXY History drill 与 `review-temporal` synthetic fixture 完成；真实 Tauri query-only matrix（1280×800、1600×1000 × EN/中文 × Light/Dark）最终八态通过，实际 temporal rows、Investigate actions、viewport/overflow 与 source/copy SHA evidence 均记录；
+- Visual runner 对 temporal 查询增加 bounded readiness polling，避免数据加载竞态被误判为产品语义失败；全程未连接真实 Controller/FLClash/Mihomo，未触碰 production DB 或网络生命周期。
+
+---
+
 ## 2026-09-06 — Phase 4A Final Semantic Closure
 
 **Scope:** 收口 Review detector 的证据、身份和下钻语义；未扩大 Phase 4A，未启动 Phase 4B/4C。

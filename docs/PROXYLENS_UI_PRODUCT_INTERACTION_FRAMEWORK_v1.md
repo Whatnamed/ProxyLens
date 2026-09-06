@@ -63,9 +63,9 @@ Connection Detail is contextual and should normally appear as an Inspector / dri
 
 System Status is secondary and persistent/contextual rather than a primary page.
 
-Review is a primary read-only workspace for Phase 4A. It is fixed to PROXY
-scope, shares the global time range, and must not expose lifecycle, Controller,
-node, rule-write, or system-network controls.
+Review is a primary read-only workspace for Phase 4A and Phase 4B1. It is fixed
+to PROXY scope, shares the global time range, and must not expose lifecycle,
+Controller, node, rule-write, or system-network controls.
 
 ---
 
@@ -183,16 +183,28 @@ Do not pretend unsupported aggregate dimensions have full drill-down support.
 
 ## 5. Review
 
-Review is the evidence-native handoff between Overview and History. It presents
-four deterministic sections: MATCH fallback, broad `NETWORK,udp`, IP-only proxy
-targets, and large physical proxy connections. Each row shows the structured
-facts that caused inclusion, exact versus interval-derived evidence, and a
-calm `Investigate in History` action.
+Review is the evidence-native handoff between Overview and History. It first
+presents a temporal comparison over complete hourly buckets, then four
+deterministic Phase 4A sections: MATCH fallback, broad `NETWORK,udp`, IP-only
+proxy targets, and large physical proxy connections. Temporal rows explain
+newly observed PROXY processes or strictly higher PROXY bytes/hour; each row
+shows the structured facts that caused inclusion, exact versus interval-derived
+evidence where applicable, and a calm `Investigate in History` action.
+
+Temporal comparison uses the existing Review time range. Quick ranges shift by
+local calendar days, custom ranges compare the immediately preceding equal
+interval, and both sides are clipped inward to complete UTC-hour buckets. If
+either side has future time, outside-known-scope time, monitoring gaps, or no
+full hour, Review shows an explicit unavailable state rather than inventing a
+zero-change result. The backend requires all four comparison boundaries and
+fails closed on incomplete coverage.
 
 Review must not invent score, severity, intent, current node state, or a
 recommendation. Investigation transfers only supported process/host/IP/network/
 exact-rule filters, fixes History route focus to PROXY, and creates a new
-History snapshot.
+History snapshot. Temporal investigation carries only `process` plus the
+fixed `PROXY` route; it does not carry a growth score or create an anomaly
+classification.
 
 The Review API reads the reconciled accounting authority through the normal
 read-only Query API. It does not contact Mihomo or start/stop any runtime.

@@ -190,7 +190,71 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 }
 ```
 
-### 3.8 Connection Detail & Traffic
+### 3.8 Temporal Process Changes (Phase 4B1)
+
+`GET /api/v1/intelligence/process-changes?baselineFrom=<rfc3339>&baselineTo=<rfc3339>&recentFrom=<rfc3339>&recentTo=<rfc3339>&limitPerKind=20`
+
+- all four boundaries are required RFC3339 timestamps, normalized to UTC,
+  aligned to exact UTC-hour boundaries, at least one hour long, and
+  non-overlapping;
+- `limitPerKind` defaults to 20 and is bounded to 1–50;
+- the endpoint reads the active v2 or latest completed legacy hourly process
+  dimensions through the normal read-only API boundary; it does not write
+  SQLite, contact a Controller, or start a Runtime;
+- both windows must have zero `futureDurationMs`, zero
+  `outsideKnownScopeMs`, zero `uncoveredDurationMs`, and
+  `coverageRatio === 1`;
+- incomplete coverage is returned as HTTP 200 with an explicit `status` and
+  an empty `items` array, not as a successful zero-change result;
+- invalid/missing boundaries or limits return HTTP 400 using the standard
+  error envelope; missing accounting authority returns
+  `NO_COMPLETED_ACCOUNTING_RUN`.
+
+The supported statuses are `ready`, `baseline_outside_known_scope`,
+`baseline_has_monitoring_gaps`, `baseline_future`,
+`recent_outside_known_scope`, `recent_has_monitoring_gaps`, and
+`recent_future`. A ready response contains only the two deterministic
+detectors `process_newly_observed_on_proxy` and `process_proxy_growth`.
+Process findings include PROXY/DIRECT/REJECT route evidence and exact versus
+estimated byte fields; growth findings additionally include
+`baselineProxyBytesPerHour`, `recentProxyBytesPerHour`, `deltaBytesPerHour`,
+and `growthRatio`. No anomaly score, severity, risk, connection count, or
+inferred intent is part of this contract.
+
+```json
+{
+  "status": "ready",
+  "accountingVersion": "v2-incremental",
+  "baseline": {
+    "from": "2026-09-05T00:00:00Z",
+    "to": "2026-09-06T00:00:00Z",
+    "durationMs": 86400000,
+    "coveredDurationMs": 86400000,
+    "uncoveredDurationMs": 0,
+    "outsideKnownScopeMs": 0,
+    "futureDurationMs": 0,
+    "coverageRatio": 1
+  },
+  "recent": {
+    "from": "2026-09-06T00:00:00Z",
+    "to": "2026-09-07T00:00:00Z",
+    "durationMs": 86400000,
+    "coveredDurationMs": 86400000,
+    "uncoveredDurationMs": 0,
+    "outsideKnownScopeMs": 0,
+    "futureDurationMs": 0,
+    "coverageRatio": 1
+  },
+  "items": [],
+  "countsByKind": {
+    "process_newly_observed_on_proxy": 0,
+    "process_proxy_growth": 0
+  },
+  "limitPerKind": 20
+}
+```
+
+### 3.9 Connection Detail & Traffic
 - `GET /api/v1/connections/{sessionId}/{epochId}/{connectionId}`
   - **三元组唯一身份检索**: 严格使用 `(session_id, epoch_id, connection_id)` 定位物理连接；
   - **完整事件时序列表**: 返回该连接在 latest completed run 中的所有 `accountingEvents[]` 记录（保留 Rule/Host/Chain/Final Proxy 演化证据），以及汇总的 `accountingSummary`。
