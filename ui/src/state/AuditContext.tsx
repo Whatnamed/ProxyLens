@@ -9,7 +9,7 @@ import React, {
 import { getQuickWindow, QuickWindowType } from '../utils/time';
 import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, Locale, translate, TranslationVars } from '../i18n';
 
-export type ViewName = 'overview' | 'history' | 'coverage';
+export type ViewName = 'overview' | 'review' | 'history' | 'coverage';
 export type RouteFocus = 'ALL' | 'PROXY' | 'DIRECT' | 'REJECT';
 export type WindowKind = QuickWindowType | 'custom';
 
@@ -18,6 +18,7 @@ export interface HistoryFilters {
   host?: string;
   destinationIp?: string;
   network?: string;
+  rule?: string;
 }
 
 export interface ConnectionKey {
@@ -136,6 +137,7 @@ interface AuditContextValue {
   setSelected: (k: ConnectionKey | null) => void;
 
   drillToHistory: (filters: Partial<HistoryFilters>) => void;
+  investigateFinding: (filters: Partial<HistoryFilters>) => void;
   inspectAroundGap: (startIso: string, endIso: string) => void;
 
   theme: ThemeName;
@@ -329,6 +331,19 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [timeRange]
   );
 
+  const investigateFinding = useCallback(
+    (f: Partial<HistoryFilters>) => {
+      setRouteFocusRaw('PROXY');
+      setFilters(f);
+      setPage(0);
+      setSelected(null);
+      const now = new Date();
+      setSnapshot(createHistorySnapshot(timeRange, now));
+      setViewRaw('history');
+    },
+    [timeRange, setPage]
+  );
+
   const inspectAroundGap = useCallback(
     (startIso: string, endIso: string) => {
       const start = new Date(new Date(startIso).getTime() - GAP_CONTEXT_MS);
@@ -385,6 +400,7 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     selected,
     setSelected,
     drillToHistory,
+    investigateFinding,
     inspectAroundGap,
     theme,
     toggleTheme,

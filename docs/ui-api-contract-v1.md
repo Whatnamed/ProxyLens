@@ -151,7 +151,7 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 - **Response**: 返回 `CoverageSummary`（包含 coverageRatio, coveredDurationMs, uncoveredDurationMs, mergedGaps 等）。
 
 ### 3.6 Connection List
-`GET /api/v1/connections?from=...&to=...&route=...&process=...&host=...&destinationIp=...&network=...&limit=50&offset=0`
+`GET /api/v1/connections?from=...&to=...&route=...&process=...&host=...&destinationIp=...&network=...&rule=...&limit=50&offset=0`
 - **Response**:
 ```json
 {
@@ -162,7 +162,35 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 }
 ```
 
-### 3.7 Connection Detail & Traffic
+### 3.7 Audit Intelligence Review Findings (Phase 4A)
+
+`GET /api/v1/intelligence/findings?from=<rfc3339>&to=<rfc3339>&limitPerKind=20`
+
+- `from` and `to` are required RFC3339 timestamps and use `[from,to)` semantics;
+- the endpoint is fixed to `route=PROXY` and reads the reconciled accounting authority;
+- `limitPerKind` defaults to 20 and is bounded to 1–50;
+- response items are deterministic, structured detector facts; no score or severity is returned;
+- interval-derived portions are separated from exact accounted bytes;
+- the endpoint is GET-only, Bearer/CORS protected, and uses the standard `NO_COMPLETED_ACCOUNTING_RUN` / `QUERY_FAILED` error envelope.
+
+```json
+{
+  "from": "2026-09-06T00:00:00Z",
+  "to": "2026-09-07T00:00:00Z",
+  "route": "PROXY",
+  "accountingVersion": "v2-incremental",
+  "countsByKind": {
+    "match_fallback_proxy": 1,
+    "broad_udp_proxy": 1,
+    "ip_only_proxy_target": 1,
+    "large_proxy_connection": 1
+  },
+  "items": [],
+  "limitPerKind": 20
+}
+```
+
+### 3.8 Connection Detail & Traffic
 - `GET /api/v1/connections/{sessionId}/{epochId}/{connectionId}`
   - **三元组唯一身份检索**: 严格使用 `(session_id, epoch_id, connection_id)` 定位物理连接；
   - **完整事件时序列表**: 返回该连接在 latest completed run 中的所有 `accountingEvents[]` 记录（保留 Rule/Host/Chain/Final Proxy 演化证据），以及汇总的 `accountingSummary`。

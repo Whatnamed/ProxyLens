@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled")
+	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled | review")
 	outPath := flag.String("out", "", "Output SQLite database path (e.g. ./fixtures/fixture_healthy.db)")
 	anchorStr := flag.String("anchor", "", "Anchor time in RFC3339 (optional, defaults to current UTC time)")
 	scaleCount := flag.Int("scale", 100000, "Event count for scaled profile (default: 100000)")
@@ -66,8 +66,10 @@ func main() {
 		generateStale(ctx, absPath, anchorTime)
 	case "scaled":
 		generateScaled(ctx, absPath, anchorTime, *scaleCount)
+	case "review":
+		generateReview(ctx, absPath, anchorTime)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled\n", *profile)
+		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled, review\n", *profile)
 		os.Exit(1)
 	}
 
@@ -174,7 +176,7 @@ func generateGaps(ctx context.Context, dbPath string, anchor time.Time) {
 	gap1End := anchor.Add(-9 * time.Hour).Format(time.RFC3339Nano)
 
 	gap2Start := anchor.Add(-5 * time.Hour).Format(time.RFC3339Nano)
-	gap2End := anchor.Add(-4 * time.Hour - 30*time.Minute).Format(time.RFC3339Nano)
+	gap2End := anchor.Add(-4*time.Hour - 30*time.Minute).Format(time.RFC3339Nano)
 
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO monitoring_gaps (
@@ -266,7 +268,88 @@ func generateScaled(ctx context.Context, dbPath string, anchor time.Time, totalE
 	fmt.Printf("  ✔ RebuildAccounting completed in %v (RunID: %s)\n", time.Since(t0), runRec.RunID)
 }
 
-func emitConnEvent(sink *storage.SQLiteEventSink, sessionID string, epoch int, seq *int64, connID string, evType types.EventType, proc, procPath, host, sniffHost, destIP string, destPort string, net, rule, rulePayload string, route types.RouteType, chains []string, up, down int64, t time.Time) {
+func generateReview(ctx context.Context, dbPath string, anchor time.Time) {
+	sessionID := "sess-synthetic-review"
+	sink, err := storage.OpenSQLiteSink(ctx, dbPath, sessionID, "v1.0.0-synthetic-review")
+	checkErr("OpenSQLiteSink review", err)
+
+	baseTime := anchor.Add(-10 * time.Hour)
+	seq := int64(1)
+	frame := emitConnEvent(sink, sessionID, 1, &seq, "c-review-match-1", types.EventConnectionNew,
+		"fallback-app.exe", "C:\\Synthetic\\fallback-app.exe", "fallback.example", "", "198.51.100.10", "443", "tcp", "MATCH", "",
+		types.RouteProxy, []string{"Node-Review-01", "ProxyGroup"}, 32768, 196608, baseTime)
+	emitReviewResidual(sink, sessionID, 1, frame, &seq, baseTime)
+
+	frame = emitConnEvent(sink, sessionID, 1, &seq, "c-review-match-2", types.EventConnectionNew,
+		"browser.exe", "C:\\Synthetic\\browser.exe", "match.example", "", "198.51.100.11", "443", "tcp", "MATCH", "",
+		types.RouteProxy, []string{"Node-Review-02", "ProxyGroup"}, 16384, 98304, baseTime.Add(20*time.Minute))
+	emitReviewResidual(sink, sessionID, 1, frame, &seq, baseTime.Add(20*time.Minute))
+
+	frame = emitConnEventWithInterval(sink, sessionID, 1, &seq, "c-review-udp", types.EventConnectionNew,
+		"media.exe", "C:\\Synthetic\\media.exe", "", "", "198.51.100.22", "443", "udp", "NETWORK,udp", "",
+		types.RouteProxy, []string{"Node-Review-03", "ProxyGroup"}, 4096, 8192, baseTime.Add(40*time.Minute),
+		baseTime.Add(39*time.Minute), baseTime.Add(41*time.Minute))
+	emitReviewResidual(sink, sessionID, 1, frame, &seq, baseTime.Add(40*time.Minute))
+
+	frame = emitConnEvent(sink, sessionID, 1, &seq, "c-review-ip", types.EventConnectionNew,
+		"sync.exe", "C:\\Synthetic\\sync.exe", "", "", "203.0.113.17", "443", "tcp", "DomainSuffix", "example",
+		types.RouteProxy, []string{"Node-Review-04", "ProxyGroup"}, 65536, 524288, baseTime.Add(60*time.Minute))
+	emitReviewResidual(sink, sessionID, 1, frame, &seq, baseTime.Add(60*time.Minute))
+
+	frame = emitConnEvent(sink, sessionID, 1, &seq, "c-review-large", types.EventConnectionNew,
+		"backup.exe", "C:\\Synthetic\\backup.exe", "archive.example", "", "192.0.2.44", "443", "tcp", "DomainSuffix", "archive.example",
+		types.RouteProxy, []string{"Node-Review-05", "ProxyGroup"}, 4*1024*1024, 128*1024*1024, baseTime.Add(80*time.Minute))
+	emitReviewResidual(sink, sessionID, 1, frame, &seq, baseTime.Add(80*time.Minute))
+
+	frame = emitConnEvent(sink, sessionID, 1, &seq, "c-review-udp-direct", types.EventConnectionNew,
+		"dns.exe", "C:\\Synthetic\\dns.exe", "resolver.example", "", "192.0.2.53", "53", "udp", "NETWORK,udp", "",
+		types.RouteDirect, []string{"DIRECT"}, 2048, 4096, baseTime.Add(100*time.Minute))
+	emitReviewResidual(sink, sessionID, 1, frame, &seq, baseTime.Add(100*time.Minute))
+
+	checkErr("EndSession review", sink.EndSession(ctx, sessionID, storage.SessionStatusClosedClean))
+	checkErr("Close sink review", sink.Close())
+
+	db, err := storage.OpenDB(ctx, dbPath)
+	checkErr("OpenDB review", err)
+	defer db.Close()
+	_, err = storage.RebuildAccounting(ctx, db, "synthetic review profile build")
+	checkErr("RebuildAccounting review", err)
+
+	startedAt := anchor.Add(-10 * time.Hour).Format(time.RFC3339Nano)
+	lastEventAt := anchor.Add(-7 * time.Hour).Format(time.RFC3339Nano)
+	qaEndAt := anchor.Add(1 * time.Hour).Format(time.RFC3339Nano)
+	_, err = db.ExecContext(ctx, `
+		UPDATE collector_sessions
+		SET started_at = ?, ended_at = ?, last_event_at = ?, last_heartbeat_at = ?, updated_at = ?
+		WHERE session_id = ?;
+	`, startedAt, qaEndAt, lastEventAt, anchor.Format(time.RFC3339Nano), anchor.Format(time.RFC3339Nano), sessionID)
+	checkErr("Normalize review visual session", err)
+}
+
+func emitReviewResidual(sink *storage.SQLiteEventSink, sessionID string, epoch int, frame int64, seq *int64, ts time.Time) {
+	currentSeq := *seq
+	*seq++
+	ev := &types.CollectorEvent{
+		EventID:       fmt.Sprintf("ev-seq-%d", currentSeq),
+		SessionID:     sessionID,
+		EpochID:       epoch,
+		FrameSequence: frame,
+		EventSequence: 2,
+		Timestamp:     ts,
+		Type:          types.EventSamplingResidual,
+		Details:       map[string]any{"residualUpload": int64(0), "residualDownload": int64(0)},
+	}
+	if err := sink.Emit(ev); err != nil {
+		fmt.Fprintf(os.Stderr, "[FATAL] Emit review residual failed for event %s: %v\n", ev.EventID, err)
+		os.Exit(1)
+	}
+}
+
+func emitConnEvent(sink *storage.SQLiteEventSink, sessionID string, epoch int, seq *int64, connID string, evType types.EventType, proc, procPath, host, sniffHost, destIP string, destPort string, net, rule, rulePayload string, route types.RouteType, chains []string, up, down int64, t time.Time) int64 {
+	return emitConnEventWithInterval(sink, sessionID, epoch, seq, connID, evType, proc, procPath, host, sniffHost, destIP, destPort, net, rule, rulePayload, route, chains, up, down, t, time.Time{}, time.Time{})
+}
+
+func emitConnEventWithInterval(sink *storage.SQLiteEventSink, sessionID string, epoch int, seq *int64, connID string, evType types.EventType, proc, procPath, host, sniffHost, destIP string, destPort string, net, rule, rulePayload string, route types.RouteType, chains []string, up, down int64, t, intervalStart, intervalEnd time.Time) int64 {
 	currentSeq := *seq
 	*seq++
 	ev := &types.CollectorEvent{
@@ -300,11 +383,16 @@ func emitConnEvent(sink *storage.SQLiteEventSink, sessionID string, epoch int, s
 		ObservedUploadCounter:   up,
 		ObservedDownloadCounter: down,
 	}
+	if !intervalStart.IsZero() && !intervalEnd.IsZero() {
+		ev.AttributionInterval = []string{intervalStart.UTC().Format(time.RFC3339Nano), intervalEnd.UTC().Format(time.RFC3339Nano)}
+		ev.Precision = "interval_derived"
+	}
 	err := sink.Emit(ev)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[FATAL] Emit failed for event %s: %v\n", ev.EventID, err)
 		os.Exit(1)
 	}
+	return currentSeq
 }
 
 func emitConnSafe(sink *storage.SQLiteEventSink, sessionID string, epoch int, seq *int64, connID, proc, procPath, host, sniffHost, destIP string, destPort string, net, rule, rulePayload string, route types.RouteType, chains []string, up, down int64, t time.Time) {

@@ -56,6 +56,7 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 		Host:          q.Get("host"),
 		DestinationIP: q.Get("destinationIp"),
 		Network:       q.Get("network"),
+		Rule:          q.Get("rule"),
 		Limit:         limit + 1, // 查询 limit+1 行用于判断 hasMore
 		Offset:        offset,
 	}

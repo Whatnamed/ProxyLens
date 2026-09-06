@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-09-06 — Phase 4A Audit Intelligence Foundation
+
+**Scope:** 在不改变 Collector、Accounting 或真实网络生命周期的前提下，完成
+deterministic Review foundation；真实 FLClash/Mihomo、Phase 4B/4C 与自动网络动作仍 Deferred。
+
+**Completed:**
+
+- 新增 reconciled-accounting 只读 detector service 与 `GET /api/v1/intelligence/findings`：固定 PROXY、`[from,to)`、bounded per-kind limit、stable subject ID、exact/interval evidence；
+- 四类 detector 已覆盖 `MATCH` fallback、canonical `NETWORK,udp`、IP-only proxy target 与 strict `>100 MiB` physical connection；History 仅增加 exact Rule filter 供 Review investigation 使用；
+- 新增 Review workspace（Overview → Review → History → Coverage），无 score/severity，支持既有 Time Range、EN/中文、Light/Dark 与 read-only History 下钻；
+- `review` synthetic fixture 包含正负 detector cases 与 interval evidence；最终 10k/100k 临时 DB timing 为 insertion 约 302ms/3.09s、single-pass findings read 约 50ms/507ms（总计约 351ms/3.60s）；未修改 production accounting/storage implementation；
+- 真实 Tauri query-only Review 八态（1280×800、1600×1000 × EN/ZH × Light/Dark）通过，evidence 记录 actual CSS viewport、locale/theme/view、fixture SHA 不变及 `owner=0 runtime=0 controller=0`；
+- `go test` affected storage/API、UI tests/build、Node visual harness tests 与 `git diff --check` 通过。未连接真实 9090/7988，未启动/停止/重启 FLClash/Mihomo，未触碰生产 DB 或系统网络设置。
+
 ## 2026-09-06 — Final Tauri acceptance targeted review closure
 
 **Scope:** 只修正 Visual QA gate 的 fail-closed 控制流、query-only Settings lifecycle side effect

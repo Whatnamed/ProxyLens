@@ -163,6 +163,21 @@ export function useCoverageQuery(client: QueryApiClient | null, from: string, to
   });
 }
 
+export function useAuditFindingsQuery(
+  client: QueryApiClient | null,
+  from: string,
+  to: string,
+  rangeKey?: string,
+  limitPerKind = 20,
+) {
+  return useQuery({
+    queryKey: ['auditFindings', from, to, 'PROXY', limitPerKind, rangeKey],
+    queryFn: () => client!.getAuditFindings(from, to, limitPerKind),
+    enabled: !!client,
+    placeholderData: keepLiveTickOnly(from, to, 'PROXY', rangeKey),
+  });
+}
+
 export function useConnectionsQuery(
   client: QueryApiClient | null,
   params: {
@@ -186,6 +201,7 @@ export function useConnectionsQuery(
         host: filters.host,
         destinationIp: filters.destinationIp,
         network: filters.network,
+        rule: filters.rule,
         limit,
         offset,
       }),

@@ -29,7 +29,7 @@ Phase 3E Desktop Runtime Integration              [CORE COMPLETE — real-enviro
    ↓
 Phase 3S Production Storage & Accounting Scale    [COMPLETED]
    ↓
-Phase 4  Audit Intelligence                       [PLANNED]
+Phase 4  Audit Intelligence                       [IN PROGRESS — 4A FOUNDATION COMPLETE]
    ↓
 Later    长期增强                                 [PLANNED]
 ```
@@ -140,7 +140,7 @@ Later    长期增强                                 [PLANNED]
 
 后续增强（不阻塞 Phase 3 core closure，且不得在无后端契约时伪造）：
 
-- [ ] 评估真正需要的额外搜索维度（如 Rule / Final Proxy / Port），必要时单独设计 read-only API extension；
+- [x] Phase 4A narrow exact Rule filter for Review investigation；Final Proxy / Port 与更丰富的 Rule/Payload 搜索仍需单独 read-only API contract；
 - [ ] 大规模 History 的虚拟化/滚动策略，仅在真实数据量证明需要时实施；
 - [ ] 更完整的跨页面键盘导航与真实 Tauri 可访问性 integration test。
 
@@ -233,12 +233,12 @@ real-data validation remains a separate deferred acceptance boundary.
 
 明确不做（本阶段边界）：
 
-- Final Full Tauri synthetic query-only visual acceptance 已完成；不启动 Phase 4；真实 FLClash/Mihomo / real-data validation 仍 Deferred；Design System v1 已 Frozen；
+- Final Full Tauri synthetic query-only visual acceptance 已完成；Phase 4 不属于本 Phase 3S closure 的验收范围，后续 4A 已单独收口；真实 FLClash/Mihomo / real-data validation 仍 Deferred；Design System v1 已 Frozen；
 - 不删除/重写/VACUUM 真实 authority DB；不改变 raw authority 语义；不修改 Mihomo/FLClash 任何状态。
 
 ---
 
-## Phase 4 — Audit Intelligence [PLANNED]
+## Phase 4 — Audit Intelligence [IN PROGRESS — PHASE 4A COMPLETE]
 
 目标：在可靠历史之上，用透明、可解释的规则筛选“值得检查的代理流量”，辅助用户优化分流。
 
@@ -258,6 +258,22 @@ real-data validation remains a separate deferred acceptance boundary.
 - 不引入不可解释的黑盒 Trust Score；
 - 规则建议可复制但不自动应用；
 - 不修改 Mihomo 配置、节点或系统网络状态。
+
+### Phase 4A — Audit Intelligence Foundation [COMPLETED]
+
+- [x] active v2 / completed legacy accounting authority resolution；
+- [x] fixed PROXY-only Review endpoint with bounded `limitPerKind` and `[from,to)` semantics；
+- [x] deterministic `MATCH` fallback、canonical broad UDP、IP-only target 与 large physical connection detectors；
+- [x] exact / interval-derived evidence split、named 100 MiB threshold、stable subject IDs；
+- [x] Review workspace between Overview and History、shared Time Range、read-only Rule investigation filter、EN / 中文、Light / Dark、keyboard-safe controls；
+- [x] synthetic review fixture、10k/100k timing evidence 与 8-state query-only Tauri acceptance；
+- [x] no score/severity/black-box inference and no Controller/network lifecycle side effects。
+
+### Phase 4B / 4C — Deferred
+
+- [ ] historical route-change comparison、first-seen/background-service candidates、suggested rules or scoring；
+- [ ] richer rule/final-proxy/port dimensions、real FLClash/Mihomo and real-data validation；
+- [ ] any automatic configuration or network action remains explicitly out of scope。
 
 ---
 

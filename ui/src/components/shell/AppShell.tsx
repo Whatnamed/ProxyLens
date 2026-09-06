@@ -6,12 +6,14 @@ import { SystemStatusFooter } from '../audit/SystemStatus';
 import { OverviewPage } from '../../features/overview/OverviewPage';
 import { HistoryPage } from '../../features/history/HistoryPage';
 import { CoveragePage } from '../../features/coverage/CoveragePage';
+import { ReviewPage } from '../../features/review/ReviewPage';
 import { DiagnosticsView } from '../../diagnostics/DiagnosticsView';
-import { IconCoverage, IconHistory, IconLens, IconMoon, IconOverview, IconSun } from '../ui/icons';
+import { IconCheck, IconCoverage, IconHistory, IconLens, IconMoon, IconOverview, IconSun } from '../ui/icons';
 import { SettingsDialog, SettingsTriggerIcon as SettingsDialogIcon } from '../settings/SettingsDialog';
 
 const NAV_ITEMS: { view: ViewName; labelKey: string; icon: React.ReactNode }[] = [
   { view: 'overview', labelKey: 'nav.overview', icon: <IconOverview /> },
+  { view: 'review', labelKey: 'nav.review', icon: <IconCheck /> },
   { view: 'history', labelKey: 'nav.history', icon: <IconHistory /> },
   { view: 'coverage', labelKey: 'nav.coverage', icon: <IconCoverage /> },
 ];
@@ -71,6 +73,7 @@ export const AppShell: React.FC<{
               key={item.view}
               className={`pl-nav__item${view === item.view ? ' pl-nav__item--active' : ''}`}
               aria-current={view === item.view ? 'page' : undefined}
+              data-pl-view={item.view}
               onClick={() => setView(item.view)}
             >
               {item.icon}
@@ -133,6 +136,7 @@ export const AppShell: React.FC<{
       {settingsOpen && isTauri && <SettingsDialog onClose={closeSettings} />}
       <main className="pl-workspace">
         {view === 'overview' && <OverviewPage client={client} sessionError={sessionError} meta={metaQuery.data} />}
+        {view === 'review' && <ReviewPage client={client} sessionError={sessionError} meta={metaQuery.data} />}
         {view === 'history' && <HistoryPage client={client} sessionError={sessionError} meta={metaQuery.data} />}
         {view === 'coverage' && <CoveragePage client={client} sessionError={sessionError} meta={metaQuery.data} />}
       </main>

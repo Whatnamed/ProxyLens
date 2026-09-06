@@ -87,6 +87,7 @@ const FilterChipRow: React.FC = () => {
     host: t('history.filterLabelHost'),
     destinationIp: t('history.filterLabelDestIp'),
     network: t('history.filterLabelNetwork'),
+    rule: t('history.filterLabelRule'),
   };
   return (
     <>
@@ -364,6 +365,13 @@ export const HistoryPage: React.FC<{
                 aria-label={t('history.filterIpAria')}
                 value={filters.destinationIp ?? ''}
                 onChange={(e) => setFilter('destinationIp', e.target.value)}
+              />
+              <input
+                className="pl-input pl-history-toolbar__input pl-history-toolbar__input--rule pl-input--mono"
+                placeholder={t('history.filterRulePlaceholder')}
+                aria-label={t('history.filterRuleAria')}
+                value={filters.rule ?? ''}
+                onChange={(e) => setFilter('rule', e.target.value)}
               />
               <SelectMenu
                 className="pl-select-menu--network"

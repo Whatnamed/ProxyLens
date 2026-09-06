@@ -163,6 +163,7 @@ type ConnectionFilter struct {
 	Host          string
 	DestinationIP string
 	Network       string
+	Rule          string
 	Limit         int
 	Offset        int
 }

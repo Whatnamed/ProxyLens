@@ -18,6 +18,9 @@ The core user actions are:
 Scan
 → Overview
 
+Review
+→ deterministic evidence candidates
+
 Investigate
 → History
 
@@ -49,6 +52,7 @@ V1 top-level navigation:
 
 ```text
 Overview
+Review
 History
 Coverage
 ```
@@ -58,6 +62,10 @@ Do not add a V1 Settings page when there are no meaningful writable settings.
 Connection Detail is contextual and should normally appear as an Inspector / drill-down rather than top-level navigation.
 
 System Status is secondary and persistent/contextual rather than a primary page.
+
+Review is a primary read-only workspace for Phase 4A. It is fixed to PROXY
+scope, shares the global time range, and must not expose lifecycle, Controller,
+node, rule-write, or system-network controls.
 
 ---
 
@@ -173,7 +181,23 @@ Do not pretend unsupported aggregate dimensions have full drill-down support.
 
 ---
 
-## 5. History
+## 5. Review
+
+Review is the evidence-native handoff between Overview and History. It presents
+four deterministic sections: MATCH fallback, broad `NETWORK,udp`, IP-only proxy
+targets, and large physical proxy connections. Each row shows the structured
+facts that caused inclusion, exact versus interval-derived evidence, and a
+calm `Investigate in History` action.
+
+Review must not invent score, severity, intent, current node state, or a
+recommendation. Investigation transfers only supported process/host/IP/network/
+exact-rule filters, fixes History route focus to PROXY, and creates a new
+History snapshot.
+
+The Review API reads the reconciled accounting authority through the normal
+read-only Query API. It does not contact Mihomo or start/stop any runtime.
+
+## 6. History
 
 History is the primary evidence browser.
 
@@ -190,11 +214,11 @@ Use only dimensions supported by current Query API unless a narrowly-scoped fron
 - Process;
 - Host;
 - Destination IP;
-- Network.
+- Network;
+- exact Rule (Phase 4A Review investigation only).
 
 Do not invent backend filters for:
 
-- Rule;
 - Rule Payload;
 - Final Proxy;
 - Destination Port;

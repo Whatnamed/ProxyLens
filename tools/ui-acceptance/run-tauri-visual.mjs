@@ -21,18 +21,26 @@ const rootDir = path.resolve(__dirname, '..', '..');
 const uiDir = path.join(rootDir, 'ui');
 const fixtureDir = path.join(rootDir, 'fixtures');
 const evidenceRoot = path.join(rootDir, 'tmp', 'phase3-final-acceptance');
-const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled']);
+const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review']);
 const sizes = new Set(['1280x800', '1440x900', '1600x1000', 'max']);
+const locales = new Set(['en', 'zh-CN']);
+const themes = new Set(['light', 'dark']);
 
 const args = parseArgs(process.argv.slice(2));
 const profile = args.profile || 'healthy';
 const size = args.size || '1600x1000';
+const locale = args.locale || 'en';
+const theme = args.theme || 'light';
+const view = args.view || (profile === 'review' ? 'review' : 'overview');
 const runId = safeRunId(args['run-id'] || `${profile}-${size}-${Date.now()}`);
 const autoExitMs = parsePositiveInt(args['auto-exit-ms'] || '30000', 'auto-exit-ms');
 const cdpPort = parsePositiveInt(args['cdp-port'] || '9223', 'cdp-port');
 
 if (!profiles.has(profile)) throw new Error(`Unsupported profile: ${profile}`);
 if (!sizes.has(size)) throw new Error(`Unsupported size: ${size}`);
+if (!locales.has(locale)) throw new Error(`Unsupported locale: ${locale}`);
+if (!themes.has(theme)) throw new Error(`Unsupported theme: ${theme}`);
+if (!['overview', 'review'].includes(view)) throw new Error(`Unsupported view: ${view}`);
 
 const sourceDb = path.join(fixtureDir, `fixture_${profile}.db`);
 if (!fs.existsSync(sourceDb)) {
@@ -123,7 +131,11 @@ try {
     ? 'PROXYLENS_WEBVIEW_E2E_READY meta=0 summary=0 connections=0'
     : 'PROXYLENS_WEBVIEW_E2E_READY meta=1 summary=1 connections=1';
   await waitForOutput(child, () => output.includes(expectedProbe), 30000, 'WebView Query API probe');
-  const actualViewport = await waitForWebviewViewport(cdpPort, size, 30000);
+  await setWebviewPreferences(cdpPort, locale, theme);
+  await waitForWebviewPreferences(cdpPort, locale, theme, 30000);
+  await selectWebviewView(cdpPort, view);
+  const actualState = await waitForWebviewState(cdpPort, size, locale, theme, view, 30000);
+  const actualViewport = { width: actualState.width, height: actualState.height, dpr: actualState.dpr };
   await waitForProcessExit(child, autoExitMs + 15000, 'Tauri visual QA auto-exit');
   if (child.exitCode !== 0) {
     throw new Error(`Tauri visual QA process exited with code ${child.exitCode}; evidence log: ${logPath}`);
@@ -141,8 +153,13 @@ try {
     runId,
     profile,
     size,
+    locale,
+    theme,
+    view,
     requestedSize: size,
     actualViewport,
+    actualLocale: actualState.locale,
+    actualTheme: actualState.theme,
     sourceFixture: path.relative(rootDir, sourceDb),
     sourceSha256: sourceShaBefore,
     copiedFixtureSha256: copyShaAfter,
@@ -160,7 +177,7 @@ try {
     evidenceDir: path.relative(rootDir, runDir),
   };
   fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  console.log(`PASS tauri-visual profile=${profile} size=${size} viewport=${actualViewport.width}x${actualViewport.height} run=${runId} queryOnly=1 owner=0 runtime=0 controller=0 sourceUnchanged=1 copyUnchanged=1`);
+  console.log(`PASS tauri-visual profile=${profile} view=${view} size=${size} locale=${locale} theme=${theme} viewport=${actualViewport.width}x${actualViewport.height} run=${runId} queryOnly=1 owner=0 runtime=0 controller=0 sourceUnchanged=1 copyUnchanged=1`);
 } finally {
   logStream.end();
   if (child && child.exitCode === null && !child.killed) terminateProcessTree(child.pid);
@@ -242,12 +259,46 @@ function waitForProcessExit(processHandle, timeoutMs, label) {
   });
 }
 
-async function waitForWebviewViewport(port, requestedSize, timeoutMs) {
+async function setWebviewPreferences(port, locale, theme) {
+  await evaluateWebview(port, `(() => {
+    localStorage.setItem('pl-locale', ${JSON.stringify(locale)});
+    localStorage.setItem('pl-theme', ${JSON.stringify(theme)});
+    setTimeout(() => location.reload(), 0);
+    return true;
+  })()`);
+}
+
+async function waitForWebviewPreferences(port, expectedLocale, expectedTheme, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      const viewport = await readWebviewViewport(port);
+      const state = await readWebviewState(port);
+      if (state.locale === expectedLocale && state.theme === expectedTheme) return;
+      throw new Error(`preferences not applied: observed ${state.locale}/${state.theme}`);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw new Error(`Timed out waiting for WebView preferences: ${lastError?.message || 'unavailable'}`);
+}
+
+async function selectWebviewView(port, view) {
+  await evaluateWebview(port, `(() => {
+    const button = document.querySelector('[data-pl-view="${view}"]');
+    if (!button) throw new Error('visual QA view button is unavailable');
+    button.click();
+    return true;
+  })()`);
+}
+
+async function waitForWebviewState(port, requestedSize, expectedLocale, expectedTheme, expectedView, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const viewport = await readWebviewState(port);
       if (requestedSize !== 'max') {
         const [expectedWidth, expectedHeight] = requestedSize.split('x').map(Number);
         if (Math.abs(viewport.width - expectedWidth) > 2
@@ -257,8 +308,14 @@ async function waitForWebviewViewport(port, requestedSize, timeoutMs) {
           );
         }
       }
+      if (viewport.locale !== expectedLocale || viewport.theme !== expectedTheme) {
+        throw new Error(`requested preferences ${expectedLocale}/${expectedTheme} but observed ${viewport.locale}/${viewport.theme}`);
+      }
+      if (viewport.view !== expectedView) {
+        throw new Error(`requested view ${expectedView} but observed ${viewport.view}`);
+      }
       console.log(
-        `PROXYLENS_VISUAL_QA_VIEWPORT requested=${requestedSize} actual=${viewport.width}x${viewport.height}`,
+        `PROXYLENS_VISUAL_QA_VIEWPORT requested=${requestedSize} actual=${viewport.width}x${viewport.height} locale=${viewport.locale} theme=${viewport.theme} view=${viewport.view}`,
       );
       return viewport;
     } catch (error) {
@@ -269,7 +326,12 @@ async function waitForWebviewViewport(port, requestedSize, timeoutMs) {
   throw new Error(`Timed out reading WebView viewport: ${lastError?.message || 'unavailable'}`);
 }
 
-async function readWebviewViewport(port) {
+async function readWebviewState(port) {
+  const value = await evaluateWebview(port, 'JSON.stringify({width: innerWidth, height: innerHeight, dpr: devicePixelRatio, locale: document.documentElement.lang, theme: document.documentElement.getAttribute("data-theme"), view: document.querySelector("[data-pl-page]")?.getAttribute("data-pl-page") || document.querySelector("[data-pl-view][aria-current=page]")?.getAttribute("data-pl-view")})');
+  return JSON.parse(value);
+}
+
+async function evaluateWebview(port, expression) {
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   const page = targets.find((target) => target.type === 'page');
   if (!page?.webSocketDebuggerUrl) throw new Error('WebView page target is unavailable');
@@ -298,13 +360,13 @@ async function readWebviewViewport(port) {
 
   try {
     const response = await call('Runtime.evaluate', {
-      expression: 'JSON.stringify({width: innerWidth, height: innerHeight, dpr: devicePixelRatio})',
+      expression,
       returnByValue: true,
     });
     if (response.error || response.result?.exceptionDetails) {
-      throw new Error('WebView viewport evaluation failed');
+      throw new Error('WebView evaluation failed');
     }
-    return JSON.parse(response.result.result.value);
+    return response.result.result.value;
   } finally {
     socket.close();
   }

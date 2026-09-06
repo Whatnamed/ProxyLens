@@ -9,6 +9,7 @@ import {
   ConnectionsListResponse,
   ConnectionDetailResponse,
   ConnectionTrafficResponse,
+  AuditFindingResult,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -110,10 +111,15 @@ export class QueryApiClient {
     host?: string;
     destinationIp?: string;
     network?: string;
+    rule?: string;
     limit?: number;
     offset?: number;
   }): Promise<ConnectionsListResponse> {
     return this.request<ConnectionsListResponse>('/api/v1/connections', params);
+  }
+
+  async getAuditFindings(from: string, to: string, limitPerKind = 20): Promise<AuditFindingResult> {
+    return this.request<AuditFindingResult>('/api/v1/intelligence/findings', { from, to, limitPerKind });
   }
 
   async getConnectionDetail(sessionId: string, epochId: number, connectionId: string): Promise<ConnectionDetailResponse> {

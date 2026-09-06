@@ -19,7 +19,8 @@
 | **Overview: Top Hosts** | Destination Host Ranking | `GET /api/v1/analytics/top/hosts` | **READY** | 返回域名流量排名 (*destination-IP 独立排行标记为 DEFER UNTIL DESIGN REQUIRES IT*) |
 | **Overview: Protocols** | Network / Protocol Breakdown| `GET /api/v1/analytics/protocols` | **READY** | 返回 TCP / UDP 流量对比 |
 | **Coverage Summary** | Coverage Ratio & Duration | `GET /api/v1/coverage` | **READY** | 返回 `coverageRatio`, `mergedGaps` |
-| **History: Connection List**| Filtered Connection Stream | `GET /api/v1/connections` | **READY** | 支持时间、分流、进程、域名、目标 IP、网络过滤 (*destinationPort 过滤标记为 Phase 3C DEFERRED*) |
+| **Review: Detector Findings** | Deterministic PROXY review candidates | `GET /api/v1/intelligence/findings` | **READY — Phase 4A** | 四类结构化 detector；固定 PROXY、[from,to)、exact/interval evidence；无 score/severity |
+| **History: Connection List**| Filtered Connection Stream | `GET /api/v1/connections` | **READY** | 支持时间、分流、进程、域名、目标 IP、网络与精确 Rule 过滤；destinationPort / Final Proxy 等仍 deferred |
 | **Detail: Metadata** | Composite Identity Metadata | `GET /api/v1/connections/{s}/{e}/{c}` | **READY** | 三元组主键检索，返回 `connection` |
 | **Detail: Accounting Events**| Full Accounting Event Flow | `GET /api/v1/connections/{s}/{e}/{c}` | **READY** | 返回 `accountingEvents[]` 时序数组 |
 | **Detail: Accounting Summary**| Reconciled Aggregation | `GET /api/v1/connections/{s}/{e}/{c}` | **READY** | 返回 `accountingSummary` |
@@ -36,4 +37,7 @@
   ```text
   DEFER UNTIL VISUAL DESIGN REQUIRES IT
   ```
+
+- **Phase 4A Review 覆盖**：`/api/v1/intelligence/findings` 与现有只读
+  History 下钻已完成；更广泛的智能建议、评分与真实环境数据验证仍 Deferred。
   在 Phase 3B 视觉设计明确要求呈现趋势图表之前，保持现有只读 API 契约冻结，不提前发明无单测佐证的新接口。

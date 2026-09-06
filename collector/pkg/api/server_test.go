@@ -39,7 +39,7 @@ func createTestDBWithSeedData(t *testing.T) (string, func()) {
 			Host: "google.com", DestinationIP: "142.250.190.46", DestinationPort: "443", Network: "tcp",
 		},
 		Rule: "DomainSuffix", RulePayload: "google.com",
-		Chains: []string{"Node-HK-01", "ProxyGroup"},
+		Chains:      []string{"Node-HK-01", "ProxyGroup"},
 		DeltaUpload: 1000, DeltaDownload: 5000,
 	})
 
@@ -294,6 +294,82 @@ func TestAPIServerAuthCORSAndEndpoints(t *testing.T) {
 	}
 }
 
+func TestIntelligenceFindingsAPIContractAndRuleFilter(t *testing.T) {
+	dbPath, cleanup := createTestDBWithSeedData(t)
+	defer cleanup()
+
+	roDB, err := storage.OpenReadOnlyDB(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnlyDB failed: %v", err)
+	}
+	defer roDB.Close()
+
+	server, err := NewServer(ServerConfig{DB: roDB, DBPath: dbPath, Token: "intelligence-test-token"})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+	mux := http.NewServeMux()
+	server.registerRoutes(mux)
+	handler := server.AuthAndCORSMiddleware(mux)
+
+	call := func(method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer intelligence-test-token")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w
+	}
+
+	if w := call(http.MethodGet, "/api/v1/intelligence/findings"); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing range status: got %d body=%s", w.Code, w.Body.String())
+	}
+	if w := call(http.MethodGet, "/api/v1/intelligence/findings?from=bad&to=2026-09-06T01:00:00Z"); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid timestamp status: got %d", w.Code)
+	}
+	if w := call(http.MethodGet, "/api/v1/intelligence/findings?from=2026-09-06T02:00:00Z&to=2026-09-06T01:00:00Z"); w.Code != http.StatusBadRequest {
+		t.Fatalf("reversed range status: got %d", w.Code)
+	}
+	if w := call(http.MethodGet, "/api/v1/intelligence/findings?from=2026-09-06T00:00:00Z&to=2026-09-06T01:00:00Z&limitPerKind=0"); w.Code != http.StatusBadRequest {
+		t.Fatalf("lower limit status: got %d", w.Code)
+	}
+	if w := call(http.MethodGet, "/api/v1/intelligence/findings?from=2026-09-06T00:00:00Z&to=2026-09-06T01:00:00Z&limitPerKind=51"); w.Code != http.StatusBadRequest {
+		t.Fatalf("upper limit status: got %d", w.Code)
+	}
+	if w := call(http.MethodPost, "/api/v1/intelligence/findings?from=2026-09-06T00:00:00Z&to=2026-09-06T01:00:00Z"); w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("method status: got %d", w.Code)
+	}
+
+	valid := call(http.MethodGet, "/api/v1/intelligence/findings?from=2026-09-06T00:00:00Z&to=2026-09-06T03:00:00Z&limitPerKind=1")
+	if valid.Code != http.StatusOK {
+		t.Fatalf("valid findings status: got %d body=%s", valid.Code, valid.Body.String())
+	}
+	var result storage.AuditFindingResult
+	if err := json.NewDecoder(valid.Body).Decode(&result); err != nil {
+		t.Fatalf("decode findings response: %v", err)
+	}
+	if result.Route != types.RouteProxy || result.LimitPerKind != 1 || result.Items == nil || result.CountsByKind == nil {
+		t.Fatalf("unexpected findings response: %+v", result)
+	}
+
+	ruleResponse := call(http.MethodGet, "/api/v1/connections?rule=DomainSuffix&limit=10")
+	if ruleResponse.Code != http.StatusOK {
+		t.Fatalf("rule filter status: got %d body=%s", ruleResponse.Code, ruleResponse.Body.String())
+	}
+	var connections ConnectionsListResponse
+	if err := json.NewDecoder(ruleResponse.Body).Decode(&connections); err != nil {
+		t.Fatalf("decode rule-filter response: %v", err)
+	}
+	if len(connections.Items) == 0 || connections.Items[0].Rule != "DomainSuffix" {
+		t.Fatalf("exact rule filter mismatch: %+v", connections.Items)
+	}
+
+	unauthenticated := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, "/api/v1/intelligence/findings?from=2026-09-06T00:00:00Z&to=2026-09-06T01:00:00Z", nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("missing auth status: got %d", unauthenticated.Code)
+	}
+}
+
 func TestConnectionDetailCompositeIdentityIsolation(t *testing.T) {
 	dir, err := os.MkdirTemp("", "proxylens-composite-test-*")
 	if err != nil {
@@ -318,7 +394,7 @@ func TestConnectionDetailCompositeIdentityIsolation(t *testing.T) {
 			Process: "chrome.exe", Host: "google.com", DestinationIP: "142.250.190.46", Network: "tcp",
 		},
 		Rule: "DomainSuffix", RulePayload: "google.com",
-		Chains: []string{"Node-HK-01", "ProxyGroup"},
+		Chains:      []string{"Node-HK-01", "ProxyGroup"},
 		DeltaUpload: 1000, DeltaDownload: 5000,
 	})
 	_ = sinkA.EndSession(ctx, "sess-A", storage.SessionStatusClosedClean)
@@ -428,4 +504,3 @@ func TestConnectionDetailCompositeIdentityIsolation(t *testing.T) {
 		t.Errorf("Expected 404 for non-matching composite identity, got %d", wCross.Code)
 	}
 }
-

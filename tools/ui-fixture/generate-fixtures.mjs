@@ -9,6 +9,7 @@
  * - stale   : 包含最新核算 Run 但追加了新未核算事件 (freshness lag > 0)
  * - empty   : 有效 Schema 但无流量记录
  * - scaled  : 100,000 events / 5,000 distinct connections / 30 days
+ * - review  : deterministic candidates for all four Phase 4A detector families
  */
 
 import { execFileSync } from 'node:child_process';
@@ -25,7 +26,7 @@ if (!fs.existsSync(fixtureDir)) {
   fs.mkdirSync(fixtureDir, { recursive: true });
 }
 
-const profiles = ['healthy', 'gaps', 'stale', 'empty', 'scaled'];
+const profiles = ['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review'];
 
 console.log('================================================================');
 console.log('Generating Deterministic Synthetic UI Fixtures');

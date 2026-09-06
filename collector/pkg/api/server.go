@@ -22,16 +22,17 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	db             *sql.DB
-	dbPath         string
-	listenAddr     string
-	token          string
-	allowedOrigins map[string]bool
-	appVersion     string
-	httpServer     *http.Server
-	listener       net.Listener
-	analyticsSvc   *storage.AnalyticsService
-	querySvc       *storage.QueryService
+	db              *sql.DB
+	dbPath          string
+	listenAddr      string
+	token           string
+	allowedOrigins  map[string]bool
+	appVersion      string
+	httpServer      *http.Server
+	listener        net.Listener
+	analyticsSvc    *storage.AnalyticsService
+	querySvc        *storage.QueryService
+	intelligenceSvc *storage.AuditIntelligenceService
 
 	mu      sync.Mutex
 	running bool
@@ -65,6 +66,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.DB != nil {
 		s.analyticsSvc = storage.NewAnalyticsService(cfg.DB)
 		s.querySvc = storage.NewQueryService(cfg.DB)
+		s.intelligenceSvc = storage.NewAuditIntelligenceService(cfg.DB)
 	}
 
 	return s, nil
@@ -153,6 +155,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/analytics/top/final-proxies", s.handleTopFinalProxies)
 	mux.HandleFunc("/api/v1/analytics/protocols", s.handleProtocols)
 	mux.HandleFunc("/api/v1/coverage", s.handleCoverage)
+	mux.HandleFunc("/api/v1/intelligence/findings", s.handleIntelligenceFindings)
 	mux.HandleFunc("/api/v1/connections", s.handleConnections)
 	mux.HandleFunc("/api/v1/connections/", s.handleConnectionDetailRouter)
 }

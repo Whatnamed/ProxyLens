@@ -206,6 +206,64 @@ export interface ConnectionsListResponse {
   hasMore: boolean;
 }
 
+export type AuditFindingKind =
+  | 'match_fallback_proxy'
+  | 'broad_udp_proxy'
+  | 'ip_only_proxy_target'
+  | 'large_proxy_connection';
+
+export interface AuditFindingSubject {
+  process?: string;
+  host?: string;
+  sniffHost?: string;
+  destinationIp?: string;
+  targetKind?: string;
+  targetValue?: string;
+  sessionId?: string;
+  epochId?: number;
+  connectionId?: string;
+}
+
+export interface AuditFindingEvidence {
+  route: string;
+  rule?: string;
+  rulePayload?: string;
+  network?: string;
+  uploadBytes: number;
+  downloadBytes: number;
+  totalBytes: number;
+  connectionCount: number;
+  exactUploadBytes: number;
+  exactDownloadBytes: number;
+  estimatedUploadBytes: number;
+  estimatedDownloadBytes: number;
+  thresholdBytes?: number;
+}
+
+export interface AuditFindingConnectionKey {
+  sessionId: string;
+  epochId: number;
+  connectionId: string;
+}
+
+export interface AuditFinding {
+  id: string;
+  kind: AuditFindingKind;
+  subject: AuditFindingSubject;
+  evidence: AuditFindingEvidence;
+  sampleConnection?: AuditFindingConnectionKey;
+}
+
+export interface AuditFindingResult {
+  from: string;
+  to: string;
+  route: 'PROXY';
+  accountingVersion: string;
+  items: AuditFinding[];
+  countsByKind: Partial<Record<AuditFindingKind, number>>;
+  limitPerKind: number;
+}
+
 export interface AccountedTrafficRecord {
   runId: string;
   sourceEventId: string;

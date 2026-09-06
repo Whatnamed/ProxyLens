@@ -131,6 +131,10 @@ func (q *QueryService) ListConnections(ctx context.Context, filter ConnectionFil
 		whereClauses = append(whereClauses, "network = ?")
 		args = append(args, filter.Network)
 	}
+	if filter.Rule != "" {
+		whereClauses = append(whereClauses, "rule = ?")
+		args = append(args, filter.Rule)
+	}
 
 	whereSQL := ""
 	if len(whereClauses) > 0 {
@@ -534,5 +538,3 @@ func (q *QueryService) ListAccountedTrafficForConnection(ctx context.Context, se
 
 	return records, nil
 }
-
-
