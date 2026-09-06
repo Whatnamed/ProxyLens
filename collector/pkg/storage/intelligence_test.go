@@ -35,6 +35,7 @@ func TestAuditIntelligenceDetectorSemanticsAndStableIDs(t *testing.T) {
 		{id: "udp-tcp", connectionID: "udp-tcp", process: "tcp.exe", host: "tcp.example", destinationIP: "198.51.100.22", network: "tcp", rule: "NETWORK,udp", payload: "udp", route: types.RouteProxy, up: 100000, down: 100000, observedAt: intelligenceTestAnchor.Add(17 * time.Minute)},
 		{id: "udp-specific", connectionID: "udp-specific", process: "specific-udp.exe", host: "specific-udp.example", destinationIP: "198.51.100.23", network: "udp", rule: "DomainSuffix", payload: "example", route: types.RouteProxy, up: 100000, down: 100000, observedAt: intelligenceTestAnchor.Add(18 * time.Minute)},
 		{id: "ip-only", connectionID: "ip-only", process: "ip-client.exe", destinationIP: "192.0.2.30", network: "tcp", rule: "MATCH", payload: "MATCH", route: types.RouteProxy, up: 300, down: 700, observedAt: intelligenceTestAnchor.Add(19 * time.Minute)},
+		{id: "ip-only-domain", connectionID: "ip-only-domain", process: "domain-ip-client.exe", destinationIP: "192.0.2.31", network: "tcp", rule: "DomainSuffix", payload: "example", route: types.RouteProxy, up: 700, down: 1300, observedAt: intelligenceTestAnchor.Add(19 * time.Minute)},
 		{id: "same-ip-host", connectionID: "same-ip-host", process: "ip-client.exe", host: "known.example", destinationIP: "192.0.2.30", network: "tcp", rule: "MATCH", payload: "MATCH", route: types.RouteProxy, up: 900, down: 900, observedAt: intelligenceTestAnchor.Add(20 * time.Minute)},
 		{id: "large-exact", connectionID: "large-exact", process: "boundary.exe", host: "boundary.example", destinationIP: "192.0.2.40", network: "tcp", rule: "DomainSuffix", payload: "example", route: types.RouteProxy, up: 100 * 1024 * 1024, observedAt: intelligenceTestAnchor.Add(21 * time.Minute)},
 		{id: "large-over-1", connectionID: "large-over", process: "downloader.exe", host: "large.example", destinationIP: "192.0.2.41", network: "tcp", rule: "DomainSuffix", payload: "example", route: types.RouteProxy, up: 60 * 1024 * 1024, observedAt: intelligenceTestAnchor.Add(22 * time.Minute)},
@@ -59,7 +60,7 @@ func TestAuditIntelligenceDetectorSemanticsAndStableIDs(t *testing.T) {
 	if result.CountsByKind[AuditFindingBroadUDP] != 1 {
 		t.Fatalf("UDP count mismatch: %+v", result.CountsByKind)
 	}
-	if result.CountsByKind[AuditFindingIPOnly] != 1 {
+	if result.CountsByKind[AuditFindingIPOnly] != 2 {
 		t.Fatalf("IP-only count mismatch: %+v", result.CountsByKind)
 	}
 	if result.CountsByKind[AuditFindingLargeConnection] != 1 {
@@ -81,8 +82,25 @@ func TestAuditIntelligenceDetectorSemanticsAndStableIDs(t *testing.T) {
 	if len(largeItems) != 1 || largeItems[0].Evidence.TotalBytes != LargeProxyConnectionThresholdBytes+1 {
 		t.Fatalf("large threshold mismatch: %+v", largeItems)
 	}
+	if largeItems[0].Evidence.Rule != "DomainSuffix" {
+		t.Fatalf("large finding must preserve raw Rule evidence: %+v", largeItems[0].Evidence)
+	}
+	if largeItems[0].Evidence.RulePayload != "example" {
+		t.Fatalf("large finding must preserve raw RulePayload evidence: %+v", largeItems[0].Evidence)
+	}
 	if largeItems[0].Evidence.ThresholdBytes == nil || *largeItems[0].Evidence.ThresholdBytes != LargeProxyConnectionThresholdBytes {
 		t.Fatalf("large threshold evidence missing: %+v", largeItems[0].Evidence)
+	}
+	ipOnlyItems := findingsOfKind(result.Items, AuditFindingIPOnly)
+	var domainIPOnly *AuditFinding
+	for index := range ipOnlyItems {
+		if ipOnlyItems[index].Subject.Process == "domain-ip-client.exe" {
+			domainIPOnly = &ipOnlyItems[index]
+			break
+		}
+	}
+	if domainIPOnly == nil || domainIPOnly.Evidence.Rule != "DomainSuffix" || domainIPOnly.Evidence.RulePayload != "example" {
+		t.Fatalf("IP-only finding must preserve raw Rule evidence: %+v", ipOnlyItems)
 	}
 
 	idsBefore := findingIDsBySubject(result.Items)
@@ -93,6 +111,41 @@ func TestAuditIntelligenceDetectorSemanticsAndStableIDs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(idsBefore, findingIDsBySubject(later.Items)) {
 		t.Fatalf("finding IDs changed when only live 'to' advanced: before=%v after=%v", idsBefore, findingIDsBySubject(later.Items))
+	}
+}
+
+func TestAuditIntelligenceLargeIdentitySurvivesMetadataEnrichment(t *testing.T) {
+	events := []intelligenceFixtureEvent{
+		{id: "large-enrichment-1", connectionID: "large-enrichment", process: "enricher.exe", destinationIP: "192.0.2.80", network: "tcp", rule: "DomainSuffix", payload: "example", route: types.RouteProxy, up: LargeProxyConnectionThresholdBytes + 1, observedAt: intelligenceTestAnchor.Add(time.Minute)},
+		{id: "large-enrichment-2", connectionID: "large-enrichment", process: "enricher.exe", host: "enriched.example", destinationIP: "192.0.2.80", network: "tcp", rule: "DomainSuffix", payload: "example", route: types.RouteProxy, up: 4096, down: 8192, observedAt: intelligenceTestAnchor.Add(2 * time.Minute)},
+	}
+	db, cleanup := buildIntelligenceFixture(t, events, false)
+	defer cleanup()
+
+	from := intelligenceTestAnchor
+	earlyTo := intelligenceTestAnchor.Add(90 * time.Second)
+	lateTo := intelligenceTestAnchor.Add(time.Hour)
+	early, err := NewAuditIntelligenceService(db).ListFindings(context.Background(), AuditFindingFilter{StartTime: &from, EndTime: &earlyTo})
+	if err != nil {
+		t.Fatalf("early ListFindings failed: %v", err)
+	}
+	late, err := NewAuditIntelligenceService(db).ListFindings(context.Background(), AuditFindingFilter{StartTime: &from, EndTime: &lateTo})
+	if err != nil {
+		t.Fatalf("late ListFindings failed: %v", err)
+	}
+	earlyItems := findingsOfKind(early.Items, AuditFindingLargeConnection)
+	lateItems := findingsOfKind(late.Items, AuditFindingLargeConnection)
+	if len(earlyItems) != 1 || len(lateItems) != 1 {
+		t.Fatalf("expected one large finding at both boundaries: early=%+v late=%+v", earlyItems, lateItems)
+	}
+	if earlyItems[0].ID != lateItems[0].ID {
+		t.Fatalf("large finding identity changed after metadata enrichment: early=%s late=%s", earlyItems[0].ID, lateItems[0].ID)
+	}
+	if earlyItems[0].Subject.TargetKind != "destination_ip" || lateItems[0].Subject.TargetKind != "host" || lateItems[0].Subject.Host != "enriched.example" {
+		t.Fatalf("expected display subject enrichment, early=%+v late=%+v", earlyItems[0].Subject, lateItems[0].Subject)
+	}
+	if lateItems[0].Evidence.TotalBytes <= earlyItems[0].Evidence.TotalBytes {
+		t.Fatalf("expected bytes to grow without changing identity: early=%d late=%d", earlyItems[0].Evidence.TotalBytes, lateItems[0].Evidence.TotalBytes)
 	}
 }
 

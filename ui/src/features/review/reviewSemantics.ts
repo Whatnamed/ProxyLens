@@ -34,8 +34,19 @@ export function historyFiltersForFinding(finding: AuditFinding): Partial<History
       break;
   }
 
-  if (evidence.network) filters.network = evidence.network;
-  if (evidence.rule) filters.rule = evidence.rule;
+  switch (finding.kind) {
+    case 'match_fallback_proxy':
+      if (evidence.rule) filters.rule = evidence.rule;
+      break;
+    case 'broad_udp_proxy':
+      filters.network = evidence.network || 'udp';
+      if (evidence.rule) filters.rule = evidence.rule;
+      break;
+    case 'ip_only_proxy_target':
+      break;
+    case 'large_proxy_connection':
+      break;
+  }
   return filters;
 }
 

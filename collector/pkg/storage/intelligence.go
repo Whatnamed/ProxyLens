@@ -220,17 +220,17 @@ func (s *AuditIntelligenceService) ListFindings(ctx context.Context, filter Audi
 		}
 
 		row.network = strings.ToLower(strings.TrimSpace(row.network))
-		row.rule = normalizeAuditRule(row.rule)
+		normalizedRule := normalizeAuditRule(row.rule)
 		targetKind, targetValue := auditTarget(row)
 		identity := auditConnectionIdentity{sessionID: row.sessionID, epochID: row.epochID, connectionID: row.connectionID}
 
-		if row.rule == "MATCH" {
+		if normalizedRule == "MATCH" {
 			key := auditAggregateKey{process: row.process, targetKind: targetKind, targetValue: targetValue}
 			a := ensureAuditAggregate(match, key, row, targetKind, targetValue)
 			addAuditEvidence(a, row, up, down, exact)
 		}
-		if row.rule == "NETWORK,udp" && row.network == "udp" {
-			key := auditAggregateKey{process: row.process, targetKind: targetKind, targetValue: targetValue, rule: row.rule}
+		if normalizedRule == "NETWORK,udp" && row.network == "udp" {
+			key := auditAggregateKey{process: row.process, targetKind: targetKind, targetValue: targetValue, rule: normalizedRule}
 			a := ensureAuditAggregate(udp, key, row, targetKind, targetValue)
 			addAuditEvidence(a, row, up, down, exact)
 		}
@@ -540,6 +540,38 @@ func auditSubjectKey(kind AuditFindingKind, subject AuditFindingSubject) string 
 }
 
 func findingID(kind AuditFindingKind, subject AuditFindingSubject) string {
-	digest := sha256.Sum256([]byte(auditSubjectKey(kind, subject)))
+	identity := struct {
+		Kind          AuditFindingKind `json:"kind"`
+		Process       string           `json:"process,omitempty"`
+		TargetKind    string           `json:"targetKind,omitempty"`
+		TargetValue   string           `json:"targetValue,omitempty"`
+		Rule          string           `json:"rule,omitempty"`
+		DestinationIP string           `json:"destinationIp,omitempty"`
+		SessionID     string           `json:"sessionId,omitempty"`
+		EpochID       int              `json:"epochId,omitempty"`
+		ConnectionID  string           `json:"connectionId,omitempty"`
+	}{Kind: kind}
+
+	switch kind {
+	case AuditFindingMatchFallback:
+		identity.Process = subject.Process
+		identity.TargetKind = subject.TargetKind
+		identity.TargetValue = subject.TargetValue
+		identity.Rule = "MATCH"
+	case AuditFindingBroadUDP:
+		identity.Process = subject.Process
+		identity.TargetKind = subject.TargetKind
+		identity.TargetValue = subject.TargetValue
+		identity.Rule = "NETWORK,udp"
+	case AuditFindingIPOnly:
+		identity.Process = subject.Process
+		identity.DestinationIP = subject.DestinationIP
+	case AuditFindingLargeConnection:
+		identity.SessionID = subject.SessionID
+		identity.EpochID = subject.EpochID
+		identity.ConnectionID = subject.ConnectionID
+	}
+	encoded, _ := json.Marshal(identity)
+	digest := sha256.Sum256(encoded)
 	return "finding_" + hex.EncodeToString(digest[:])
 }

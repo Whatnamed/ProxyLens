@@ -1,6 +1,6 @@
 # ProxyLens Audit Intelligence v1
 
-- **Status**: Phase 4A foundation complete; Phase 4B/4C deferred
+- **Status**: Phase 4A foundation and semantic closure complete; Phase 4B/4C deferred
 - **Scope**: deterministic, read-only Review workspace over reconciled accounting
 - **Authority**: the active v2 accounting generation, otherwise the latest completed legacy run
 
@@ -32,6 +32,11 @@ estimated and never silently presented as exact.
 accounted bytes. They aggregate by process and the first available target in
 the order `host → sniff_host → destination_ip → missing`.
 
+Rule comparison uses a normalized copy only. The stored occurrence-time `rule`
+and `rulePayload` remain raw evidence in the finding response; `DomainSuffix`
+must not become `DOMAINSUFFIX` merely because detector comparison is
+case-insensitive.
+
 Broad UDP findings require both `route=PROXY`, normalized `rule=NETWORK,udp`,
 and `network=udp`; other UDP traffic is not included.
 
@@ -42,9 +47,13 @@ Large-connection findings aggregate only the physical key
 `(session_id, epoch_id, connection_id)` and include the named threshold in the
 response. The comparison is strictly greater than 100 MiB.
 
-Finding IDs are stable hashes of detector kind plus normalized subject facts.
-They do not contain the live time-window `to`, so advancing a live window does
-not manufacture a new identity for the same subject.
+Finding IDs are stable hashes of detector identity, not the full mutable display
+subject: MATCH uses process/target plus canonical `MATCH`, broad UDP uses
+process/target plus canonical `NETWORK,udp`, IP-only uses process/destination
+IP, and large connections use `(session_id, epoch_id, connection_id)`. Bytes,
+counts, representative metadata, locale, and the live time-window `to` are not
+identity inputs, so metadata enrichment or a live-window advance does not
+manufacture a new identity.
 
 ## 3. Query API
 
@@ -68,11 +77,13 @@ The top-level order is `Overview → Review → History → Coverage`. Review sh
 the existing time range state and locale/theme contracts, but does not expose a
 general Route Control: its scope is visibly and statically `PROXY`.
 
-Each finding explains its route, rule, network, target evidence, accounted
-bytes, and precision. `Investigate in History` transfers only supported
-read-only filters, sets History route focus to `PROXY`, resets pagination, and
-creates a fresh History snapshot. Review never edits rules, Controller config,
-nodes, system proxy, TUN, DNS, or routes.
+Each finding explains only detector-relevant facts: MATCH shows route/rule/
+target/bytes/precision/connections; broad UDP additionally shows network; IP-only
+shows the IP and absent host evidence; large shows process/target/bytes/
+threshold/physical connection evidence. `Investigate in History` transfers only
+detector-relevant read-only filters, sets History route focus to `PROXY`, resets
+pagination, and creates a fresh History snapshot. Review never edits rules,
+Controller config, nodes, system proxy, TUN, DNS, or routes.
 
 ## 5. Fixtures and acceptance
 

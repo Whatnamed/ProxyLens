@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-09-06 — Phase 4A Final Semantic Closure
+
+**Scope:** 收口 Review detector 的证据、身份和下钻语义；未扩大 Phase 4A，未启动 Phase 4B/4C。
+
+**Completed:**
+
+- Rule normalization 只用于 detector comparison；raw `DomainSuffix` / `RulePayload` 保留在 finding evidence；
+- MATCH、broad UDP、IP-only、large 四类 finding 使用各自 detector-relevant History filters，IP-only/large 不再携带 incidental Rule/Network；
+- finding ID 改为 canonical detector identity，large physical connection 在后续 metadata enrichment 后保持 ID 不变；Review explanation 按 detector 条件展示，不把 incidental metadata 当作原因；
+- targeted Go/UI validation 通过；未连接真实 Controller、FLClash/Mihomo 或 production DB。
+
 ## 2026-09-06 — Phase 4A Audit Intelligence Foundation
 
 **Scope:** 在不改变 Collector、Accounting 或真实网络生命周期的前提下，完成

@@ -3,7 +3,7 @@
 - **Date**: 2026-09-06
 - **Branch**: `feat/phase4a-audit-intelligence-foundation`
 - **Scope**: deterministic Review foundation only
-- **Status**: PASS for Phase 4A; Phase 4B/4C and real-environment validation remain Deferred
+- **Status**: PASS for Phase 4A foundation plus final semantic closure; Phase 4B/4C and real-environment validation remain Deferred
 
 ## Acceptance matrix
 
@@ -15,11 +15,23 @@
 | IP-only detector | PROXY + destination IP with empty host/sniff host; zero-accounted rows excluded | PASS |
 | Large connection detector | Physical `(session_id,epoch_id,connection_id)` aggregation; strict `>100 MiB` threshold returned | PASS |
 | Time/evidence | Exact `[from,to)` membership and existing interval allocator; exact/estimated split tested | PASS |
-| Identity | Stable IDs are kind + normalized subject and do not include live `to` | PASS |
+| Identity | Stable IDs use detector-specific canonical identity and do not include mutable display metadata or live `to` | PASS |
 | Query API | Required range, bounded `limitPerKind` 1–50, GET-only, Bearer/CORS, read-only errors | PASS |
-| History investigation | Exact Rule filter only; Review action fixes PROXY and transfers supported filters | PASS |
+| History investigation | Detector-specific exact filters only: MATCH rule, broad UDP rule/network, IP-only process/IP, large process/target | PASS |
+| UI explanation | Rule/Network are shown as detector reasons only where the detector uses them; IP-only/large omit incidental metadata | PASS |
 | UI boundary | React uses Query API only; no filesystem, SQLite, Controller, or lifecycle authority | PASS |
 | Safety | Query-only visual runs use copied temporary fixture DB; `owner=0 runtime=0 controller=0` | PASS |
+
+## Final semantic closure
+
+- Detector comparison uses normalized Rule copies while `AuditFindingEvidence.Rule`
+  and `RulePayload` preserve raw occurrence-time evidence, including exact
+  `DomainSuffix` casing.
+- History drill filters are detector-specific and do not use incidental
+  Rule/Network metadata to narrow IP-only or large physical-connection review.
+- Finding IDs use canonical detector identity. A large physical connection keeps
+  the same ID when later metadata enriches an IP-only display subject into a
+  host display subject and its bytes grow.
 
 ## Focused validation
 

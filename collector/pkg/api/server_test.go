@@ -28,7 +28,7 @@ func createTestDBWithSeedData(t *testing.T) (string, func()) {
 		t.Fatalf("OpenSQLiteSink failed: %v", err)
 	}
 
-	t0 := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour)
+	t0 := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
 
 	_ = sink.Emit(&types.CollectorEvent{
 		EventID: "ev-api-1", SessionID: "sess-api-test", EpochID: 1, FrameSequence: 1, EventSequence: 1,
@@ -52,6 +52,18 @@ func createTestDBWithSeedData(t *testing.T) (string, func()) {
 		},
 		Rule: "DirectRule", RulePayload: "Direct",
 		DeltaUpload: 200, DeltaDownload: 800,
+	})
+
+	_ = sink.Emit(&types.CollectorEvent{
+		EventID: "ev-api-3", SessionID: "sess-api-test", EpochID: 1, FrameSequence: 3, EventSequence: 1,
+		Type: types.EventConnectionNew, Timestamp: t0.Add(20 * time.Minute), ConnectionID: "c-api-ip-only",
+		Route: types.RouteProxy, AttributionClass: types.ClassKnownApplication,
+		Metadata: types.RawMetadata{
+			Process: "sync.exe", DestinationIP: "192.0.2.81", DestinationPort: "443", Network: "tcp",
+		},
+		Rule: "DomainSuffix", RulePayload: "example",
+		Chains:      []string{"Node-HK-01", "ProxyGroup"},
+		DeltaUpload: 1024, DeltaDownload: 4096,
 	})
 
 	_ = sink.EndSession(ctx, "sess-api-test", storage.SessionStatusClosedClean)
@@ -167,7 +179,7 @@ func TestAPIServerAuthCORSAndEndpoints(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&sum); err != nil {
 		t.Fatalf("Failed to decode summary: %v", err)
 	}
-	if sum.ProxyUpload != 1000 || sum.ProxyDownload != 5000 {
+	if sum.ProxyUpload != 2024 || sum.ProxyDownload != 9096 {
 		t.Errorf("Summary values mismatch: %+v", sum)
 	}
 
@@ -349,6 +361,18 @@ func TestIntelligenceFindingsAPIContractAndRuleFilter(t *testing.T) {
 	}
 	if result.Route != types.RouteProxy || result.LimitPerKind != 1 || result.Items == nil || result.CountsByKind == nil {
 		t.Fatalf("unexpected findings response: %+v", result)
+	}
+	var rawRulePreserved bool
+	for _, finding := range result.Items {
+		if finding.Kind == storage.AuditFindingIPOnly && finding.Evidence.Rule == "DomainSuffix" {
+			if finding.Evidence.RulePayload != "example" {
+				t.Fatalf("API finding evidence did not preserve raw DomainSuffix RulePayload: %+v", finding.Evidence)
+			}
+			rawRulePreserved = true
+		}
+	}
+	if !rawRulePreserved {
+		t.Fatalf("API finding evidence did not preserve raw DomainSuffix Rule: %+v", result.Items)
 	}
 
 	ruleResponse := call(http.MethodGet, "/api/v1/connections?rule=DomainSuffix&limit=10")

@@ -20,6 +20,7 @@
 - 已新增只读 `/api/v1/intelligence/findings`，使用 active v2 / completed legacy accounting authority，固定 PROXY、`[from,to)`、bounded `limitPerKind` 与标准鉴权/错误契约；
 - 已实现四类确定性 detector：`MATCH` fallback、canonical `NETWORK,udp`、IP-only proxy target、strict `>100 MiB` physical connection；结果含 stable subject ID、exact/interval evidence 与解释性事实，不含 score/severity；
 - 已新增 Review top-level workspace（Overview → Review → History → Coverage）与 exact Rule History 下钻，沿用现有 Time Range、EN/中文、Light/Dark 和 query-only read-only boundary；
+- detector comparison 使用 normalized Rule 副本，不改写 raw Rule/RulePayload；History drill 只携带 detector-relevant filters，large physical finding ID 只使用 session/epoch/connection identity，不受 mutable display metadata 影响；
 - `review` synthetic fixture、10k/100k timing evidence 与 1280×800 / 1600×1000 × EN/ZH × Light/Dark 八态真实 Tauri query-only acceptance 已完成；Runner evidence 记录 actual viewport、locale/theme/view、source/copy SHA 与 `owner=0 runtime=0 controller=0`；
 - 1.5M E-drive scale acceptance 与 Phase 3S 保持独立；本阶段未启动 Phase 4B/4C、真实 Controller 或任何网络生命周期。
 

@@ -34,6 +34,8 @@ const FindingRow: React.FC<{ finding: AuditFinding; onInvestigate: (finding: Aud
   const subject = finding.subject;
   const evidence = finding.evidence;
   const precisionTitle = estimated ? t('review.intervalEvidence') : t('review.exactEvidence');
+  const showRule = finding.kind === 'match_fallback_proxy' || finding.kind === 'broad_udp_proxy';
+  const showNetwork = finding.kind === 'broad_udp_proxy';
   const targetFact = subject.targetKind === 'destination_ip'
     ? t('review.targetIpFact')
     : subject.targetKind === 'sniff_host'
@@ -63,14 +65,18 @@ const FindingRow: React.FC<{ finding: AuditFinding; onInvestigate: (finding: Aud
             <dt>{t('review.target')}</dt>
             <dd className="pl-mono">{target}</dd>
           </div>
-          <div>
-            <dt>{t('review.rule')}</dt>
-            <dd className="pl-mono">{evidence.rule || t('common.notAvailable')}</dd>
-          </div>
-          <div>
-            <dt>{t('review.network')}</dt>
-            <dd className="pl-mono">{evidence.network || t('common.notAvailable')}</dd>
-          </div>
+          {showRule && (
+            <div>
+              <dt>{t('review.rule')}</dt>
+              <dd className="pl-mono">{evidence.rule || t('common.notAvailable')}</dd>
+            </div>
+          )}
+          {showNetwork && (
+            <div>
+              <dt>{t('review.network')}</dt>
+              <dd className="pl-mono">{evidence.network || t('common.notAvailable')}</dd>
+            </div>
+          )}
           <div>
             <dt>{t('review.bytes')}</dt>
             <dd className="pl-mono">{formatBytes(evidence.totalBytes)}</dd>
@@ -89,9 +95,11 @@ const FindingRow: React.FC<{ finding: AuditFinding; onInvestigate: (finding: Aud
         <div className="pl-review__why">
           <span className="pl-review__why-label">{t('review.why')}</span>
           <span>{t('review.routeFact', { route: evidence.route })}</span>
-          {evidence.rule && <span>{t('review.ruleFact', { rule: evidence.rule })}</span>}
-          {evidence.network && <span>{t('review.networkFact', { network: evidence.network })}</span>}
+          {finding.kind === 'match_fallback_proxy' && evidence.rule && <span>{t('review.ruleFact', { rule: evidence.rule })}</span>}
+          {finding.kind === 'broad_udp_proxy' && evidence.rule && <span>{t('review.ruleFact', { rule: evidence.rule })}</span>}
+          {finding.kind === 'broad_udp_proxy' && evidence.network && <span>{t('review.networkFact', { network: evidence.network })}</span>}
           <span>{targetFact}</span>
+          {finding.kind === 'large_proxy_connection' && <span>{t('review.physicalConnectionFact')}</span>}
           <span>{t('review.accountedFact', { bytes: formatBytes(evidence.totalBytes) })}</span>
           {evidence.thresholdBytes !== undefined && <span>{t('review.thresholdFact', { threshold: formatBytes(evidence.thresholdBytes) })}</span>}
         </div>
