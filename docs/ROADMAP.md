@@ -23,9 +23,9 @@ Phase 1  Collector 原型                           [COMPLETED]
    ↓
 Phase 2  持久化、核算与运行时验证                  [COMPLETED]
    ↓
-Phase 3  审计 UI                                  [COMPLETED — core UI + final Tauri visual acceptance]
+Phase 3  审计 UI                                  [COMPLETED — CORE V1]
    ↓
-Phase 3E Desktop Runtime Integration              [IN PROGRESS — runtime implementation complete; final visual/real-environment validation deferred]
+Phase 3E Desktop Runtime Integration              [CORE COMPLETE — real-environment validation deferred]
    ↓
 Phase 3S Production Storage & Accounting Scale    [COMPLETED]
    ↓
@@ -95,7 +95,7 @@ Later    长期增强                                 [PLANNED]
 
 ---
 
-## Phase 3 — Audit UI [IN PROGRESS]
+## Phase 3 — Audit UI [COMPLETED — CORE V1]
 
 ### Phase 3A — UI Platform Foundation & Local Query API [COMPLETED]
 
@@ -109,7 +109,7 @@ Later    长期增强                                 [PLANNED]
 
 ### Phase 3B — Visual System & Primary Audit UI [COMPLETED — DESIGN SYSTEM FROZEN V1]
 
-- [x] Draft Design System v1：Light / Dark semantic tokens、Typography、Density、Interaction；
+- [x] Design System v1：Light / Dark semantic tokens、Typography、Density、Interaction；
 - [x] 正式 App Shell 与 Overview / History / Coverage 导航；
 - [x] Overview：Traffic Summary、Evidence Trust、Top Processes / Rules / Hosts / Final Proxies；
 - [x] Time Range、Route Focus、Freshness / System Status；
@@ -120,7 +120,7 @@ Later    长期增强                                 [PLANNED]
 - [x] 1280×800 / 1440×900 / 1600×1000 + Light / Dark + EN / 中文视觉验收；
 - [x] 根据验收结果 Freeze Design System v1；
 
-### Phase 3C — History, Search & Connection Detail [PARTIALLY IMPLEMENTED]
+### Phase 3C — History, Search & Connection Detail [CORE COMPLETE — OPTIONAL/DEFERRED ENHANCEMENTS]
 
 已实现：
 
@@ -138,13 +138,13 @@ Later    长期增强                                 [PLANNED]
 - [x] Connection Inspector 边界受控前/后连接切换（Prev/Next 按钮、↑/↓/Esc 快捷键与输入框避让保护）；
 - [x] 调查上下文管理（Overview 钻取清空无关筛选、侧边栏保留当前调查、Coverage 缺口检查清空旧条件并带入 ±15min）；
 
-仍待后续、且不得在无后端契约时伪造：
+后续增强（不阻塞 Phase 3 core closure，且不得在无后端契约时伪造）：
 
 - [ ] 评估真正需要的额外搜索维度（如 Rule / Final Proxy / Port），必要时单独设计 read-only API extension；
 - [ ] 大规模 History 的虚拟化/滚动策略，仅在真实数据量证明需要时实施；
 - [ ] 更完整的跨页面键盘导航与真实 Tauri 可访问性 integration test。
 
-### Phase 3D — Coverage, Gaps, Performance & Polish [PARTIALLY IMPLEMENTED]
+### Phase 3D — Coverage, Gaps, Performance & Polish [CORE COMPLETE — OPTIONAL/DEFERRED ENHANCEMENTS]
 
 已实现：
 
@@ -156,15 +156,18 @@ Later    长期增强                                 [PLANNED]
 - [x] Inspect Around Gap → History（带入 ±15min 自定义区间并冻结快照）；
 - [x] Collector heartbeat stale semantics 与 Coverage 后端一致；
 - [x] System 状态渐进式披露对话框（完整 Meta、会话心跳、核算新鲜度落后、纯事实状态对话框与焦点闭环）；
-
-仍待后续：
-
 - [x] Coverage / History 在 scaled fixture 下的真实交互性能验收；
-- [ ] 必要时针对大数据量做虚拟化或渲染优化；
-  - [ ] 桌面应用图标、安装版生命周期与启动性能最终打磨；
-  - [x] 最终视觉 polish 与 Design System freeze。
+- [x] 最终视觉 polish 与 Design System freeze。
 
-### Phase 3E — Desktop Runtime Integration [IN PROGRESS — runtime implementation complete; final visual/real-environment validation deferred]
+后续增强（不阻塞 Phase 3 core closure）：
+
+- [ ] 必要时针对大数据量做虚拟化或渲染优化；
+  - [ ] 桌面应用图标与启动性能最终打磨；
+
+### Phase 3E — Desktop Runtime Integration [CORE COMPLETE — REAL-ENVIRONMENT VALIDATION DEFERRED]
+
+Phase 3E runtime and installed lifecycle core is complete. Real FLClash/Mihomo and
+real-data validation remains a separate deferred acceptance boundary.
 
 已完成 Phase 3E-1：
 

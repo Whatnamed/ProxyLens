@@ -391,7 +391,7 @@ Verify:
 - Refresh behavior advances the frozen History snapshot;
 - pagination does not imply nonexistent totals;
 - opening a Select keeps one listbox tab stop, Arrow/Home/End update the active option, Enter/Space commits, and Tab closes it;
-- opening a DatePicker keeps one day gridcell tab stop, Arrow keys move by day/week (including across months), Home/End move within the row, and Tab closes it;
+- opening a DatePicker keeps one roving day-gridcell focus, Arrow keys move by day/week (including across months), Home/End move within the row, and Tab may continue into the DatePicker time input; focus-out from the entire DatePicker root closes the popover;
 - switching EN / 中文 updates visible UI copy immediately and survives reload;
 - date/time display follows the active locale while raw technical values remain unchanged.
 - the formal production build renders Manrope for Latin, Sarasa Gothic UI SC
@@ -447,4 +447,4 @@ At the end of the implementation:
 - update the Design System when the implementation proved a better rule;
 - do not leave “doc says one thing, code permanently does another.”
 
-The eventual frozen v1 should mirror the approved shipped UI.
+Frozen v1 mirrors the approved shipped UI.
