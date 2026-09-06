@@ -6,6 +6,7 @@ export const AUDIT_FINDING_KINDS: AuditFindingKind[] = [
   'broad_udp_proxy',
   'ip_only_proxy_target',
   'large_proxy_connection',
+  'cataloged_background_process_proxy',
 ];
 
 export function findingTargetLabel(finding: AuditFinding): string {
@@ -46,6 +47,8 @@ export function historyFiltersForFinding(finding: AuditFinding): Partial<History
       break;
     case 'large_proxy_connection':
       break;
+    case 'cataloged_background_process_proxy':
+      break;
   }
   return filters;
 }
@@ -64,5 +67,7 @@ export function findingKindKey(kind: AuditFindingKind): string {
       return 'review.kindIp';
     case 'large_proxy_connection':
       return 'review.kindLarge';
+    case 'cataloged_background_process_proxy':
+      return 'review.kindCatalog';
   }
 }

@@ -63,7 +63,8 @@ Connection Detail is contextual and should normally appear as an Inspector / dri
 
 System Status is secondary and persistent/contextual rather than a primary page.
 
-Review is a primary read-only workspace for Phase 4A and Phase 4B1. It is fixed
+Review is a primary read-only workspace for Phase 4A, Phase 4B1, Phase 4B2A,
+and Phase 4C1. It is fixed
 to PROXY scope, shares the global time range, and must not expose lifecycle,
 Controller, node, rule-write, or system-network controls.
 
@@ -184,10 +185,12 @@ Do not pretend unsupported aggregate dimensions have full drill-down support.
 ## 5. Review
 
 Review is the evidence-native handoff between Overview and History for Phase
-4A, Phase 4B1, and the narrow Phase 4B2A host-route transition contract. It first
-presents a temporal comparison over complete hourly buckets, then four
-deterministic Phase 4A sections: MATCH fallback, broad `NETWORK,udp`, IP-only
-proxy targets, and large physical proxy connections. Temporal rows explain
+4A, Phase 4B1, the narrow Phase 4B2A host-route transition contract, and the
+Phase 4C1 background/security catalog contract. It first presents a temporal
+comparison over complete hourly buckets, then the background/security catalog
+section, then four deterministic Phase 4A sections: MATCH fallback, broad
+`NETWORK,udp`, IP-only proxy targets, and large physical proxy connections.
+Temporal rows explain
 newly observed PROXY processes, strictly higher PROXY bytes/hour, or recorded
 hosts that gained PROXY after a DIRECT-only baseline; each row shows the
 structured facts that caused inclusion, exact versus interval-derived evidence
@@ -209,8 +212,10 @@ Lag after `recentTo` does not block the comparison. The backend requires all
 four comparison boundaries and fails closed on either monitoring or
 window-scoped accounting incompleteness.
 
-Review must not invent score, severity, intent, current node state, or a
-recommendation. Investigation transfers only supported process/host/IP/network/
+Review must not invent score, severity, intent, current node state, trust,
+signature verification, or a recommendation. Catalog findings explain only
+that process name + event-time process path matched the embedded provenance
+catalog. Investigation transfers only supported process/host/IP/network/
 exact-rule filters, fixes History route focus to PROXY, and creates a new
 History snapshot. Temporal process investigation carries only `process`, while
 host transition investigation seeds the History `host` filter with the exact

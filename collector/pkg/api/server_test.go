@@ -66,6 +66,18 @@ func createTestDBWithSeedData(t *testing.T) (string, func()) {
 		DeltaUpload: 1024, DeltaDownload: 4096,
 	})
 
+	_ = sink.Emit(&types.CollectorEvent{
+		EventID: "ev-api-catalog", SessionID: "sess-api-test", EpochID: 1, FrameSequence: 4, EventSequence: 1,
+		Type: types.EventConnectionNew, Timestamp: t0.Add(30 * time.Minute), ConnectionID: "c-api-catalog",
+		Route: types.RouteProxy, AttributionClass: types.ClassKnownApplication,
+		Metadata: types.RawMetadata{
+			Process: "MsMpEng.exe", ProcessPath: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18.api\\MsMpEng.exe",
+			Host: "defender-api.synthetic.example", DestinationIP: "203.0.113.150", DestinationPort: "443", Network: "tcp",
+		},
+		Rule: "DomainSuffix", RulePayload: "synthetic.example",
+		Chains: []string{"Node-HK-01", "ProxyGroup"}, DeltaUpload: 2048, DeltaDownload: 8192,
+	})
+
 	_ = sink.EndSession(ctx, "sess-api-test", storage.SessionStatusClosedClean)
 	_ = sink.Close()
 
@@ -179,7 +191,7 @@ func TestAPIServerAuthCORSAndEndpoints(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&sum); err != nil {
 		t.Fatalf("Failed to decode summary: %v", err)
 	}
-	if sum.ProxyUpload != 2024 || sum.ProxyDownload != 9096 {
+	if sum.ProxyUpload != 4072 || sum.ProxyDownload != 17288 {
 		t.Errorf("Summary values mismatch: %+v", sum)
 	}
 
@@ -359,7 +371,7 @@ func TestIntelligenceFindingsAPIContractAndRuleFilter(t *testing.T) {
 	if err := json.NewDecoder(valid.Body).Decode(&result); err != nil {
 		t.Fatalf("decode findings response: %v", err)
 	}
-	if result.Route != types.RouteProxy || result.LimitPerKind != 1 || result.Items == nil || result.CountsByKind == nil {
+	if result.Route != types.RouteProxy || result.LimitPerKind != 1 || result.Items == nil || result.CountsByKind == nil || result.KnowledgeCatalogVersion != "background-processes-v1" {
 		t.Fatalf("unexpected findings response: %+v", result)
 	}
 	var rawRulePreserved bool
@@ -373,6 +385,18 @@ func TestIntelligenceFindingsAPIContractAndRuleFilter(t *testing.T) {
 	}
 	if !rawRulePreserved {
 		t.Fatalf("API finding evidence did not preserve raw DomainSuffix Rule: %+v", result.Items)
+	}
+	if result.CountsByKind[storage.AuditFindingCatalogedBackgroundProcess] != 1 {
+		t.Fatalf("API catalog finding count mismatch: %+v", result.CountsByKind)
+	}
+	var catalogFinding *storage.AuditFinding
+	for index := range result.Items {
+		if result.Items[index].Kind == storage.AuditFindingCatalogedBackgroundProcess {
+			catalogFinding = &result.Items[index]
+		}
+	}
+	if catalogFinding == nil || catalogFinding.Subject.ProcessPath == "" || catalogFinding.Knowledge == nil || catalogFinding.Knowledge.EntryID != "microsoft-defender-antivirus-service" {
+		t.Fatalf("API catalog provenance/process path mismatch: %+v", result.Items)
 	}
 
 	ruleResponse := call(http.MethodGet, "/api/v1/connections?rule=DomainSuffix&limit=10")

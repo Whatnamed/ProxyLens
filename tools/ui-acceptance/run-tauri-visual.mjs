@@ -21,7 +21,7 @@ const rootDir = path.resolve(__dirname, '..', '..');
 const uiDir = path.join(rootDir, 'ui');
 const fixtureDir = path.join(rootDir, 'fixtures');
 const evidenceRoot = path.join(rootDir, 'tmp', 'phase3-final-acceptance');
-const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete', 'review-route-shift']);
+const profiles = new Set(['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete', 'review-route-shift', 'review-background-services']);
 const sizes = new Set(['1280x800', '1440x900', '1600x1000', 'max']);
 const locales = new Set(['en', 'zh-CN']);
 const themes = new Set(['light', 'dark']);
@@ -38,13 +38,23 @@ const routeShiftNegativeHosts = [
   'host-reject-baseline.example',
   'route-alpha.example',
 ];
+const backgroundCatalogExpectedRows = [
+  ['MsMpEng.exe', 'defender-antivirus.synthetic.example'],
+  ['MpDefenderCoreService.exe', 'defender-core.synthetic.example'],
+  ['NisSrv.exe', 'defender-network.synthetic.example'],
+];
+const backgroundCatalogNegativeValues = [
+  'background-wrong-path.synthetic.example',
+  'background-missing-path.synthetic.example',
+  'background-direct.synthetic.example',
+];
 
 const args = parseArgs(process.argv.slice(2));
 const profile = args.profile || 'healthy';
 const size = args.size || '1600x1000';
 const locale = args.locale || 'en';
 const theme = args.theme || 'light';
-const view = args.view || (profile === 'review' || profile === 'review-temporal' || profile === 'review-temporal-incomplete' || profile === 'review-route-shift' ? 'review' : 'overview');
+const view = args.view || (profile === 'review' || profile === 'review-temporal' || profile === 'review-temporal-incomplete' || profile === 'review-route-shift' || profile === 'review-background-services' ? 'review' : 'overview');
 const runId = safeRunId(args['run-id'] || `${profile}-${size}-${Date.now()}`);
 const autoExitMs = parsePositiveInt(args['auto-exit-ms'] || '30000', 'auto-exit-ms');
 const cdpPort = parsePositiveInt(args['cdp-port'] || '9223', 'cdp-port');
@@ -158,6 +168,9 @@ try {
   } else if (profile === 'review-route-shift') {
     temporalEvidence = await assertRouteShiftReviewEvidence(cdpPort, locale);
     hostDrillEvidence = await assertHostRouteShiftHistoryDrill(cdpPort, locale);
+  } else if (profile === 'review-background-services') {
+    temporalEvidence = await assertBackgroundCatalogReviewEvidence(cdpPort, locale);
+    hostDrillEvidence = await assertBackgroundCatalogHistoryDrill(cdpPort, locale);
   }
   const actualViewport = { width: actualState.width, height: actualState.height, dpr: actualState.dpr };
   await waitForProcessExit(child, autoExitMs + 15000, 'Tauri visual QA auto-exit');
@@ -473,6 +486,110 @@ async function assertHostRouteShiftHistoryDrill(port, locale) {
     throw new Error(`Host route-shift History drill failed: ${JSON.stringify(evidence)}${lastError ? ` (${lastError.message})` : ''}`);
   }
   console.log('PROXYLENS_VISUAL_QA_ROUTE_SHIFT_DRILL history=1 route=PROXY host=1 page=1 freshSnapshot=1 unrelatedFilters=0');
+  return evidence;
+}
+
+async function assertBackgroundCatalogReviewEvidence(port, locale) {
+  const deadline = Date.now() + 30000;
+  let evidence = null;
+  let lastError = null;
+  const sectionTitle = locale === 'zh-CN' ? '后台 / 安全服务目录匹配' : 'Background/security service catalog matches';
+  const boundaryText = locale === 'zh-CN'
+    ? '仅表示目录匹配，不代表已验证可执行文件数字签名。'
+    : 'Catalog match only; this is not executable-signature verification.';
+  while (Date.now() < deadline) {
+    try {
+      evidence = JSON.parse(await evaluateWebview(port, `(() => {
+        const text = document.body.innerText || '';
+        const reviewScroll = document.querySelector('[data-pl-page="review"] .pl-page__scroll');
+        const rows = [...document.querySelectorAll('.pl-review__catalog-finding')];
+        return JSON.stringify({
+          hasCatalogSection: text.includes(${JSON.stringify(sectionTitle)}),
+          catalogRows: rows.length,
+          expectedRowsPresent: ${JSON.stringify(backgroundCatalogExpectedRows)}.every(([process, target]) => text.includes(process) && text.includes(target)),
+          negativeRowsAbsent: ${JSON.stringify(backgroundCatalogNegativeValues)}.every((value) => !text.includes(value)),
+          hasBoundaryText: text.includes(${JSON.stringify(boundaryText)}),
+          hasObservedPath: text.includes('ProgramData') && text.includes('MsMpEng.exe'),
+          hasEstimatedEvidence: Boolean(document.querySelector('.pl-review__catalog-finding .pl-evidence-chip--estimated')),
+          hasPhase4ASections: text.includes('MATCH fallback') || text.includes('MATCH 兜底'),
+          noHorizontalOverflow: !reviewScroll || reviewScroll.scrollWidth <= reviewScroll.clientWidth + 2,
+          documentNoHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
+        });
+      })()`));
+      if (isCompleteBackgroundCatalogEvidence(evidence)) break;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (!isCompleteBackgroundCatalogEvidence(evidence)) {
+    throw new Error(`Background catalog Review evidence failed: ${JSON.stringify(evidence)}${lastError ? ` (${lastError.message})` : ''}`);
+  }
+  console.log(
+    `PROXYLENS_VISUAL_QA_BACKGROUND_CATALOG catalog=1 rows=${evidence.catalogRows} expected=1 negative=1 boundary=1 estimated=1 phase4a=1 overflow=0`,
+  );
+  return evidence;
+}
+
+function isCompleteBackgroundCatalogEvidence(evidence) {
+  return Boolean(evidence?.hasCatalogSection && evidence.catalogRows === backgroundCatalogExpectedRows.length
+    && evidence.expectedRowsPresent && evidence.negativeRowsAbsent && evidence.hasBoundaryText
+    && evidence.hasObservedPath && evidence.hasEstimatedEvidence && evidence.hasPhase4ASections
+    && evidence.noHorizontalOverflow && evidence.documentNoHorizontalOverflow);
+}
+
+async function assertBackgroundCatalogHistoryDrill(port, locale) {
+  const expectedProcess = 'MsMpEng.exe';
+  const expectedHost = 'defender-antivirus.synthetic.example';
+  await evaluateWebview(port, `(() => {
+    const row = [...document.querySelectorAll('.pl-review__catalog-finding')]
+      .find((candidate) => candidate.textContent.includes(${JSON.stringify(expectedProcess)})
+        && candidate.textContent.includes(${JSON.stringify(expectedHost)}));
+    if (!row) throw new Error('background catalog finding row is unavailable');
+    const button = row.querySelector('button.pl-review__investigate');
+    if (!button) throw new Error('background catalog investigate button is unavailable');
+    button.click();
+    return true;
+  })()`);
+
+  const deadline = Date.now() + 30000;
+  let evidence = null;
+  let lastError = null;
+  const expectedRoute = locale === 'zh-CN' ? '代理' : 'Proxy';
+  while (Date.now() < deadline) {
+    try {
+      evidence = JSON.parse(await evaluateWebview(port, `(() => {
+        const inputs = [...document.querySelectorAll('.pl-history-toolbar input')];
+        const values = inputs.map((input) => input.value);
+        const networkTrigger = document.querySelector('.pl-select-menu--network button[data-value]');
+        const routeTablist = document.querySelectorAll('.pl-context-bar [role="tablist"]')[1];
+        const selectedRoute = routeTablist?.querySelector('[role="tab"][aria-selected="true"] .pl-segmented__label')?.textContent?.trim() || '';
+        const pageText = document.querySelector('.pl-pagination__page')?.textContent || '';
+        const snapshot = document.querySelector('.pl-snapshot-chip');
+        return JSON.stringify({
+          history: Boolean(document.querySelector('.pl-history')),
+          routeProxy: selectedRoute === ${JSON.stringify(expectedRoute)},
+          processFilter: values.includes(${JSON.stringify(expectedProcess)}),
+          hostFilter: values.includes(${JSON.stringify(expectedHost)}),
+          pageOne: /1/.test(pageText),
+          freshSnapshot: Boolean(snapshot && snapshot.textContent.trim()),
+          unrelatedFiltersCleared: values.filter((value) => value !== ${JSON.stringify(expectedProcess)} && value !== ${JSON.stringify(expectedHost)})
+            .every((value) => value === '') && networkTrigger?.dataset.value === '',
+          pageRows: document.querySelectorAll('.pl-history__table-wrap tbody tr').length,
+        });
+      })()`));
+      if (evidence.history && evidence.routeProxy && evidence.processFilter && evidence.hostFilter
+        && evidence.pageOne && evidence.freshSnapshot && evidence.unrelatedFiltersCleared) break;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (!evidence?.history || !evidence?.routeProxy || !evidence?.processFilter || !evidence?.hostFilter
+    || !evidence?.pageOne || !evidence?.freshSnapshot || !evidence?.unrelatedFiltersCleared) {
+    throw new Error(`Background catalog History drill failed: ${JSON.stringify(evidence)}${lastError ? ` (${lastError.message})` : ''}`);
+  }
+  console.log('PROXYLENS_VISUAL_QA_BACKGROUND_CATALOG_DRILL history=1 route=PROXY process=1 target=1 page=1 freshSnapshot=1 unrelatedFilters=0');
   return evidence;
 }
 

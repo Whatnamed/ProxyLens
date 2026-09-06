@@ -238,7 +238,7 @@ real-data validation remains a separate deferred acceptance boundary.
 
 ---
 
-## Phase 4 — Audit Intelligence [IN PROGRESS — 4A + 4B1 + 4B2A COMPLETE]
+## Phase 4 — Audit Intelligence [IN PROGRESS — 4A + 4B1 + 4B2A + 4C1 COMPLETE]
 
 目标：在可靠历史之上，用透明、可解释的规则筛选“值得检查的代理流量”，辅助用户优化分流。
 
@@ -284,9 +284,17 @@ real-data validation remains a separate deferred acceptance boundary.
 - [x] Review host section、`route=PROXY` + recorded-host-seeded contextual History drill、deterministic `review-route-shift` fixture 与 1280×800 / 1600×1000 × EN/ZH × Light/Dark query-only Tauri evidence；
 - [x] 未新增 accounting writer、migration、index 或自动网络动作；
 
-### Phase 4B2B / 4C — Deferred
+### Phase 4C1 — Background/Security Process Catalog Intelligence [COMPLETED]
 
-- [ ] broader historical route-change comparison、first-seen/background-service candidates、suggested rules or scoring；
+- [x] embedded/versioned `background-processes-v1` catalog with exactly three Microsoft Defender entries and official Microsoft Learn provenance；
+- [x] fixed PROXY detector requiring case-insensitive process name plus event-time `process_path` exact/under-directory match；missing/wrong-path/DIRECT cases fail closed；
+- [x] additive `/api/v1/intelligence/findings` knowledge/process-path contract、stable catalog-entry/process/target identity、legacy/v2 equivalence and 10k/100k static timing coverage；
+- [x] dedicated Review section、EN/中文、Light/Dark、process+target History drill、deterministic `review-background-services` fixture and final query-only Tauri 8-state evidence；
+- [x] no filesystem/service/signature inspection, runtime fetch, writer/migration/index, automatic DIRECT rule or network lifecycle；
+
+### Phase 4B2B / 4C2 — Deferred
+
+- [ ] broader historical route-change comparison、canonical target storage/query、suggested rules or scoring；
 - [ ] richer rule/final-proxy/port dimensions、real FLClash/Mihomo and real-data validation；
 - [ ] any automatic configuration or network action remains explicitly out of scope。
 

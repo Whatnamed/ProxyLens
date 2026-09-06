@@ -15,12 +15,12 @@ import (
 var intelligenceTestAnchor = time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)
 
 type intelligenceFixtureEvent struct {
-	id, connectionID, process, host, sniffHost, destinationIP, network, rule, payload string
-	route                                                                             types.RouteType
-	up, down                                                                          int64
-	observedAt                                                                        time.Time
-	precision                                                                         string
-	intervalStart, intervalEnd                                                        *time.Time
+	id, connectionID, process, processPath, host, sniffHost, destinationIP, network, rule, payload string
+	route                                                                                          types.RouteType
+	up, down                                                                                       int64
+	observedAt                                                                                     time.Time
+	precision                                                                                      string
+	intervalStart, intervalEnd                                                                     *time.Time
 }
 
 func TestAuditIntelligenceDetectorSemanticsAndStableIDs(t *testing.T) {
@@ -296,7 +296,7 @@ func buildIntelligenceFixture(t *testing.T, events []intelligenceFixtureEvent, v
 			FrameSequence: int64(index + 1), EventSequence: 1, Timestamp: fixture.observedAt,
 			Type: types.EventConnectionNew, ConnectionID: fixture.connectionID,
 			Route: fixture.route, AttributionClass: types.ClassKnownApplication,
-			Metadata: types.RawMetadata{Process: fixture.process, Host: fixture.host, SniffHost: fixture.sniffHost, DestinationIP: fixture.destinationIP, Network: fixture.network, DestinationPort: "443"},
+			Metadata: types.RawMetadata{Process: fixture.process, ProcessPath: fixture.processPath, Host: fixture.host, SniffHost: fixture.sniffHost, DestinationIP: fixture.destinationIP, Network: fixture.network, DestinationPort: "443"},
 			Rule:     fixture.rule, RulePayload: fixture.payload, Chains: []string{"Node-Test", "ProxyGroup"},
 			DeltaUpload: fixture.up, DeltaDownload: fixture.down,
 			ObservedUploadCounter: fixture.up, ObservedDownloadCounter: fixture.down,

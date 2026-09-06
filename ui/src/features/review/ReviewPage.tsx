@@ -264,6 +264,75 @@ const HostTemporalFindingRow: React.FC<{
   );
 };
 
+const BackgroundCatalogFindingRow: React.FC<{ finding: AuditFinding; onInvestigate: (finding: AuditFinding) => void }> = ({
+  finding,
+  onInvestigate,
+}) => {
+  const { t } = useLocale();
+  const subject = finding.subject;
+  const evidence = finding.evidence;
+  const knowledge = finding.knowledge;
+  const target = findingTargetLabel(finding) || t('review.targetMissing');
+  const estimated = findingIsEstimated(finding);
+  const sourcePublisher = knowledge?.sources.map((source) => source.publisher).filter(Boolean).join(', ') || t('common.notAvailable');
+  return (
+    <article className="pl-review__finding pl-review__catalog-finding">
+      <div className="pl-review__finding-main">
+        <div className="pl-review__finding-heading">
+          <span className="pl-review__kind">{t('review.kindCatalog')}</span>
+          <span className="pl-review__target" title={knowledge?.family}>{knowledge?.family || t('common.notAvailable')}</span>
+          <EvidenceChip
+            kind={estimated ? 'estimated' : 'neutral'}
+            label={estimated ? t('common.estimated') : t('common.exact')}
+            title={estimated ? t('review.intervalEvidence') : t('review.exactEvidence')}
+          />
+        </div>
+        <dl className="pl-review__facts pl-review__catalog-facts">
+          <div>
+            <dt>{t('review.process')}</dt>
+            <dd className="pl-mono" title={subject.process}>{subject.process || t('common.unknown')}</dd>
+          </div>
+          <div>
+            <dt>{t('review.catalogPath')}</dt>
+            <dd className="pl-mono" title={subject.processPath}>{subject.processPath || t('common.notAvailable')}</dd>
+          </div>
+          <div>
+            <dt>{t('review.target')}</dt>
+            <dd className="pl-mono" title={target}>{target}</dd>
+          </div>
+          <div>
+            <dt>{t('review.catalogBytes')}</dt>
+            <dd className="pl-mono">{formatBytes(evidence.totalBytes)}</dd>
+          </div>
+          <div>
+            <dt>{t('review.connections')}</dt>
+            <dd className="pl-mono">{evidence.connectionCount}</dd>
+          </div>
+          <div>
+            <dt>{t('review.catalogSource')}</dt>
+            <dd title={sourcePublisher}>{sourcePublisher}</dd>
+          </div>
+        </dl>
+        <div className="pl-review__why">
+          <span className="pl-review__why-label">{t('review.why')}</span>
+          <span>{t('review.catalogMatchBasis')}</span>
+          <span>{t('review.catalogVerificationBoundary')}</span>
+          <span>{t('review.routeFact', { route: evidence.route })}</span>
+          <span>{t('review.accountedFact', { bytes: formatBytes(evidence.totalBytes) })}</span>
+        </div>
+      </div>
+      <button
+        type="button"
+        className="pl-btn pl-btn--quiet pl-btn--compact pl-review__investigate"
+        onClick={() => onInvestigate(finding)}
+        aria-label={t('review.catalogInvestigateAria', { process: subject.process || t('common.unknown') })}
+      >
+        {t('review.investigate')}
+      </button>
+    </article>
+  );
+};
+
 const FindingRow: React.FC<{ finding: AuditFinding; onInvestigate: (finding: AuditFinding) => void }> = ({
   finding,
   onInvestigate,
@@ -419,6 +488,23 @@ export const ReviewPage: React.FC<{
               <EmptyState title={t('review.noAccountingTitle')} body={t('review.noAccountingBody')} />
             ) : findings ? (
               <>
+                <Section
+                  title={t('review.catalogSection')}
+                  sub={t('review.catalogSectionSub')}
+                  right={<span className="pl-mono pl-small">{findings.countsByKind.cataloged_background_process_proxy ?? 0}</span>}
+                >
+                  {findings.items.filter((item) => item.kind === 'cataloged_background_process_proxy').length === 0 ? (
+                    <div className="pl-review__empty">{t('review.catalogNoMatches')}</div>
+                  ) : (
+                    <div className="pl-review__list">
+                      {findings.items
+                        .filter((item) => item.kind === 'cataloged_background_process_proxy')
+                        .map((finding) => (
+                          <BackgroundCatalogFindingRow key={finding.id} finding={finding} onInvestigate={(item) => investigateFinding(historyFiltersForFinding(item))} />
+                        ))}
+                    </div>
+                  )}
+                </Section>
                 {SECTIONS.map((section) => {
                   const items = findings.items.filter((item) => item.kind === section.kind);
                   return (

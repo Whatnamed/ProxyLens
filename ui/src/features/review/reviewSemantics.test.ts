@@ -85,4 +85,27 @@ describe('Review finding semantics', () => {
       host: 'archive.example',
     });
   });
+
+  it('maps catalog findings to process and the canonical target without rule/network/path filters', () => {
+    const knowledge = {
+      catalogVersion: 'background-processes-v1',
+      entryId: 'microsoft-defender-antivirus-service',
+      category: 'security_service',
+      publisher: 'Microsoft',
+      family: 'Microsoft Defender Antivirus',
+      matchBasis: 'process_name_and_path' as const,
+      sources: [],
+    };
+    const cases: Array<[AuditFinding['subject'], Record<string, string>]> = [
+      [{ process: 'MsMpEng.exe', targetKind: 'host', host: 'defender.example', processPath: 'C:\\synthetic\\MsMpEng.exe' }, { process: 'MsMpEng.exe', host: 'defender.example' }],
+      [{ process: 'MsMpEng.exe', targetKind: 'sniff_host', sniffHost: 'sniff.example', processPath: 'C:\\synthetic\\MsMpEng.exe' }, { process: 'MsMpEng.exe', host: 'sniff.example' }],
+      [{ process: 'MsMpEng.exe', targetKind: 'destination_ip', destinationIp: '192.0.2.9', processPath: 'C:\\synthetic\\MsMpEng.exe' }, { process: 'MsMpEng.exe', destinationIp: '192.0.2.9' }],
+      [{ process: 'MsMpEng.exe', targetKind: 'missing', targetValue: '(missing target evidence)', processPath: 'C:\\synthetic\\MsMpEng.exe' }, { process: 'MsMpEng.exe' }],
+    ];
+    for (const [subject, expected] of cases) {
+      const catalog = { ...finding('cataloged_background_process_proxy', subject, { ...base.evidence, rule: 'DomainSuffix', network: 'tcp' }), knowledge };
+      assert.deepEqual(historyFiltersForFinding(catalog), expected);
+      assert.equal(findingKindKey(catalog.kind), 'review.kindCatalog');
+    }
+  });
 });

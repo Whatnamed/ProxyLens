@@ -5,6 +5,34 @@
 
 ---
 
+## 2026-09-07 — Phase 4C1 Background/Security Process Intelligence
+
+**Scope:** 新增 provenance-backed embedded background process catalog 与当前窗口
+Review context；未启动 Phase 4B2B/4C2，未修改 accounting writer、migration、index
+或任何真实网络生命周期。
+
+**Completed:**
+
+- `background-processes-v1` 仅包含三条 Microsoft Defender entry：`MsMpEng.exe`、
+  `MpDefenderCoreService.exe`、`NisSrv.exe`；source URL 只作为 Microsoft Learn
+  provenance metadata，运行时不 fetch；matcher 使用 O(1) normalized process-name
+  lookup，再执行 exact/under-directory Windows path rule，wrong-path/pathless/DIRECT
+  负例 fail closed；
+- `/api/v1/intelligence/findings` 在既有一次 accounting scan 内新增
+  `cataloged_background_process_proxy`、`processPath`、`knowledge` 与 catalog version；
+  finding identity 排除 path/bytes/count/provenance/live-to，legacy/v2 equivalence 通过；
+- 新增 `review-background-services` fixture：三个且仅三个正例、一个
+  interval-derived 正例及明确 wrong-path/pathless/DIRECT 负例；13:05/13:55 anchor
+  regression、10k/100k static timing、Go/API/UI/Node focused validation 通过；
+- query-only Tauri 8-state（1280×800 / 1600×1000 × EN/中文 × Light/Dark）全部通过：
+  exact viewport、`catalogRows=3`、负例缺失、provenance boundary、estimated evidence、
+  Phase 4A sections、History `PROXY + process + target` drill、无横向溢出，且每态
+  `owner=0 runtime=0 controller=0`、source/copy unchanged；
+- 全程只使用 synthetic/temp/copy DB；未连接真实 Controller、FLClash/Mihomo、production
+  DB，也未进行 filesystem/process/service/signature inspection。
+
+---
+
 ## 2026-09-06 — Phase 4B2A Deterministic Acceptance Closure
 
 **Scope:** 只修正 `review-route-shift` fixture 的完整小时边界、process/host

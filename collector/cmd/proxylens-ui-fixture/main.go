@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled | review | review-temporal | review-temporal-incomplete | review-route-shift")
+	profile := flag.String("profile", "healthy", "Synthetic profile to generate: healthy | gaps | stale | empty | scaled | review | review-temporal | review-temporal-incomplete | review-route-shift | review-background-services")
 	outPath := flag.String("out", "", "Output SQLite database path (e.g. ./fixtures/fixture_healthy.db)")
 	anchorStr := flag.String("anchor", "", "Anchor time in RFC3339 (optional, defaults to current UTC time)")
 	scaleCount := flag.Int("scale", 100000, "Event count for scaled profile (default: 100000)")
@@ -75,8 +75,10 @@ func main() {
 		appendReviewTemporalUnpublishedEvidence(ctx, absPath, anchorTime)
 	case "review-route-shift":
 		generateReviewRouteShift(ctx, absPath, anchorTime)
+	case "review-background-services":
+		generateReviewBackgroundServices(ctx, absPath, anchorTime)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled, review, review-temporal, review-temporal-incomplete, review-route-shift\n", *profile)
+		fmt.Fprintf(os.Stderr, "Unknown profile: %s. Supported: healthy, gaps, stale, empty, scaled, review, review-temporal, review-temporal-incomplete, review-route-shift, review-background-services\n", *profile)
 		os.Exit(1)
 	}
 
@@ -508,6 +510,68 @@ func generateReviewRouteShift(ctx context.Context, dbPath string, anchor time.Ti
 		WHERE session_id = ?;
 	`, startedAt, qaEndAt, lastEventAt, anchor.Format(time.RFC3339Nano), anchor.Format(time.RFC3339Nano), sessionID)
 	checkErr("Normalize review-route-shift visual session", err)
+}
+
+func generateReviewBackgroundServices(ctx context.Context, dbPath string, anchor time.Time) {
+	sessionID := "sess-synthetic-review-background-services"
+	sink, err := storage.OpenSQLiteSink(ctx, dbPath, sessionID, "v1.0.0-synthetic-review-background-services")
+	checkErr("OpenSQLiteSink review-background-services", err)
+
+	// Keep every row inside the current local Today window even when visual QA
+	// is run shortly after local midnight. The runner's query range ends at now,
+	// so this fixture intentionally stays in the preceding 20-minute slice.
+	baseTime := anchor.Add(-20 * time.Minute)
+	seq := int64(1)
+	// Exact positive: Microsoft Defender Antivirus, with a later platform path
+	// version for the same catalog/process/target identity.
+	emitConnEvent(sink, sessionID, 1, &seq, "background-ms-old", types.EventConnectionNew,
+		"MsMpEng.exe", `C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.synthetic-old\MsMpEng.exe`, "defender-antivirus.synthetic.example", "", "203.0.113.201", "443", "tcp", "DomainSuffix", "synthetic.example",
+		types.RouteProxy, []string{"Node-Background-01", "ProxyGroup"}, 1024, 4096, baseTime)
+	emitConnEvent(sink, sessionID, 1, &seq, "background-ms-new", types.EventConnectionNew,
+		"MsMpEng.exe", `C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.synthetic\MsMpEng.exe`, "defender-antivirus.synthetic.example", "", "203.0.113.201", "443", "tcp", "DomainSuffix", "synthetic.example",
+		types.RouteProxy, []string{"Node-Background-01", "ProxyGroup"}, 2048, 8192, baseTime.Add(2*time.Minute))
+	// Exact positive using the documented Program Files path.
+	emitConnEvent(sink, sessionID, 1, &seq, "background-core", types.EventConnectionNew,
+		"MpDefenderCoreService.exe", `C:\Program Files\Windows Defender\MpDefenderCoreService.exe`, "defender-core.synthetic.example", "", "203.0.113.202", "443", "tcp", "DomainSuffix", "synthetic.example",
+		types.RouteProxy, []string{"Node-Background-02", "ProxyGroup"}, 2048, 16384, baseTime.Add(4*time.Minute))
+	// Interval-derived positive exercises the estimated evidence presentation
+	// while keeping the target in the existing sniff_host precedence bucket.
+	intervalStart := baseTime.Add(5 * time.Minute)
+	intervalEnd := baseTime.Add(10 * time.Minute)
+	emitConnEventWithInterval(sink, sessionID, 1, &seq, "background-nis", types.EventConnectionNew,
+		"NisSrv.exe", `C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.synthetic\NisSrv.exe`, "", "defender-network.synthetic.example", "203.0.113.203", "443", "tcp", "DomainSuffix", "synthetic.example",
+		types.RouteProxy, []string{"Node-Background-03", "ProxyGroup"}, 4096, 32768, baseTime.Add(7*time.Minute), intervalStart, intervalEnd)
+
+	// Explicit negatives: same name with a wrong path, missing path, and a
+	// correct catalog identity routed DIRECT. None may enter the catalog section.
+	emitConnEvent(sink, sessionID, 1, &seq, "background-wrong-path", types.EventConnectionNew,
+		"MsMpEng.exe", `C:\Users\Synthetic\Downloads\MsMpEng.exe`, "background-wrong-path.synthetic.example", "", "203.0.113.204", "443", "tcp", "DomainSuffix", "synthetic.example",
+		types.RouteProxy, []string{"Node-Background-04", "ProxyGroup"}, 512, 512, baseTime.Add(12*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "background-missing-path", types.EventConnectionNew,
+		"MsMpEng.exe", "", "background-missing-path.synthetic.example", "", "203.0.113.205", "443", "tcp", "DomainSuffix", "synthetic.example",
+		types.RouteProxy, []string{"Node-Background-05", "ProxyGroup"}, 512, 512, baseTime.Add(13*time.Minute))
+	emitConnEvent(sink, sessionID, 1, &seq, "background-direct", types.EventConnectionNew,
+		"NisSrv.exe", `C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.synthetic\NisSrv.exe`, "background-direct.synthetic.example", "", "203.0.113.206", "443", "tcp", "DomainSuffix", "synthetic.example",
+		types.RouteDirect, []string{"DIRECT"}, 512, 512, baseTime.Add(14*time.Minute))
+
+	checkErr("EndSession review-background-services", sink.EndSession(ctx, sessionID, storage.SessionStatusClosedClean))
+	checkErr("Close sink review-background-services", sink.Close())
+
+	db, err := storage.OpenDB(ctx, dbPath)
+	checkErr("OpenDB review-background-services", err)
+	defer db.Close()
+	_, err = storage.RebuildAccounting(ctx, db, "synthetic background services review profile build")
+	checkErr("RebuildAccounting review-background-services", err)
+
+	startedAt := anchor.Add(-3 * time.Hour).Format(time.RFC3339Nano)
+	lastEventAt := anchor.Add(-time.Hour).Format(time.RFC3339Nano)
+	qaEndAt := anchor.Add(time.Hour).Format(time.RFC3339Nano)
+	_, err = db.ExecContext(ctx, `
+		UPDATE collector_sessions
+		SET started_at = ?, ended_at = ?, last_event_at = ?, last_heartbeat_at = ?, updated_at = ?
+		WHERE session_id = ?;
+	`, startedAt, qaEndAt, lastEventAt, anchor.Format(time.RFC3339Nano), anchor.Format(time.RFC3339Nano), sessionID)
+	checkErr("Normalize review-background-services visual session", err)
 }
 
 func appendReviewTemporalUnpublishedEvidence(ctx context.Context, dbPath string, anchor time.Time) {

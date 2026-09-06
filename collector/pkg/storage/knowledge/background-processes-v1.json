@@ -1,0 +1,68 @@
+{
+  "version": "background-processes-v1",
+  "reviewedAt": "2026-09-06",
+  "sources": {
+    "microsoft-defender-processes": {
+      "publisher": "Microsoft",
+      "title": "Microsoft Defender Antivirus in Windows overview",
+      "url": "https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-antivirus-windows"
+    },
+    "microsoft-defender-connectivity-binaries": {
+      "publisher": "Microsoft",
+      "title": "Microsoft Defender for Endpoint standard connectivity URLs - commercial",
+      "url": "https://learn.microsoft.com/en-us/defender-endpoint/standard-device-connectivity-urls-commercial"
+    }
+  },
+  "entries": [
+    {
+      "id": "microsoft-defender-antivirus-service",
+      "category": "security_service",
+      "publisher": "Microsoft",
+      "family": "Microsoft Defender Antivirus",
+      "processNames": ["MsMpEng.exe"],
+      "pathRules": [
+        {
+          "kind": "under_directory",
+          "directory": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform"
+        }
+      ],
+      "sourceIds": ["microsoft-defender-processes", "microsoft-defender-connectivity-binaries"]
+    },
+    {
+      "id": "microsoft-defender-core-service",
+      "category": "security_service",
+      "publisher": "Microsoft",
+      "family": "Microsoft Defender Core Service",
+      "processNames": ["MpDefenderCoreService.exe"],
+      "pathRules": [
+        {
+          "kind": "under_directory",
+          "directory": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform"
+        },
+        {
+          "kind": "exact",
+          "path": "C:\\Program Files\\Windows Defender\\MpDefenderCoreService.exe"
+        }
+      ],
+      "sourceIds": ["microsoft-defender-processes", "microsoft-defender-connectivity-binaries"]
+    },
+    {
+      "id": "microsoft-defender-network-inspection-service",
+      "category": "security_service",
+      "publisher": "Microsoft",
+      "family": "Microsoft Defender Network Inspection Service",
+      "processNames": ["NisSrv.exe"],
+      "pathRules": [
+        {
+          "kind": "under_directory",
+          "directory": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform"
+        },
+        {
+          "kind": "exact",
+          "path": "C:\\Program Files\\Windows Defender\\NisSrv.exe"
+        }
+      ],
+      "sourceIds": ["microsoft-defender-connectivity-binaries"]
+    }
+  ]
+}

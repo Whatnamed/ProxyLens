@@ -7,13 +7,13 @@
 
 ## Current State
 
-- **当前阶段**：Phase 4A Audit Intelligence Foundation、Phase 4B1 Temporal Process Intelligence 与 Phase 4B2A Host Route Transition complete。此前 Phase 3S Production Storage & Accounting Scale Closure、Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力、交互与 query-only Tauri multi-fixture visual acceptance 已完成，Design System v1 已 Frozen；真实 FLClash/Mihomo 与 real-data validation 仍 Deferred。
+- **当前阶段**：Phase 4A Audit Intelligence Foundation、Phase 4B1 Temporal Process Intelligence、Phase 4B2A Host Route Transition 与 Phase 4C1 Provenance-backed Background/Security Process Intelligence complete。此前 Phase 3S Production Storage & Accounting Scale Closure、Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力、交互与 query-only Tauri multi-fixture visual acceptance 已完成，Design System v1 已 Frozen；真实 FLClash/Mihomo 与 real-data validation 仍 Deferred。
 - **代码线**：以当前 checkout 的 Git HEAD 及其相对 `origin/main` 的关系为准；活动分支名和短期 SHA 不在此处硬编码。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
 - **Closure**：既有 Phase 3 / Phase 4A / Phase 4B1 代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 `main`；当前 checkout 继续记录 Phase 4B2A 的独立收口状态。
 - **当前状态与待办**：
   1. 真实 FLClash/Mihomo lifecycle 与 real-data visual acceptance（Deferred：本阶段只使用 query-only synthetic fixtures）。
-  2. Phase 4B2B/4C Audit Intelligence enhancements 尚未开始；真实 FLClash/Mihomo 与 real-data validation 仍单独 Deferred。
+  2. Phase 4B2B/4C2 Audit Intelligence enhancements 尚未开始；真实 FLClash/Mihomo 与 real-data validation 仍单独 Deferred。
 
 ### Phase 4A Audit Intelligence Foundation (Complete)
 
@@ -22,7 +22,7 @@
 - 已新增 Review top-level workspace（Overview → Review → History → Coverage）与 exact Rule History 下钻，沿用现有 Time Range、EN/中文、Light/Dark 和 query-only read-only boundary；
 - detector comparison 使用 normalized Rule 副本，不改写 raw Rule/RulePayload；History drill 只携带 detector-relevant filters，large physical finding ID 只使用 session/epoch/connection identity，不受 mutable display metadata 影响；
 - `review` synthetic fixture、10k/100k timing evidence 与 1280×800 / 1600×1000 × EN/ZH × Light/Dark 八态真实 Tauri query-only acceptance 已完成；Runner evidence 记录 actual viewport、locale/theme/view、source/copy SHA 与 `owner=0 runtime=0 controller=0`；
-- 1.5M E-drive scale acceptance 与 Phase 3S 保持独立；本阶段未启动 Phase 4B2B/4C、真实 Controller 或任何网络生命周期。
+- 1.5M E-drive scale acceptance 与 Phase 3S 保持独立；本阶段未启动 Phase 4B2B/4C2、真实 Controller 或任何网络生命周期。
 
 ### Phase 4B1 Temporal Process Intelligence (Complete)
 
@@ -33,7 +33,7 @@
 - temporal read path 复用 active v2 / completed legacy hourly authority，一窗一条 grouped query；legacy/v2 等价性、coverage-negative、10k/100k high-cardinality 与 indexed EQP 聚焦测试通过，未修改 accounting writer、migration 或 production storage implementation；
 - Review 已集成 temporal comparison 与 process + fixed PROXY History drill；`review-temporal` synthetic fixture 只通过 copied temporary DB 用于 query-only Tauri acceptance；
 - 真实 Tauri temporal matrix：1280×800 与 1600×1000 × EN/中文 × Light/Dark 全部通过，actual viewport、temporal rows、Investigate actions、无横向溢出、source/copy SHA 不变及 `owner=0 runtime=0 controller=0` 均有 evidence；
-- Phase 4B2B 的 broader first-seen/background-service 扩展与 Phase 4C 仍未开始，不把它们当作本阶段已实现能力。
+- Phase 4B2B 的 broader historical target 扩展与 Phase 4C2 rule suggestions 仍未开始；Phase 4C1 catalog 能力不替代这些后续契约。
 
 ### Phase 4B2A Host Route Transition (Complete)
 
@@ -41,7 +41,16 @@
 - host detector 只使用 event-time 已记录的非空 `host`：baseline DIRECT>0、baseline PROXY=0、recent PROXY>0；recent DIRECT/REJECT 证据保留并明确 mixed routing，不推断全部切换；stable ID 为 detector kind + exact host，排序为 recent PROXY bytes desc / host asc；
 - Review 已增加 host temporal section 与 `route=PROXY` + recorded-host-seeded contextual History 下钻；现有 History host search 继续同时匹配 `host` / `sniff_host` 的 substring 语义；`review-route-shift` fixture 仅用于 copied temporary DB query-only acceptance；
 - 1280×800 / 1600×1000 × EN/中文 × Light/Dark 的最终 route-shift query-only Tauri 八态均已验证 exact 四 host findings、负例缺失、temporal process/host rows、mixed/estimated evidence、Phase 4A sections、History host drill、viewport/overflow、source/copy SHA 与 `owner=0 runtime=0 controller=0`；
-- 本阶段未修改 accounting writer、migration、index、真实 Controller 或网络生命周期；Phase 4B2B/4C 继续 Deferred。
+- 本阶段未修改 accounting writer、migration、index、真实 Controller 或网络生命周期；Phase 4B2B/4C2 继续 Deferred。
+
+### Phase 4C1 Provenance-backed Background/Security Process Intelligence (Complete)
+
+- 已新增 embedded/versioned `background-processes-v1` catalog，生产 catalog 严格只有 `MsMpEng.exe`、`MpDefenderCoreService.exe`、`NisSrv.exe` 三条 Microsoft Defender entry；source URL 仅作 Microsoft Learn provenance metadata，运行时不 fetch；
+- catalog matching 使用 normalized process name 的 O(1) candidate lookup，再检查 event-time `process_path` 的 case-insensitive exact / under-directory 规则；missing path、wrong path、DIRECT 与 `svchost.exe` 等未审 entry 不匹配；不读 filesystem、不查 service/signature、不改 writer/migration/index；
+- `/api/v1/intelligence/findings` 在现有一次 accounting scan 内新增 `cataloged_background_process_proxy`、`subject.processPath`、`knowledge` 与 `knowledgeCatalogVersion`；finding identity 为 catalog entry + normalized process + Phase 4 target bucket，排除 path/bytes/count/provenance/live-to；legacy/v2 等价；
+- Review 已新增后台 / 安全服务目录匹配 section，保持中性 evidence 语义（catalog match ≠ signature verification），History 下钻只携带 `route=PROXY`、process 与现有 target context；EN/中文、Light/Dark 与 Design System v1 Frozen 保持一致；
+- `review-background-services` fixture 精确包含三个正例、wrong-path/pathless/DIRECT 负例和一个 interval-derived 正例；13:05/13:55 anchor regression、10k/100k static timing、Go/API/UI/Node checks 与 1280×800 / 1600×1000 × EN/中文 query-only Tauri 八态均通过；每态 owner/runtime/controller=0，source/copy unchanged；
+- 本阶段未连接真实 Controller、FLClash/Mihomo、production DB 或 Windows process/service；Phase 4B2B / Phase 4C2 rule suggestions 继续 Deferred。
 
 ### Phase 3E-1 Runtime Core (Complete)
 

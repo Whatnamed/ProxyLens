@@ -1,6 +1,6 @@
 # ProxyLens Audit Intelligence v1
 
-- **Status**: Phase 4A foundation, Phase 4B1 temporal process intelligence, and Phase 4B2A host-route transition complete; Phase 4B2B/4C deferred
+- **Status**: Phase 4A foundation, Phase 4B1 temporal process intelligence, Phase 4B2A host-route transition, and Phase 4C1 background-process catalog intelligence complete; Phase 4B2B/4C2 deferred
 - **Scope**: deterministic, read-only Review workspace over reconciled accounting
 - **Authority**: the active v2 accounting generation, otherwise the latest completed legacy run
 
@@ -148,6 +148,34 @@ History adds one narrow exact `rule` filter for Review investigation. Rule
 payload, final proxy, port filtering, sorting changes, and arbitrary detector
 query languages remain out of scope.
 
+### 3.2 Background/security process catalog (Phase 4C1)
+
+The same `GET /api/v1/intelligence/findings` scan also produces the additive
+detector `cataloged_background_process_proxy`. It is fixed to positive accounted
+`PROXY` traffic in the selected `[from,to)` window and requires an exact
+case-insensitive process-name match plus an event-time `process_path` match in
+the embedded, versioned `background-processes-v1` catalog. Missing paths and
+same-name paths outside the catalog rule are excluded; matching uses an O(1)
+normalized process-name candidate lookup followed by exact or
+under-directory Windows path rules.
+
+The v1 production catalog contains exactly three Microsoft Defender entries:
+`MsMpEng.exe`, `MpDefenderCoreService.exe`, and `NisSrv.exe`, backed by the
+official Microsoft Learn sources recorded in `docs/background-process-catalog-v1.md`.
+The result adds `knowledgeCatalogVersion`, `subject.processPath`, and a
+provenance `knowledge` object containing catalog family, entry, match basis,
+and source metadata. Findings aggregate by catalog entry, normalized process,
+and the existing target precedence `host → sniff_host → destination_ip →
+missing`; their IDs exclude process path, bytes, counts, provenance URL, review
+date, catalog version, and live query end.
+
+A catalog match is descriptive context only. It does not verify an executable
+signature, assert trust/safety or foreground/background state, imply
+maliciousness, or recommend DIRECT. No filesystem, service manager,
+Authenticode, remote source fetch, writer, migration, index, or new endpoint is
+involved. History investigation carries only `route=PROXY`, process, and the
+existing target context; it does not add a process-path filter.
+
 ## 4. UI and investigation flow
 
 The top-level order is `Overview → Review → History → Coverage`. Review shares
@@ -177,12 +205,15 @@ general-purpose time-series explorer.
 
 ## 5. Fixtures and acceptance
 
-The `review`, `review-temporal`, and `review-route-shift` fixtures are
-synthetic and deterministic. The route-shift fixture includes positive and
+The `review`, `review-temporal`, `review-route-shift`, and
+`review-background-services` fixtures are synthetic and deterministic. The
+route-shift fixture includes positive and
 negative direct-to-PROXY host cases, mixed recent routing, long recorded host
 identities, interval-derived bytes, process comparison cases, and the Phase 4A
-examples. They are used only through copied temporary DBs in query-only Tauri
-visual QA.
+examples. The background-services fixture has exactly three positive catalog
+rows, wrong-path/pathless/DIRECT negatives, one interval-derived positive, and
+a 13:05/13:55 anchor regression. All are used only through copied temporary
+DBs in query-only Tauri visual QA.
 
 The Phase 4B1 visual gate covers the temporal Review at 1280×800 and
 1600×1000 in EN/ZH × Light/Dark. The runner records requested size, actual CDP
@@ -201,7 +232,8 @@ acceptance remains independent.
 ## 6. Deferred boundary
 
 Phase 4B2A is limited to the delivered recorded-host direct-to-PROXY
-comparison. Phase 4B2B/4C are not started. Future candidates such as broader
-first-seen/background-service semantics, rule suggestions, final-proxy
-analysis, scoring, and real FLClash/Mihomo validation require separate evidence
-and contracts. They must not be inferred from this foundation.
+comparison. Phase 4B2B remains deferred for broader historical target
+semantics. Phase 4C1 is limited to the embedded provenance-backed catalog;
+Phase 4C2 rule suggestions, final-proxy analysis, scoring, and real
+FLClash/Mihomo validation require separate evidence and contracts. They must
+not be inferred from this foundation.

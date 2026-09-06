@@ -12,6 +12,7 @@
  * - review  : deterministic candidates for all four Phase 4A detector families
  * - review-temporal : Phase 4B1 comparison fixture plus Phase 4A candidates
  * - review-temporal-incomplete : same fixture with unpublished journal evidence for unavailable-state QA
+ * - review-background-services : exact three provenance-backed catalog positives plus path/route negatives
  */
 
 import { execFileSync } from 'node:child_process';
@@ -28,7 +29,7 @@ if (!fs.existsSync(fixtureDir)) {
   fs.mkdirSync(fixtureDir, { recursive: true });
 }
 
-const profiles = ['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete', 'review-route-shift'];
+const profiles = ['healthy', 'gaps', 'stale', 'empty', 'scaled', 'review', 'review-temporal', 'review-temporal-incomplete', 'review-route-shift', 'review-background-services'];
 
 console.log('================================================================');
 console.log('Generating Deterministic Synthetic UI Fixtures');

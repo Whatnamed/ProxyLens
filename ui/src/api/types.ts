@@ -210,10 +210,12 @@ export type AuditFindingKind =
   | 'match_fallback_proxy'
   | 'broad_udp_proxy'
   | 'ip_only_proxy_target'
-  | 'large_proxy_connection';
+  | 'large_proxy_connection'
+  | 'cataloged_background_process_proxy';
 
 export interface AuditFindingSubject {
   process?: string;
+  processPath?: string;
   host?: string;
   sniffHost?: string;
   destinationIp?: string;
@@ -246,11 +248,28 @@ export interface AuditFindingConnectionKey {
   connectionId: string;
 }
 
+export interface AuditFindingKnowledgeSource {
+  publisher: string;
+  title: string;
+  url: string;
+}
+
+export interface AuditFindingKnowledge {
+  catalogVersion: string;
+  entryId: string;
+  category: string;
+  publisher: string;
+  family: string;
+  matchBasis: 'process_name_and_path';
+  sources: AuditFindingKnowledgeSource[];
+}
+
 export interface AuditFinding {
   id: string;
   kind: AuditFindingKind;
   subject: AuditFindingSubject;
   evidence: AuditFindingEvidence;
+  knowledge?: AuditFindingKnowledge;
   sampleConnection?: AuditFindingConnectionKey;
 }
 
@@ -259,6 +278,7 @@ export interface AuditFindingResult {
   to: string;
   route: 'PROXY';
   accountingVersion: string;
+  knowledgeCatalogVersion?: string;
   items: AuditFinding[];
   countsByKind: Partial<Record<AuditFindingKind, number>>;
   limitPerKind: number;

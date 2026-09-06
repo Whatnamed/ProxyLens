@@ -162,7 +162,7 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 }
 ```
 
-### 3.7 Audit Intelligence Review Findings (Phase 4A)
+### 3.7 Audit Intelligence Review Findings (Phase 4A / Phase 4C1)
 
 `GET /api/v1/intelligence/findings?from=<rfc3339>&to=<rfc3339>&limitPerKind=20`
 
@@ -171,6 +171,9 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 - `limitPerKind` defaults to 20 and is bounded to 1–50;
 - response items are deterministic, structured detector facts; no score or severity is returned;
 - interval-derived portions are separated from exact accounted bytes;
+- `cataloged_background_process_proxy` is an additive kind. Matching items may
+  include `subject.processPath` and a provenance `knowledge` object; the
+  top-level `knowledgeCatalogVersion` identifies the embedded catalog;
 - the endpoint is GET-only, Bearer/CORS protected, and uses the standard `NO_COMPLETED_ACCOUNTING_RUN` / `QUERY_FAILED` error envelope.
 
 ```json
@@ -179,16 +182,25 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
   "to": "2026-09-07T00:00:00Z",
   "route": "PROXY",
   "accountingVersion": "v2-incremental",
+  "knowledgeCatalogVersion": "background-processes-v1",
   "countsByKind": {
     "match_fallback_proxy": 1,
     "broad_udp_proxy": 1,
     "ip_only_proxy_target": 1,
-    "large_proxy_connection": 1
+    "large_proxy_connection": 1,
+    "cataloged_background_process_proxy": 1
   },
   "items": [],
   "limitPerKind": 20
 }
 ```
+
+For a catalog finding, `subject.processPath` is the latest matching observed
+path used for display, not part of finding identity. `knowledge` contains
+`catalogVersion`, `entryId`, `category`, `publisher`, `family`,
+`matchBasis=process_name_and_path`, and source publisher/title/URL metadata.
+The object is provenance context, not a trust, signature, safety, severity, or
+routing decision. The endpoint does not fetch source URLs.
 
 ### 3.8 Temporal Process Changes (Phase 4B1)
 
