@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-09-08 — Core V1 Post-RC Audit Closure
+
+逐项验证 post-RC 审计后，修复 Connection Detail legacy-only authority 与 History
+timestamp tie ordering；API 回归覆盖 v2-only、legacy equivalence/fallback、复合身份和
+分页，原 HEAD 失败、修复后通过。当前产品/API/installed 状态文档已同步。
+Go/UI/Node 检查与正式 `0.7.0` NSIS build 通过；正常 installed upgrade 后，真实
+v2-only Inspector 八条事件和完整汇总与 SQL 一致，UI close 后后台 owner 保持。
+详情分页经用户确认单独后续处理；坏帧 Coverage、retention/runway、CI 仍为独立建议项。
+完整 closure 与替代内部产物证据见
+[post-RC audit closure](acceptance/core-v1-post-rc-audit-closure-2026-09-08.md)。
+
 ## 2026-09-07 — V1 Core Release Candidate Closure
 
 **Scope:** 在已完成的 Phase 4 Core V1 / Phase 4E-C 基线上完成一次 release-candidate

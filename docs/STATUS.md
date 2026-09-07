@@ -13,7 +13,16 @@
 - **Closure**：既有 Phase 3 / Phase 4A / Phase 4B1 / Phase 4B2A / Phase 4C1 代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 main；Phase 4D 与 Phase 3E-R1.1 分别提交了脱敏 real-data/query-only 与 installed-environment acceptance 证据，Phase 4E-C 又在正式 current-user NSIS lifecycle 后完成 installed renderer、P3 Review 与 UI-close owner survival 验收；全程不改变真实 FLClash/Mihomo 配置或网络路径。
 - **当前状态与待办**：
   1. Phase 3E-R1.1 与 Phase 4E-C installed-environment acceptance 已完成；后续任何真实 Controller/FLClash/Mihomo 变更仍需独立安全预检，并继续保持只读观察边界。
-  2. Phase 4B2B/4C2 Audit Intelligence enhancements 尚未开始，继续 Deferred/Later；RC 等待 review，不创建 tag、GitHub Release 或外部发布 installer。
+  2. Phase 4B2B/4C2 Audit Intelligence enhancements 尚未开始，继续 Deferred/Later；2026-09-07 内部 RC 已接受，post-RC audit 修复与产物验证另行记录；不创建 tag、GitHub Release 或外部发布 installer。
+
+### Core V1 Post-RC Audit Closure (2026-09-08)
+
+- 已在原审计同一 HEAD 逐项复核：Connection Detail 的 legacy-only 读取缺陷已修复，复用 Analytics/Review active v2 → completed legacy 权威解析器；保留三元组隔离、无核算时详情可用与完整 summary，不改 writer/schema/migration。
+- History 同时间戳排序增加 session/epoch/connection 稳定次序；新增回归在旧 HEAD 复现失败、修复后通过。PRODUCT/README temporal/catalog 范围、API schema/authority 与当前 installed acceptance 文档已对齐。
+- Go 全量测试/vet、UI 103 tests/build、Node 24 tests、正式 Tauri/NSIS build 通过；新 `0.7.0` 内部产物已通过正常 current-user upgrade 和真实 installed Inspector → SQL 对照。UI 关闭后 Query API 退出、Supervisor/Runtime 保持。
+- 原 2026-09-07 RC 产物与历史报告保留；替代产物、逐项 closure 与验证证据见 [post-RC audit closure](acceptance/core-v1-post-rc-audit-closure-2026-09-08.md)。公共签名/tag/GitHub Release/外部发布仍 Deferred。
+- 有意保留：详情/原始帧全量返回（用户确认后续单独分页）、坏帧 Coverage hardening、raw retention/disk-runway 产品决策、CI/branch protection。真实库最大连接 12,044 条 v2 事件，约 5.38 MB positional JSON 样本；不是 HTTP DTO 大小或渲染耗时承诺。后续分页必须保持独立完整 summary，不能静默截断证据。
+- 验证限制：额外 live read-only 全库 `quick_check` 达到 90s 上限后中断，未获得本轮完整性结论；不沿用旧 RC 的 `ok` 冒充本轮结果。定向 SQL/API/Inspector 验证通过。
 
 ### Phase 4A Audit Intelligence Foundation (Complete)
 
@@ -339,7 +348,7 @@
 
 ## Next Step
 
-1. 等待 V1 Core RC review；保持 `0.7.0` package version，不创建 tag/GitHub Release，不外部发布 installer。
+1. 保持已接受内部 RC 的 `0.7.0` package version；post-RC 修复产物须独立构建/验证，不改写旧产物的历史验收结论；不创建 tag/GitHub Release，不外部发布 installer。
 2. Phase 4B2B / Phase 4C2 继续按 `ROADMAP.md` Deferred/Later；不得为了补齐路线图而伪造新搜索维度、规则建议或网络动作。
 3. 继续保持本轮已冻结的 Design System v1 与现有只读边界；未来任何真实 FLClash/Mihomo 配置或网络路径需求必须另立安全预检。
-3. Phase 3S 正确性收口（11 blocker）已完成并提交；生产库迁移/revalidation 与 R1.1 installed acceptance 结果保持有效，生产 active generation 无需 repair。如恢复长期常驻采集，由用户明确决定，不自行动恢复。
+4. Phase 3S 正确性收口（11 blocker）已完成并提交；生产库迁移/revalidation 与 R1.1 installed acceptance 结果保持有效，生产 active generation 无需 repair。历史 Phase 3S 结束时的 collection stopped 状态已被后续 R1.1 / 4E-C / RC installed running 验证取代；以实际 owner 状态为准。

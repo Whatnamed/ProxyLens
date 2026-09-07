@@ -152,6 +152,7 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
 
 ### 3.6 Connection List
 `GET /api/v1/connections?from=...&to=...&route=...&process=...&host=...&destinationIp=...&network=...&rule=...&limit=50&offset=0`
+- 排序为 `first_observed_at DESC, session_id ASC, epoch_id ASC, connection_id ASC`，同一时间戳下使用复合身份稳定排序；offset/hasMore 契约不变，不承诺跨请求的数据库事务快照。
 - **Response**:
 ```json
 {
