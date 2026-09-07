@@ -29,7 +29,7 @@ Phase 3E Desktop Runtime Integration              [COMPLETED — CORE + R1.1 rea
    ↓
 Phase 3S Production Storage & Accounting Scale    [COMPLETED]
    ↓
-Phase 4  Audit Intelligence                       [IN PROGRESS — 4A + 4B1 + 4B2A + 4C1 + 4D COMPLETE]
+Phase 4  Audit Intelligence                       [COMPLETED — CORE V1]
    ↓
 Later    长期增强                                 [PLANNED]
 ```
@@ -247,7 +247,7 @@ network path.
 
 ---
 
-## Phase 4 — Audit Intelligence [IN PROGRESS — 4A + 4B1 + 4B2A + 4C1 + 4D COMPLETE]
+## Phase 4 — Audit Intelligence [COMPLETED — CORE V1]
 
 目标：在可靠历史之上，用透明、可解释的规则筛选“值得检查的代理流量”，辅助用户优化分流。
 
@@ -308,6 +308,13 @@ network path.
 - [x] static detector sampling 与独立 SQL 交叉核验完成；真实窗口的 temporal readiness 因 monitoring gaps 正确保持 unavailable，未新增 threshold、catalog、index、migration 或 accounting 设计；
 - [x] 两次真实 Tauri query-only spot check（1600×1000 EN Light、1280×800 中文 Dark）验证 Review、IP-only → History drill、长字段布局、无横向溢出、copy unchanged 与 `owner=0 runtime=0 controller=0`；
 - [x] 脱敏 acceptance report 已提交；Phase 4B2B/4C2 继续 Deferred；installed FLClash/Mihomo real-environment acceptance 已由独立 Phase 3E-R1.1 收口。
+
+### Phase 4E-C — Production UI Continuation & Core V1 Closure [COMPLETED — CORE V1]
+
+- [x] exact production preflight、normal current-user NSIS upgrade 与正式 graceful quiesce/reconcile lifecycle；
+- [x] installed binary/config/task/owner verification、schema 9、active v2、只读 `quick_check=ok` 与 post-upgrade accounting resume；
+- [x] installed WebView2 renderer focused CDP acceptance、Review P3 `2/3/0`、single process History drill、UI-close owner survival；
+- [x] Phase 4 Core V1 closure；Phase 4B2B / Phase 4C2 remain Deferred/Later and are not V1 closure blockers；下一步为 V1 Release Candidate Closure。
 
 ### Phase 4B2B / 4C2 — Deferred
 

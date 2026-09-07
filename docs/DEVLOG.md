@@ -5,6 +5,38 @@
 
 ---
 
+## 2026-09-07 — Phase 4E-C Production UI Continuation & Core V1 Closure
+
+**Scope:** 在已审查并合入 main 的 installed blank-render CSP fix 之上，完成一次
+正式 current-user production NSIS upgrade、installed Review UI focused acceptance 与
+Phase 4 Core V1 scope decision；不重跑 temporal SQL/oracle、full UI matrix、Phase 3S、
+R1/R1.1 recovery 或 B2B/C2 fixtures。
+
+**Completed:**
+
+- exact production preflight 通过：Task enabled/running、current-user
+  Interactive/Limited、one Supervisor + one Runtime、schema 9、active v2、只读
+  `quick_check=ok`、磁盘 guard 与 config/credential presence 基线均正常；
+- normal NSIS artifact `80A45EDCBF8FB4DD4EA2B8BA0A62B6CC6C1661D3C23A62926036002CFB2AFCC6`
+  通过正式 `unregister → graceful stop → replace → reconcile` lifecycle 安装；
+  Supervisor/Runtime/Query API hash exact match，desktop 仅有 Tauri NSIS bundle marker
+  的三字节 `UNK → NSS` 归一化差异；未读取 Secret；
+- 真实 installed WebView2/CDP 观察到 `http://tauri.localhost/`、complete document、
+  `#root`、app shell、Query API ready、zero captured CDP errors 与无横向溢出；复用
+  P3 real pair 得到 Review new/growth/host=`2/3/0`，一个 process finding 成功进入
+  `route=PROXY` History drill；
+- desktop 正常关闭后 Query API 消失，Supervisor/Runtime/Collector 保持运行，
+  v2 publication 与 raw/accounted totals 继续健康；升级期间预期 Monitoring Gap 被
+  接受，未做任何 FLClash/Mihomo 或系统网络路径动作。
+
+**Decision:** Phase 4 Audit Intelligence = **COMPLETED — CORE V1**；Phase 4B2B /
+Phase 4C2 = **DEFERRED / LATER**；下一步为 V1 Release Candidate Closure。后台
+Supervisor/Runtime console window 可见性保留为非阻塞 RC 项。
+
+**Evidence:** `docs/acceptance/phase4e-continuous-real-history-temporal-revalidation-2026-09-07.md`。
+
+---
+
 ## 2026-09-07 — Installed Desktop Blank-Render P1 Closure
 
 **Scope:** 只处理安装版 Tauri renderer 的空白窗口故障；不重跑 Phase 4E temporal
