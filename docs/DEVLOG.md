@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-09-07 — Phase 3E-R1.1 Real Installed Environment Acceptance
+
+**Scope:** 独立延续原 R1 的 installed-environment acceptance，只收口两个已审查的
+ownership P1：Task Scheduler 周期 recovery 与 Runtime-active 时 NSIS fail-closed。
+不重跑 R1 Gate 1/2、migration、Phase 3S、Phase 4 或完整 UI matrix。
+
+**Completed:**
+
+- 重新核实原 Supervisor-absent / orphan Runtime blocked state；先 exact unregister
+  `\ProxyLens\Background Supervisor`，再只终止重新核验过的 exact ProxyLens Runtime
+  PID；三次 30 秒 quiescence sample 后建立新的 production DB/WAL safety point，
+  source/backup SHA-256 一致；原 blocked branch 与历史 evidence 未改动；
+- 从当前 main 构建并安装 current-user NSIS，task readback 通过 current-user /
+  Interactive / Limited、LogonTrigger + TimeTrigger、无限 `PT1M` repetition、
+  `IgnoreNew`、无 `RestartOnFailure`、无 Secret arguments；
+- 10 分钟以上 installed stabilization 中 journal、heartbeat、v2 publication 与
+  raw/accounted totals 持续推进；UI close/reopen 保持 Query API 与 Supervisor/Runtime
+  分离；Runtime exact-PID crash recovery 通过；
+- exact Supervisor PID crash 后没有手动 `Run()` 或第二个 restart aid，下一次 Task
+  Scheduler repetition 在 90 秒内拉起新 Supervisor，Runtime PID 保持不变，最终
+  exactly one Supervisor + one Runtime，task healthy；schema 9 与只读 `quick_check`
+  均通过；
+- 脱敏报告见 `docs/acceptance/phase3e-r1-1-real-installed-environment-acceptance-2026-09-07.md`。
+
+**Safety:** R1.1 未请求真实 Controller、未访问 `7988`，未启动/停止/修改
+FLClash/Mihomo/TUN/系统代理/DNS/路由/规则；只终止 exact recorded ProxyLens PIDs，
+并将 installed owner 留在运行状态持续积累 Coverage。Phase 4E 未启动。
+
+---
+
 ## 2026-09-07 — Phase 4D Real-Data Audit Intelligence Validation
 
 **Scope:** 在 production writer、Task Scheduler owner、WAL 与 DB mtime 静止后，使用
@@ -27,8 +57,8 @@ index、migration 设计或任何网络生命周期。
   Review、IP-only → History drill、长字段布局、无横向溢出、analysis copy unchanged
   与 `owner=0 runtime=0 controller=0`；
 - 脱敏报告见 `docs/acceptance/phase4d-real-data-audit-intelligence-validation-2026-09-07.md`。
-  Phase 4B2B/4C2 与 installed FLClash/Mihomo/live Controller real-environment
-  validation 继续 Deferred。
+  Phase 4B2B/4C2 继续 Deferred；installed real-environment validation 随后由独立
+  Phase 3E-R1.1 continuation 收口。
 
 ---
 

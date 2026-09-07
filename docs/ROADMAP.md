@@ -25,7 +25,7 @@ Phase 2  持久化、核算与运行时验证                  [COMPLETED]
    ↓
 Phase 3  审计 UI                                  [COMPLETED — CORE V1]
    ↓
-Phase 3E Desktop Runtime Integration              [CORE COMPLETE — real-environment validation deferred]
+Phase 3E Desktop Runtime Integration              [COMPLETED — CORE + R1.1 real installed acceptance]
    ↓
 Phase 3S Production Storage & Accounting Scale    [COMPLETED]
    ↓
@@ -164,10 +164,12 @@ Later    长期增强                                 [PLANNED]
 - [ ] 必要时针对大数据量做虚拟化或渲染优化；
   - [ ] 桌面应用图标与启动性能最终打磨；
 
-### Phase 3E — Desktop Runtime Integration [CORE COMPLETE — REAL-ENVIRONMENT VALIDATION DEFERRED]
+### Phase 3E — Desktop Runtime Integration [COMPLETED — CORE + R1.1 REAL INSTALLED ACCEPTANCE]
 
-Phase 3E runtime and installed lifecycle core is complete. Real FLClash/Mihomo and
-real-data validation remains a separate deferred acceptance boundary.
+Phase 3E runtime and installed lifecycle core, ownership recovery, and the R1.1
+real installed-environment acceptance are complete. ProxyLens remains a read-only
+observer: it does not own or mutate FLClash/Mihomo configuration or the system
+network path.
 
 已完成 Phase 3E-1：
 
@@ -210,7 +212,14 @@ real-data validation remains a separate deferred acceptance boundary.
 - [x] effective-source metadata、strict bounded stdin config apply、keep / replace / clear Secret contract、safe rollback 与 saved-pending-restart state；
 - [x] developer checkout installed-layout gate、exact lifecycle rebootstrap、autostart-only non-disruption 与 EN / 中文、Light / Dark utility-dialog states；
 - [x] mock-only installed product acceptance：random mock Controller、random WinCred/task identities、Secret replacement、autostart false → true、UI-close survival 与 same-DB preservation；
-- [ ] real FLClash/Mihomo validation 与 real-data visual acceptance（Deferred；synthetic query-only visual acceptance 已完成）。
+
+#### Phase 3E-R1.1 — Real Installed Environment Acceptance [COMPLETED]
+
+- [x] 原 Supervisor Task recovery blocker 通过 production-equivalent LogonTrigger + periodic TimeTrigger、无限 `PT1M` repetition、`IgnoreNew` contract 收口；
+- [x] exact orphan Runtime recovery、fresh production DB/WAL safety point、current-user NSIS install 与 installed Task readback；
+- [x] 10 分钟以上 continuous stabilization、UI close/reopen owner survival、Runtime exact-PID recovery 与 Supervisor exact-PID recovery（Runtime PID continuity）；
+- [x] schema 9 / active v2 / `quick_check=ok` / raw-accounted consistency 与 final installed running state；脱敏报告见 `docs/acceptance/phase3e-r1-1-real-installed-environment-acceptance-2026-09-07.md`；
+- [x] 继续保持安全边界：不连接真实 Controller、不修改 FLClash/Mihomo/TUN/系统代理/DNS/路由/规则，不启动 Phase 4E。
 
 ---
 
@@ -298,12 +307,12 @@ real-data validation remains a separate deferred acceptance boundary.
 - [x] current-main Query API 以 `mode=ro` + `query_only=ON` 完成真实 5+ GB 数据的 schema、authority、coverage、summary、findings、temporal 与 connections 读取性能验证；
 - [x] static detector sampling 与独立 SQL 交叉核验完成；真实窗口的 temporal readiness 因 monitoring gaps 正确保持 unavailable，未新增 threshold、catalog、index、migration 或 accounting 设计；
 - [x] 两次真实 Tauri query-only spot check（1600×1000 EN Light、1280×800 中文 Dark）验证 Review、IP-only → History drill、长字段布局、无横向溢出、copy unchanged 与 `owner=0 runtime=0 controller=0`；
-- [x] 脱敏 acceptance report 已提交；Phase 4B2B/4C2 与 installed FLClash/Mihomo/live Controller real-environment validation 继续 Deferred；
+- [x] 脱敏 acceptance report 已提交；Phase 4B2B/4C2 继续 Deferred；installed FLClash/Mihomo real-environment acceptance 已由独立 Phase 3E-R1.1 收口。
 
 ### Phase 4B2B / 4C2 — Deferred
 
 - [ ] broader historical route-change comparison、canonical target storage/query、suggested rules or scoring；
-- [ ] richer rule/final-proxy/port dimensions；installed FLClash/Mihomo and live Controller real-environment validation remains separately Deferred；
+- [ ] richer rule/final-proxy/port dimensions；ProxyLens 仍不承担 FLClash/Mihomo 配置或系统网络路径 ownership；
 - [ ] any automatic configuration or network action remains explicitly out of scope。
 
 ---

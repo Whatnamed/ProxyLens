@@ -7,12 +7,12 @@
 
 ## Current State
 
-- **当前阶段**：Phase 4A Audit Intelligence Foundation、Phase 4B1 Temporal Process Intelligence、Phase 4B2A Host Route Transition、Phase 4C1 Provenance-backed Background/Security Process Intelligence 与 Phase 4D Real-Data Audit Intelligence Validation complete。此前 Phase 3S Production Storage & Accounting Scale Closure、Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle 与 Phase 3E-2B2B Settings / installed product polish complete。Phase 3 UI 核心能力、交互与 query-only Tauri multi-fixture visual acceptance 已完成，Design System v1 已 Frozen；真实 FLClash/Mihomo lifecycle / live Controller validation 仍是独立 Deferred 边界。
+- **当前阶段**：Phase 4A Audit Intelligence Foundation、Phase 4B1 Temporal Process Intelligence、Phase 4B2A Host Route Transition、Phase 4C1 Provenance-backed Background/Security Process Intelligence 与 Phase 4D Real-Data Audit Intelligence Validation complete。此前 Phase 3S Production Storage & Accounting Scale Closure、Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle、Phase 3E-2B2B Settings / installed product polish 与 Phase 3E-R1/R1.1 real installed environment acceptance complete。Phase 3 UI 核心能力、交互与 query-only Tauri multi-fixture visual acceptance 已完成，Design System v1 已 Frozen；真实 FLClash/Mihomo 配置与网络路径变更仍明确不属于 ProxyLens ownership。
 - **代码线**：以当前 checkout 的 Git HEAD 及其相对 `origin/main` 的关系为准；活动分支名和短期 SHA 不在此处硬编码。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
-- **Closure**：既有 Phase 3 / Phase 4A / Phase 4B1 / Phase 4B2A / Phase 4C1 代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 main；Phase 4D 仅提交脱敏 acceptance/calibration 文档，不改变生产代码或网络生命周期。
+- **Closure**：既有 Phase 3 / Phase 4A / Phase 4B1 / Phase 4B2A / Phase 4C1 代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 main；Phase 4D 与 Phase 3E-R1.1 分别提交了脱敏 real-data/query-only 与 installed-environment acceptance 证据，不改变真实 FLClash/Mihomo 配置或网络路径。
 - **当前状态与待办**：
-  1. separately deferred 的 installed FLClash/Mihomo lifecycle / live Controller validation，需另行执行完整安全预检；本次 Phase 4D 只使用 quiescent production copy。
+  1. Phase 3E-R1.1 installed-environment acceptance 已完成；后续任何真实 Controller/FLClash/Mihomo 变更仍需独立安全预检，并继续保持只读观察边界。
   2. Phase 4B2B/4C2 Audit Intelligence enhancements 尚未开始；Phase 4D 未提供足够 ready temporal window 证明其必要性，继续 Deferred。
 
 ### Phase 4A Audit Intelligence Foundation (Complete)
@@ -60,7 +60,7 @@
 - static Review 在真实窗口只观察到一个 IP-only candidate，约 23.6 MB / 812 physical identities，独立 SQL 交叉核验 route/host/target/identity 语义一致；MATCH、broad UDP、large connection、catalog 与三类 temporal detector 在本数据集没有可采样 finding；
 - /intelligence/findings warm median 约 0.36–0.40s，summary 约 0.19s，History first page 约 0.008s，未发现 common-path performance blocker；未新增 index/migration、threshold、catalog 或 accounting 代码；
 - 两次真实 Tauri query-only spot check（1600×1000 EN Light、1280×800 中文 Dark）均验证 Review、IP-only → History drill、真实长字段布局、无横向溢出、analysis DB unchanged 与 owner=0 runtime=0 controller=0；
-- 脱敏完整报告见 docs/acceptance/phase4d-real-data-audit-intelligence-validation-2026-09-07.md；P0/P1 为 0，Phase 4B2B/4C2 继续 Deferred，下一方向为独立的 installed FLClash/Mihomo real-environment acceptance。
+- 脱敏完整报告见 docs/acceptance/phase4d-real-data-audit-intelligence-validation-2026-09-07.md；P0/P1 为 0，Phase 4B2B/4C2 继续 Deferred；Phase 3E-R1.1 的 installed-environment continuation 另见 `docs/acceptance/phase3e-r1-1-real-installed-environment-acceptance-2026-09-07.md`。
 
 ### Phase 3E-1 Runtime Core (Complete)
 
@@ -77,7 +77,7 @@
 - Tauri 使用 bundled Supervisor ensure-start，Supervisor 使用同一 authority DB 的 Runtime mutex 观察/启动/重启 Runtime；先完成 Supervisor ownership handshake/DB 就绪，再解析 existing-only Query path 并启动只读 Query API；
 - UI close 只清理 Query API；Supervisor 与其 Runtime/Collector 保持运行，重开 UI 通过 `AlreadyRunning` 复用既有 ownership；bootstrap status 对外仅报告 `Started`、`Starting`、`AlreadyRunning`、`Failed` 或 `NotAttempted` 事实；
 - `proxylens-supervisor config` 提供 non-secret `runtime.json` 的 Controller URL 管理与 stdin-only Secret 管理；生产 Secret 仅写 Windows Credential Manager，E2E 只使用随机 `ProxyLens/Test/<UUID>` target，`MIHOMO_SECRET` 优先作为显式环境 override；
-- Runtime whole-process / child crash 时由当前 Supervisor 按 bounded backoff 重启整个 Runtime；安装版 Supervisor 自身 crash/退出由 Phase 3E-2B2A current-user Task Scheduler 的 LogonTrigger + 无限 `PT1M` repetition 在下一周期重新拉起，最坏约 1 分钟，期间按 Monitoring Gap 记录；Supervisor 不读取 Mihomo、不写 SQLite 业务数据，Runtime 仍是唯一 writer authority；
+- Runtime whole-process / child crash 时由当前 Supervisor 按 bounded backoff 重启整个 Runtime；安装版 Supervisor 自身 crash/退出由 Phase 3E-2B2A current-user Task Scheduler 的 LogonTrigger + periodic TimeTrigger（均为无限 `PT1M` repetition）在下一周期重新拉起，最坏约 1 分钟，期间按 Monitoring Gap 记录；Supervisor 不读取 Mihomo、不写 SQLite 业务数据，Runtime 仍是唯一 writer authority；
 - mock-only Windows lifecycle smoke 已验证 first launch、UI-close persistence、duplicate candidate、reopen reuse、different-DB concurrency 与 GET-only mock Controller。
 
 ### Phase 3E-2B1 Supervisor & Secure Runtime Configuration (Complete)
@@ -93,7 +93,7 @@
 
 ### Phase 3E-2B2A Installed Runtime Lifecycle (Complete)
 
-- Windows V1 使用 current-user、interactive、limited-privilege Task Scheduler owner，固定生产任务为 `\ProxyLens\Background Supervisor`；生产 LogonTrigger 使用无限 `PT1M` repetition 和 `MultipleInstances=IgnoreNew`，Supervisor crash/退出由下一周期恢复；测试任务只允许随机 `\ProxyLens-Test\<UUID>`，不枚举或触碰其他任务；
+- Windows V1 使用 current-user、interactive、limited-privilege Task Scheduler owner，固定生产任务为 `\ProxyLens\Background Supervisor`；生产 LogonTrigger + periodic TimeTrigger 均使用无限 `PT1M` repetition 和 `MultipleInstances=IgnoreNew`，Supervisor crash/退出由下一周期恢复；测试任务只允许随机 `\ProxyLens-Test\<UUID>`，不枚举或触碰其他任务；
 - 已实现 exact-task `install status/register/unregister/ensure-owner/run` 与 per-authority-DB `control status/stop`；Supervisor stop 使用 `Local\ProxyLens.Supervisor.Stop.v1.<sha256(normalized-db-path)>`，沿既有 graceful path 收尾；
 - `runtime.json` v2 的 `autostartEnabled` 默认 true，v1 迁移 lossless；disabled preference 在 upgrade/reconcile 中保持 false，关闭偏好不停止当前 collection；
 - Windows Tauri installed mode 优先让 Go lifecycle CLI 复用/ensure Task Scheduler owner；无已注册 owner 的 developer checkout 保留 direct Supervisor fallback；Query API 仍是 UI-owned read-only sidecar；
@@ -107,6 +107,15 @@
 - Controller URL、有效来源与 MIHOMO_SECRET / Credential Manager precedence 以安全 metadata 展示；environment/process override 不会被伪装为 persisted setting；Controller/Secret 变化走 exact stop → owner rebootstrap，autostart-only 变化只 reconcile exact task，不中断当前采集；
 - installed layout gate 防止 developer checkout 修改生产 Task Scheduler task；persistence success / activation failure 显示 saved-pending-restart，Query API 与已有 authority DB 在重启期间保持 read-only 可读；
 - mock-only installed product acceptance：random loopback mock Controller、random ProxyLens/Test/<UUID> WinCred、random \ProxyLens-Test\<UUID> task、temporary DB；覆盖 Secret A → Secret B、新 Secret Runtime 使用、autostart false → true、UI-close owner survival 与 DB preservation。
+
+### Phase 3E-R1.1 Real Installed Environment Acceptance (Complete)
+
+- 原 R1 在 Supervisor crash/task recovery 上的 P1 blocker 已由两个独立修复收口：生产 Task Scheduler 使用 LogonTrigger + periodic TimeTrigger 的无限 `PT1M` repetition；NSIS 在 Runtime 仍 active 时 fail closed；
+- 旧 orphan Runtime 现场按 exact task / exact PID 安全清理，建立新的 production DB/WAL source-copy safety point 后，使用当前 main 构建并安装 current-user NSIS；原 R1 blocked branch 与证据保持不变；
+- 生产 task readback 通过 current-user / Interactive / Limited、Logon+Time trigger、indefinite `PT1M`、`IgnoreNew`、无 `RestartOnFailure`、无 Secret args；10 分钟以上 stabilization 中 journal、heartbeat、accounting publication 与 raw/accounted totals 持续推进；
+- 狭窄 installed UI close/reopen 保持 Query API 与 Supervisor/Runtime 职责分离；Runtime exact-PID crash recovery PASS；Supervisor exact-PID crash 后由下一次 Task Scheduler repetition 在 90 秒内恢复，Runtime PID 保持不变且无重复 owner；
+- 末次只读 DB metadata `schema=9`、active v2 generation、`quick_check=ok`；installed owner、Runtime/Collector 与 accounting 保持运行，持续真实 Coverage 正在积累；
+- 脱敏证据见 `docs/acceptance/phase3e-r1-1-real-installed-environment-acceptance-2026-09-07.md`。本次未连接真实 Controller、未修改 FLClash/Mihomo/TUN/系统代理/DNS/路由/规则，未启动 Phase 4E。
 
 ### Phase 3S — Production Storage & Accounting Scale Closure (Complete)
 
@@ -239,7 +248,7 @@
   - 本次调查修复全程未修改、未运行、未触碰生产 Task `\ProxyLens\Background Supervisor`；
   - 生产 Runtime PID 8212 保持原样运行，未被终止；
   - 全程未访问端口 9090 / 7988，未修改 FLClash/Mihomo/TUN/代理/路由配置；
-  - 原 Phase 3E R1 验收结果永久保留为 `blocked`，待后续独立轮次（如 R1.1 或 R2）重新执行 installed acceptance。
+  - 原 Phase 3E R1 验收结果永久保留为历史 `blocked` evidence；随后独立的 R1.1 continuation 已完成 installed acceptance，不改写原 branch 或原始结论。
 
 - **P1 Follow-up (Upgrade Quiescence Fail-Closed Closure)**：
   - R1 blocked 现场暴露另一边界：Supervisor absent 但外部/孤立 Runtime 仍存活时，原 `control stop` 返回 0，导致 NSIS PREINSTALL 误判为已静默而继续文件覆盖。
@@ -267,7 +276,7 @@
 - 本轮 primary-first-line alignment correction：不是 1px polish；DatePicker、network/page-size listbox、segmented controls、RouteBadge / EvidenceChip / Network token / StatusIndicator / Coverage legend、Causal Path 与 Accounting Events 均通过实际渲染截图与首行关系检查；marker 不再由 key/timestamp 或整块内容决定，未新增 locale-specific 或 font-specific offset。
 - 本轮 marker closure：Causal Path 的 Process / Destination secondary path/IP 不影响 marker，Rule / Top policy / Proxy chain / Egress 保持单一 primary；Accounting Events 的规则、代理、流量与 evidence chip 独立下沉；连接线按 primary 首行 marker center 分段，hollow marker 的 surface fill 遮蔽连接线。
 
-本轮最终验收已关闭上述视觉待办；真实 FLClash/Mihomo 数据与 lifecycle 仍不属于本阶段边界。
+本轮最终验收已关闭上述视觉待办；真实 FLClash/Mihomo 配置与网络路径仍不属于 ProxyLens ownership，installed-environment read-only acceptance 由 Phase 3E-R1.1 独立收口。
 
 ---
 
@@ -292,7 +301,7 @@
 ## Open Questions
 
 - Phase 4 Audit Intelligence 的范围与排期；
-- Windows Service、tray、MSI、updater、Test Connection、FLClash config discovery、Mihomo 自动配置与真实 FLClash/Mihomo validation 仍不在当前范围。
+- Windows Service、tray、MSI、updater、Test Connection、FLClash config discovery 与 Mihomo 自动配置仍不在当前范围；Phase 3E-R1.1 installed-environment acceptance 已完成，任何配置/网络路径变更仍不在 ProxyLens ownership。
 
 ---
 
@@ -300,12 +309,12 @@
 
 - 交互模型收口已完成：Overview / Coverage 使用动态推进的 Live Analysis Range，History 使用确定性冻结快照，已解决快照提前生成与展示范围语义漂移问题。
 - UI Design System v1 已按本轮真实 Tauri evidence Freeze；后续改动必须保留 semantic tokens、geometry、locale、theme 与 actual rendered-font 证据。
-- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻与 Supervisor crash recovery 已由 Phase 3E-2B2A 的 current-user Task Scheduler LogonTrigger + 无限 `PT1M` repetition 提供，Runtime crash recovery 仍由 Supervisor bounded backoff 负责。Settings/status polish 已完成；真实环境验证仍 Deferred。
+- `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻与 Supervisor crash recovery 已由 Phase 3E-2B2A 的 current-user Task Scheduler LogonTrigger + periodic TimeTrigger（无限 `PT1M` repetition）提供，Runtime crash recovery 仍由 Supervisor bounded backoff 负责。Settings/status polish 与 Phase 3E-R1.1 installed acceptance 已完成。
 
 ---
 
 ## Next Step
 
-1. 待用户明确安排真实环境后，执行 Deferred 的 real FLClash/Mihomo 与 real-data validation；不得把它与本轮 synthetic query-only visual acceptance 混同。
-2. 按 `ROADMAP.md` 进入 Phase 4 Audit Intelligence 前，继续保持本轮已冻结的 Design System v1 与现有只读边界。
-3. Phase 3S 正确性收口（11 blocker）已完成并提交；生产库迁移/revalidation 结果保持有效，生产 active generation 无需 repair。如恢复长期常驻采集，由用户明确决定，不自行动恢复。
+1. Phase 4B2B / Phase 4C2 继续按 `ROADMAP.md` Deferred；不得为了补齐路线图而伪造新搜索维度、规则建议或网络动作。
+2. 继续保持本轮已冻结的 Design System v1 与现有只读边界；未来任何真实 FLClash/Mihomo 配置或网络路径需求必须另立安全预检。
+3. Phase 3S 正确性收口（11 blocker）已完成并提交；生产库迁移/revalidation 与 R1.1 installed acceptance 结果保持有效，生产 active generation 无需 repair。如恢复长期常驻采集，由用户明确决定，不自行动恢复。
