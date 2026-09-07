@@ -34,14 +34,14 @@ fixed at:
 
 It runs the installed `proxylens-supervisor.exe` under the current user's
 interactive token, with limited privilege, no stored password, and no SYSTEM
-or highest-privilege elevation. The task uses a current-user LogonTrigger with
-an indefinite `PT1M` repetition (`StopAtDurationEnd=false`, no `Duration`),
+or highest-privilege elevation. The task combines a current-user LogonTrigger
+(for immediate startup at user logon) with an indefinite PT1M TimeTrigger
+(`StartBoundary=Now`, `Interval=PT1M`, `StopAtDurationEnd=false`, no `Duration`),
 `StartWhenAvailable`, `MultipleInstances=IgnoreNew`, no battery shutdown policy,
-and unlimited execution time. The repetition is the Supervisor crash/exit
-recovery contract: a running Supervisor rejects the next instance through
-`IgnoreNew`; after a crash/exit, the next cycle starts it again, with a worst
-case recovery window of about one minute.
-
+and unlimited execution time. The periodic TimeTrigger repetition is the
+Supervisor crash/kill recovery contract: a running Supervisor rejects the next
+cycle through `IgnoreNew`; after a crash or external kill, the next minute tick
+starts it again, with a worst-case recovery window of about one minute.
 Task Scheduler `RestartOnFailure` is intentionally not configured. It is not
 the V1 contract for recovering an already-started Supervisor process after it
 exits; Runtime process recovery remains the Supervisor's bounded backoff.

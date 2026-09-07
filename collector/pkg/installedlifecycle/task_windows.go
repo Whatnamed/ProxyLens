@@ -246,10 +246,8 @@ func configureTaskDefinition(definition *ole.IDispatch, executable, arguments, u
 		return err
 	}
 	trigger.Release()
-	if isE2E() {
-		if err := addE2EActivationTrigger(definition); err != nil {
-			return err
-		}
+	if err := addPeriodicRecoveryTrigger(definition); err != nil {
+		return err
 	}
 
 	actions, err := getPropertyDispatch(definition, "Actions")
@@ -293,12 +291,11 @@ func configureTaskTriggerRepetition(trigger *ole.IDispatch) error {
 	return nil
 }
 
-// addE2EActivationTrigger is only a session-local activation substitute. It
-// uses the exact same indefinite PT1M repetition helper as the production
-// LogonTrigger; it does not add a second recovery policy. Production task
-// registration never reaches this branch because its identity is rejected in
-// E2E mode and normal registration has no time trigger.
-func addE2EActivationTrigger(definition *ole.IDispatch) error {
+// addPeriodicRecoveryTrigger configures an indefinite PT1M TimeTrigger that
+// provides periodic Supervisor recovery whenever the process is killed or
+// crashes, without requiring user re-logon, reboot, or manual intervention.
+// MultipleInstances=IgnoreNew ensures running instances are never duplicated.
+func addPeriodicRecoveryTrigger(definition *ole.IDispatch) error {
 	triggers, err := getPropertyDispatch(definition, "Triggers")
 	if err != nil {
 		return fmt.Errorf("failed to access Task Scheduler E2E trigger collection: %w", err)

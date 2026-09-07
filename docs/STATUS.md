@@ -214,6 +214,33 @@
 - `go test -race ./...` 未能启动：当前环境 `CGO_ENABLED=0` 且未发现 `gcc` / `clang` / `cl`，因此这是工具链限制，不是代码测试失败结论。
 - 验证卫生记录：最初执行全量测试时，仓库旧版 crash smoke 曾将旧二进制指向 `127.0.0.1:9090` 并产生过一次只读 Controller 连接；该次结果不计入验收。随后测试已改为 mock controller；AST 守卫递归扫描整个 collector test tree，拒绝真实 Controller endpoint，并要求 subprocess `run` 显式提供 `--controller`；lifecycle tooling 另有随机 mock URL、temp-dir、E2E-only status file 与 exact-PID cleanup guard。3E-2B1 验收未启动或修改真实 FLClash/Mihomo，未发生真实网络生命周期或 Mihomo 写操作。
 
+### Phase 3E R1 Real-Installed Acceptance P1 Blocker Investigation & Fix
+
+- **现场与阻断事实**：Phase 3E R1 真实安装验收在 Stage 11 阻断（标记为 `blocked`）。Supervisor PID 6048 被精确终止后，Runtime PID 8212 继续运行，但在 90 秒及后续多次观察中 Supervisor 均未恢复；Task `\ProxyLens\Background Supervisor` 状态为 `Ready`，`LastTaskResult=0xFFFFFFFF`，`NextRunTime` 为空。
+- **根本原因**：
+  1. `collector/pkg/installedlifecycle/task_windows.go` 中将提供 1 分钟周期性时钟触发的 `TimeTrigger` 限制在 `if isE2E()` 内部，导致生产环境只注册了纯 `LogonTrigger`。
+  2. 安装完成后的 `install ensure-owner` 执行的是按需 `task.Run()`，按需运行不会启动 `LogonTrigger` 的任何 repetition。
+  3. `LogonTrigger` 仅在登录事件发生时触发；在未重新登录的情况下，Windows Task Scheduler 不会为 `LogonTrigger` 启动后台无限时钟轮询（`schtasks` 明确显示 `Repeat: Every: N/A`，`NextRunTime=none`）。
+  4. 进程外部被 kill 后，Task Scheduler 记录 `0xFFFFFFFF` 并回到 `Ready` 状态，但因无有效未来 Trigger 而不会尝试重启。
+  5. 历史 E2E 测试之所以全部 PASS，是因为测试环境注入了 `PROXYLENS_E2E_MODE=1`，导致 `addE2EActivationTrigger` 额外注册了 `TimeTrigger`。
+- **修复方案**：
+  - 修改 `collector/pkg/installedlifecycle/task_windows.go`，将 `TimeTrigger`（`StartBoundary=Now`，`Interval=PT1M`，`StopAtDurationEnd=false`）改为生产与 E2E 无条件注册（`addPeriodicRecoveryTrigger`）。
+  - 与 `LogonTrigger` 协同工作：`LogonTrigger` 提供用户登录时的即时启动；`TimeTrigger` 提供每分钟时钟级自愈检查；`MultipleInstances=IgnoreNew` 阻止运行中的重复实例。
+- **验证结果**：
+  - **Stage C 隔离复现**：旧生产配置下，Case 1（退出 0）、Case 2（退出 1）、Case 3（外部 kill `0xFFFFFFFF`）、Case 4（panic 崩溃）均确认无法恢复；Case 5A 确认带 `TimeTrigger` 可在 57s 内可靠自愈；Case 5B 确认 `Settings.RestartOnFailure` 对外部 kill 无效。
+  - **Stage G 隔离全流程验证**：基于全新隔离任务 `\ProxyLens-Test\<UUID>`、独立 DB 与 mock Controller，成功通过连续 **3 轮** Supervisor 精确 kill 与自愈验证：
+    - Cycle 1: latency 61s, Runtime PID maintained
+    - Cycle 2: latency 57s, Runtime PID maintained
+    - Cycle 3: latency 57s, Runtime PID maintained
+    - 进程审计：全程单实例（无第二 Supervisor，无第二 Runtime）；
+    - 数据库完整性：各轮 `quick_check=ok`，事件日志持续推进（4 -> 241 -> 463 -> 685）。
+  - 全量回归：`go test ./pkg/...` 与 `go test ./test/...` 全部 PASS（含 `controller_safety_test` 守卫）。
+- **生产安全保证**：
+  - 本次调查修复全程未修改、未运行、未触碰生产 Task `\ProxyLens\Background Supervisor`；
+  - 生产 Runtime PID 8212 保持原样运行，未被终止；
+  - 全程未访问端口 9090 / 7988，未修改 FLClash/Mihomo/TUN/代理/路由配置；
+  - 原 Phase 3E R1 验收结果永久保留为 `blocked`，待后续独立轮次（如 R1.1 或 R2）重新执行 installed acceptance。
+
 ### Rendered visual QA
 
 已人工确认：
