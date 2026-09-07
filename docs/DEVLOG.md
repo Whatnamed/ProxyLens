@@ -5,6 +5,31 @@
 
 ---
 
+## 2026-09-07 — Installed Desktop Blank-Render P1 Closure
+
+**Scope:** 只处理安装版 Tauri renderer 的空白窗口故障；不重跑 Phase 4E temporal
+SQL/API validation，不修改 Collector/Accounting、Task、Supervisor/Runtime 或真实
+网络生命周期。
+
+**Completed:**
+
+- waited CDP evidence 证明 packaged document 使用 `http://tauri.localhost/`，
+  `#root` 与 hashed frontend asset 实际存在；故障来自 CSP 未允许
+  `ipc:` / `http://ipc.localhost`，使 `get_query_api_session` 等 Tauri IPC 请求被
+  WebView2 拦截；另清理失效 `/vite.svg` 引用；
+- `npm.cmd run build`、`npm.cmd run tauri:build`、direct release render 与随机身份
+  的 isolated NSIS install/render/Review spot 通过；query-only evidence 为
+  `owner=0 runtime=0 controller=0`；
+- 当前 production current-user NSIS 未升级，生产 Task、Supervisor/Runtime 与
+  collection 持续保持原状态。完整脱敏记录见
+  `docs/acceptance/phase4e-installed-desktop-blank-render-2026-09-07.md`。
+
+**Safety:** 未连接真实 `9090/7988`、FLClash/Mihomo，未修改 TUN、系统代理、DNS、
+路由、规则、节点、production DB、Task Scheduler production owner、WinCred 或任何
+生产网络生命周期。
+
+---
+
 ## 2026-09-07 — Phase 3E-R1.1 Real Installed Environment Acceptance
 
 **Scope:** 独立延续原 R1 的 installed-environment acceptance，只收口两个已审查的

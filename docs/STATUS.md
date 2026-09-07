@@ -117,6 +117,13 @@
 - 末次只读 DB metadata `schema=9`、active v2 generation、`quick_check=ok`；installed owner、Runtime/Collector 与 accounting 保持运行，持续真实 Coverage 正在积累；
 - 脱敏证据见 `docs/acceptance/phase3e-r1-1-real-installed-environment-acceptance-2026-09-07.md`。本次未连接真实 Controller、未修改 FLClash/Mihomo/TUN/系统代理/DNS/路由/规则，未启动 Phase 4E。
 
+### Installed Desktop Blank-Render P1 Closure (Targeted Complete)
+
+- 已定位安装版 WebView2 的真实故障边界：文档使用预期的 `http://tauri.localhost/`，frontend asset 与 `#root` 存在，但 CSP 缺少 `ipc:` / `http://ipc.localhost`，使 Tauri `invoke()` 请求被 WebView2 拒绝；同时移除 dist 中失效的 `/vite.svg` favicon 引用；
+- `npm.cmd run build`、`npm.cmd run tauri:build`、fixed release CDP render 与随机临时身份的 isolated NSIS installed render 均通过；installed Review spot 保持 temporal section 与 Phase 4A sections 可见且无横向溢出；
+- 本轮没有升级 current-user production NSIS，因此不宣称已替换当前生产旧 binary；production Task、Supervisor/Runtime、DB、config 与 credential 保持原状并持续运行。部署 fixed binary 需要后续明确批准的 production NSIS upgrade；
+- 脱敏 targeted evidence 见 `docs/acceptance/phase4e-installed-desktop-blank-render-2026-09-07.md`；Phase 4E temporal SQL/API validation 未重跑，Phase 4B2B/4C2 仍 Deferred。
+
 ### Phase 3S — Production Storage & Accounting Scale Closure (Complete)
 
 - 只读 root-cause measurement（EQP 验证、SHA256 前后一致、production 停止）确认真实生产库（~5.2GB / ~1.55M journal events）97.63% 的 `ConnectionDelta` raw 行为零增量重复证据（wall-clock 口径；该比例仅针对 ConnectionDelta 行，不是整体 journal 行数削减比例），且常规核算 tick 在 stale 时触发全历史重建；
