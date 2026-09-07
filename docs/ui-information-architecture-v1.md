@@ -73,7 +73,7 @@
 1. **基础元数据**: 进程名、完整可执行文件路径、入站协议/端口、目标域名、嗅探域名、目标 IP、DNS 解析模式等；
 2. **分流与代理链证据**: 匹配规则、规则 Payload、代理链（`chains`）、Provider 代理链（`provider_chains`）、最终出站节点（`final_proxy`）、顶层策略组（`top_policy_group`）；
 3. **核算事件时序列表 (`accountingEvents[]`)**:
-   - 展示该连接在最新有效 Accounting Run 中的完整核算事件流；
+   - 展示该连接在 active v2 generation 中的完整核算事件流；无 active generation 时回退最新 completed legacy run，保持与 Analytics/Review 同一权威选择规则；
    - 按 `observed_at ASC, source_event_id ASC` 严格排序；
    - 保留由于节点切换、规则更新或中继配对产生的历史演化证据；
 4. **核算汇总 (`accountingSummary`)**:

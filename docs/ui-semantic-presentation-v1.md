@@ -66,7 +66,7 @@
 ## 5. Freshness & Staleness (新鲜度与陈旧状态)
 
 1. **`isFresh = false` 不是系统故障**:
-   - 当 `isFresh` 为 false 时，表示存在尚未完成 Accounting Rebuild 的新 Journal 事件；
+   - 当 `isFresh` 为 false 时，表示存在尚未纳入已发布核算边界的新 Journal 事件；正常 Runtime 使用增量核算推进；
    - UI 应呈现为“截至上一核算周期（As-of ...）”，并明确展示落后事件数（`lagEvents`），提示用户数据正在聚合或可触发刷新。
 
 ---

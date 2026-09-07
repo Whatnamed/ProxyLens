@@ -163,7 +163,7 @@ func (q *QueryService) ListConnections(ctx context.Context, filter ConnectionFil
 			monitored_upload_total, monitored_download_total
 		FROM connections
 		%s
-		ORDER BY first_observed_at DESC
+		ORDER BY first_observed_at DESC, session_id ASC, epoch_id ASC, connection_id ASC
 		%s;
 	`, whereSQL, limitSQL)
 
@@ -475,20 +475,29 @@ func (q *QueryService) GetLatestSession(ctx context.Context) (*CollectorSessionR
 	return &sess, nil
 }
 
-// ListAccountedTrafficForConnection 按三元组权威身份查询连接在最新有效核算 Run 中的全部核算时序事件
+// ListAccountedTrafficForConnection reads the same active v2 / completed legacy
+// authority as analytics, scoped to the physical connection's composite identity.
 func (q *QueryService) ListAccountedTrafficForConnection(ctx context.Context, sessionID string, epochID int, connectionID string) ([]*AccountedTrafficRecord, error) {
-	rows, err := q.db.QueryContext(ctx, `
+	scope, err := NewAnalyticsService(q.db).resolveAccountingScope(ctx)
+	if errors.Is(err, ErrNoCompletedAccountingRun) {
+		return nil, nil // Preserve detail availability before the first accounting publish.
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve connection accounting authority: %w", err)
+	}
+	table, keyCol, keyVal := scope.accountedTable()
+	rows, err := q.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT
-			run_id, source_event_id, session_id, epoch_id, connection_id, observed_at,
+			%s, source_event_id, session_id, epoch_id, connection_id, observed_at,
 			interval_start, interval_end, precision, route, raw_upload, raw_download,
 			accounted_upload, accounted_download, accounting_class, process, process_path,
 			host, sniff_host, destination_ip, network, rule, rule_payload, final_proxy,
 			top_policy_group, dimension_derivation_version
-		FROM accounted_traffic
+		FROM %s
 		WHERE session_id = ? AND epoch_id = ? AND connection_id = ?
-		  AND run_id = (SELECT run_id FROM accounting_runs WHERE status = 'completed' ORDER BY started_at DESC LIMIT 1)
+		  AND %s = ?
 		ORDER BY observed_at ASC, source_event_id ASC;
-	`, sessionID, epochID, connectionID)
+	`, keyCol, table, keyCol), sessionID, epochID, connectionID, keyVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query accounted traffic: %w", err)
 	}

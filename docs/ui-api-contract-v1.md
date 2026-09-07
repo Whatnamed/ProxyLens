@@ -71,8 +71,8 @@ API 服务以严格只读模式（`query_only=ON`, `busy_timeout=10000`）连接
   "apiVersion": "v1",
   "appVersion": "0.7.0-phase3a",
   "dbState": "READY",
-  "schemaVersion": 7,
-  "maxBinarySchemaVersion": 7,
+  "schemaVersion": 9,
+  "maxBinarySchemaVersion": 9,
   "latestCollectorSession": {
     "sessionId": "sess-xxx",
     "status": "running",
@@ -336,7 +336,9 @@ severity, risk, connection count, or inferred intent is part of this contract.
 ### 3.10 Connection Detail & Traffic
 - `GET /api/v1/connections/{sessionId}/{epochId}/{connectionId}`
   - **三元组唯一身份检索**: 严格使用 `(session_id, epoch_id, connection_id)` 定位物理连接；
-  - **完整事件时序列表**: 返回该连接在 latest completed run 中的所有 `accountingEvents[]` 记录（保留 Rule/Host/Chain/Final Proxy 演化证据），以及汇总的 `accountingSummary`。
+  - **核算权威**: 与 Analytics/Review 共用解析器；优先读取 active v2 generation 的 `accounted_traffic_v2`，只有不存在 active generation 时才回退 latest completed legacy run。不得因为某连接在 v2 中无行而回退 legacy。
+  - **完整事件时序列表**: 返回所选权威下该连接的所有 `accountingEvents[]`，按 `observed_at ASC, source_event_id ASC` 排序，并从同一事件列表计算 `accountingSummary`。v2 不产生零字节重复派生行；原始证据仍由 `/traffic` 提供。
+  - **兼容字段**: `runId` 在 v2 中表示 `generation_id`，legacy 中表示 `run_id`。尚未发布核算结果或该连接无核算事件时，详情仍返回 HTTP 200，事件为空、summary 不存在；查询错误仍返回 HTTP 500，不伪装为空。
   - **Response 结构**:
   ```json
   {

@@ -419,6 +419,16 @@ func TestIntelligenceFindingsAPIContractAndRuleFilter(t *testing.T) {
 }
 
 func TestConnectionDetailCompositeIdentityIsolation(t *testing.T) {
+	for _, v2 := range []bool{false, true} {
+		name := "legacy"
+		if v2 {
+			name = "v2-only"
+		}
+		t.Run(name, func(t *testing.T) { testConnectionDetailCompositeIdentityIsolation(t, v2) })
+	}
+}
+
+func testConnectionDetailCompositeIdentityIsolation(t *testing.T, v2 bool) {
 	dir, err := os.MkdirTemp("", "proxylens-composite-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -471,7 +481,12 @@ func TestConnectionDetailCompositeIdentityIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDB failed: %v", err)
 	}
-	if _, err := storage.RebuildAccounting(ctx, db, "composite test run"); err != nil {
+	if v2 {
+		_, err = storage.AdvanceAccountingV2(ctx, db, "composite test run", 0)
+	} else {
+		_, err = storage.RebuildAccounting(ctx, db, "composite test run")
+	}
+	if err != nil {
 		_ = db.Close()
 		t.Fatalf("RebuildAccounting failed: %v", err)
 	}
