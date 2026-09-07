@@ -31,6 +31,8 @@ Phase 3S Production Storage & Accounting Scale    [COMPLETED]
    ↓
 Phase 4  Audit Intelligence                       [COMPLETED — CORE V1]
    ↓
+V1 Core Release Candidate Closure                 [COMPLETED — INTERNAL RC ACCEPTED]
+   ↓
 Later    长期增强                                 [PLANNED]
 ```
 
@@ -314,7 +316,16 @@ network path.
 - [x] exact production preflight、normal current-user NSIS upgrade 与正式 graceful quiesce/reconcile lifecycle；
 - [x] installed binary/config/task/owner verification、schema 9、active v2、只读 `quick_check=ok` 与 post-upgrade accounting resume；
 - [x] installed WebView2 renderer focused CDP acceptance、Review P3 `2/3/0`、single process History drill、UI-close owner survival；
-- [x] Phase 4 Core V1 closure；Phase 4B2B / Phase 4C2 remain Deferred/Later and are not V1 closure blockers；下一步为 V1 Release Candidate Closure。
+- [x] Phase 4 Core V1 closure；Phase 4B2B / Phase 4C2 remain Deferred/Later and are not V1 closure blockers；V1 Core Release Candidate Closure 已单独完成。
+
+### V1 Core Release Candidate Closure [COMPLETED — INTERNAL RC ACCEPTED]
+
+- [x] source SHA `246c0fd8f2f243393fce8b2b38eaa983e8540223` 上完成正式 `npm.cmd run build` 与 `npm.cmd run tauri:build`；
+- [x] package identity 保持 `ProxyLens` / `com.proxylens.desktop` / `0.7.0`，current-user NSIS installer artifact 与 SHA-256 manifest 已固定；
+- [x] exact production preflight、fail-closed NSIS upgrade、config/credential preservation、schema 9、只读 `quick_check=ok` 与 active-v2/accounting resume 通过；
+- [x] installed WebView2 focused smoke 覆盖 Overview、Review、History、Coverage、Settings 与一个 Review → History drill；UI close 后 Query API 消失且 Supervisor/Runtime/collection 保持；
+- [x] Supervisor-owned visible console 通过 exact HWND/PID/process-tree evidence 关闭；RC 报告见 `docs/release/PROXYLENS_V1_CORE_RC_2026-09-07.md`；
+- [ ] public signing、Git tag、GitHub Release、外部 installer 发布与后续 distribution work 保持 Deferred。
 
 ### Phase 4B2B / 4C2 — Deferred
 

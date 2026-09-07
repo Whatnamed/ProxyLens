@@ -5,6 +5,39 @@
 
 ---
 
+## 2026-09-07 — V1 Core Release Candidate Closure
+
+**Scope:** 在已完成的 Phase 4 Core V1 / Phase 4E-C 基线上完成一次 release-candidate
+级别的正式 build、artifact 固定、current-user NSIS upgrade、installed desktop 窄 smoke
+与后台窗口 ownership 证据收口；不启动 4B2B、4C2、Phase 4E continuation 或公开发布。
+
+**Completed:**
+
+- source SHA `246c0fd8f2f243393fce8b2b38eaa983e8540223` 上
+  `npm.cmd run build` 与 `npm.cmd run tauri:build` 通过，产品 package version 保持
+  `0.7.0`；installer SHA-256 为
+  `4725ABC38612A3F0CE6A4CA250CE855D8552980431081A515C3A30F7F50D0C97`，artifact 固定在
+  `E:\ProxyLensRelease\v1-core-rc\2026-09-07\`；
+- exact current-user NSIS upgrade 退出码为 `0`，正式 unregister/graceful stop/replace/
+  preserve/reconcile lifecycle 通过；schema 9、只读 `quick_check=ok`、active v2 与
+  accounting boundary resume 通过，config/credential presence 保持；
+- installed WebView2 focused smoke 覆盖 Overview、Review、History、Coverage、Settings，
+  一个 Review → History drill、无 white render/serious overflow；UI 正常关闭后 Query API
+  消失，Supervisor/Runtime/collection 保持；
+- HWND → PID → process tree 证明 ProxyLens-owned visible console 数为 `0`；此前共享
+  WindowsTerminal 标题不属于产品 owner chain，因此 console RC item closed by evidence；
+- Authenticode 为 `NotSigned`，记录为 unsigned internal RC，不作为内部 RC blocker。
+
+**Decision:** `ProxyLens V1 Core Release Candidate = ACCEPTED`，package version 为 `0.7.0`；
+Phase 4B2B / Phase 4C2、public signing、tag、GitHub Release 与 external installer
+publication 继续 Deferred/Later。完整脱敏报告见
+`docs/release/PROXYLENS_V1_CORE_RC_2026-09-07.md`。
+
+**Safety:** 未连接真实 Controller，未启动/停止/重启/修改 FLClash/Mihomo，未修改 TUN、
+系统代理、DNS、路由、节点或规则；未启动下一阶段。
+
+---
+
 ## 2026-09-07 — Phase 4E-C Production UI Continuation & Core V1 Closure
 
 **Scope:** 在已审查并合入 main 的 installed blank-render CSP fix 之上，完成一次
@@ -30,7 +63,7 @@ R1/R1.1 recovery 或 B2B/C2 fixtures。
   接受，未做任何 FLClash/Mihomo 或系统网络路径动作。
 
 **Decision:** Phase 4 Audit Intelligence = **COMPLETED — CORE V1**；Phase 4B2B /
-Phase 4C2 = **DEFERRED / LATER**；下一步为 V1 Release Candidate Closure。后台
+Phase 4C2 = **DEFERRED / LATER**；随后已由独立 V1 Core Release Candidate Closure 收口。后台
 Supervisor/Runtime console window 可见性保留为非阻塞 RC 项。
 
 **Evidence:** `docs/acceptance/phase4e-continuous-real-history-temporal-revalidation-2026-09-07.md`。

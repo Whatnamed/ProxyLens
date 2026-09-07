@@ -7,13 +7,13 @@
 
 ## Current State
 
-- **当前阶段**：Phase 4 Audit Intelligence Core V1 与 Phase 4E-C Production UI Continuation complete；其中 Phase 4A Audit Intelligence Foundation、Phase 4B1 Temporal Process Intelligence、Phase 4B2A Host Route Transition、Phase 4C1 Provenance-backed Background/Security Process Intelligence、Phase 4D Real-Data Audit Intelligence Validation 与真实 installed Review UI continuation 均已完成。此前 Phase 3S Production Storage & Accounting Scale Closure、Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle、Phase 3E-2B2B Settings / installed product polish 与 Phase 3E-R1/R1.1 real installed environment acceptance complete。Phase 3 UI 核心能力、交互与 query-only Tauri multi-fixture visual acceptance 已完成，Design System v1 已 Frozen；真实 FLClash/Mihomo 配置与网络路径变更仍明确不属于 ProxyLens ownership。
+- **当前阶段**：Phase 4 Audit Intelligence Core V1、Phase 4E-C Production UI Continuation 与 V1 Core Release Candidate Closure 均已完成；V1 Core RC 已接受，产品 package version 保持 `0.7.0`。其中 Phase 4A Audit Intelligence Foundation、Phase 4B1 Temporal Process Intelligence、Phase 4B2A Host Route Transition、Phase 4C1 Provenance-backed Background/Security Process Intelligence、Phase 4D Real-Data Audit Intelligence Validation 与真实 installed Review UI continuation 均已完成。此前 Phase 3S Production Storage & Accounting Scale Closure、Phase 3E Desktop Runtime Integration、Phase 3E-1 Runtime Core、Phase 3E-2A Windows ownership / ensure-start、Phase 3E-2B1 Supervisor + secure runtime configuration、Phase 3E-2B2A installed lifecycle、Phase 3E-2B2B Settings / installed product polish 与 Phase 3E-R1/R1.1 real installed environment acceptance complete。Phase 3 UI 核心能力、交互与 query-only Tauri multi-fixture visual acceptance 已完成，Design System v1 已 Frozen；真实 FLClash/Mihomo 配置与网络路径变更仍明确不属于 ProxyLens ownership。
 - **代码线**：以当前 checkout 的 Git HEAD 及其相对 `origin/main` 的关系为准；活动分支名和短期 SHA 不在此处硬编码。
 - **C 组原始交付**：`96b08cb`，保留不改写，用于保留实验原始结果；远端 `origin/experiment/qwen38max-directed-ui` 保留作为选定 UI 实验方案快照。
 - **Closure**：既有 Phase 3 / Phase 4A / Phase 4B1 / Phase 4B2A / Phase 4C1 代码、测试、文档、focused UI polish、Frontend Interaction Closure 与 Review Fixes 均已保留并合入 main；Phase 4D 与 Phase 3E-R1.1 分别提交了脱敏 real-data/query-only 与 installed-environment acceptance 证据，Phase 4E-C 又在正式 current-user NSIS lifecycle 后完成 installed renderer、P3 Review 与 UI-close owner survival 验收；全程不改变真实 FLClash/Mihomo 配置或网络路径。
 - **当前状态与待办**：
   1. Phase 3E-R1.1 与 Phase 4E-C installed-environment acceptance 已完成；后续任何真实 Controller/FLClash/Mihomo 变更仍需独立安全预检，并继续保持只读观察边界。
-  2. Phase 4B2B/4C2 Audit Intelligence enhancements 尚未开始，继续 Deferred/Later；下一步为 V1 Release Candidate Closure。
+  2. Phase 4B2B/4C2 Audit Intelligence enhancements 尚未开始，继续 Deferred/Later；RC 等待 review，不创建 tag、GitHub Release 或外部发布 installer。
 
 ### Phase 4A Audit Intelligence Foundation (Complete)
 
@@ -69,6 +69,14 @@
 - 真实 installed WebView2 focused CDP 通过：`http://tauri.localhost/`、`readyState=complete`、`#root`、app shell、Query API ready、无 IPC CSP rejection、无横向溢出；复用 P3 pair 的 Review counts 为 new/growth/host=`2/3/0`，一个 process finding 成功进入 `route=PROXY` History drill；
 - UI 正常关闭后 desktop/Query API 消失，Supervisor/Runtime/Collector 继续运行，schema 9、heartbeat、v2 publication 与 raw/accounted totals 保持健康；升级造成的 Monitoring Gap 按设计接受；
 - 脱敏完整报告见 `docs/acceptance/phase4e-continuous-real-history-temporal-revalidation-2026-09-07.md`；Phase 4 标记为 Core V1 complete，Phase 4B2B/4C2 保持 Deferred/Later。
+
+### V1 Core Release Candidate Closure (Accepted — Internal RC)
+
+- `release/v1-core-rc` 已完成 `npm.cmd run build` 与 `npm.cmd run tauri:build`；产品 package version 保持 `0.7.0`；
+- 固定 artifact、SHA256SUMS 与 BUILD_INFO 见 `E:\ProxyLensRelease\v1-core-rc\2026-09-07\`；installer 为 unsigned internal RC；
+- exact current-user NSIS upgrade、schema 9、只读 `quick_check=ok`、active v2、config/credential preservation、installed Overview/Review/History/Coverage/Settings smoke 与 UI-close owner survival 均通过；
+- Supervisor-owned visible console 通过 HWND → PID → process-tree 证据确认不存在，console RC item closed by evidence；
+- 脱敏完整报告见 `docs/release/PROXYLENS_V1_CORE_RC_2026-09-07.md`；P0/P1 为 0。
 
 ### Phase 3E-1 Runtime Core (Complete)
 
@@ -315,7 +323,7 @@
 
 ## Open Questions
 
-- V1 Release Candidate Closure 的 release-specific 收尾范围；
+- V1 Core RC 已接受；公共签名、tag、GitHub Release 与外部发布仍未执行；
 - Windows Service、tray、MSI、updater、Test Connection、FLClash config discovery 与 Mihomo 自动配置仍不在当前范围；Phase 3E-R1.1 installed-environment acceptance 已完成，任何配置/网络路径变更仍不在 ProxyLens ownership。
 
 ---
@@ -325,13 +333,13 @@
 - 交互模型收口已完成：Overview / Coverage 使用动态推进的 Live Analysis Range，History 使用确定性冻结快照，已解决快照提前生成与展示范围语义漂移问题。
 - UI Design System v1 已按本轮真实 Tauri evidence Freeze；后续改动必须保留 semantic tokens、geometry、locale、theme 与 actual rendered-font 证据。
 - `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻与 Supervisor crash recovery 已由 Phase 3E-2B2A 的 current-user Task Scheduler LogonTrigger + periodic TimeTrigger（无限 `PT1M` repetition）提供，Runtime crash recovery 仍由 Supervisor bounded backoff 负责。Settings/status polish 与 Phase 3E-R1.1 installed acceptance 已完成。
-- 已知非阻塞 RC 项：installed Supervisor/Runtime 的后台 console window 可见；不阻塞 Phase 4 Core V1，留给 V1 Release Candidate Closure。
+- V1 Core RC 的后台 console window 项已通过 exact HWND/PID/process-tree 证据关闭；没有 ProxyLens-owned visible console。公共签名、tag、GitHub Release 与外部 installer 发布仍属于后续 distribution 工作。
 
 ---
 
 ## Next Step
 
-1. V1 Release Candidate Closure：处理 release-specific package metadata、artifact/hash、clean install/upgrade smoke 与后台 console window 等 RC 项。
+1. 等待 V1 Core RC review；保持 `0.7.0` package version，不创建 tag/GitHub Release，不外部发布 installer。
 2. Phase 4B2B / Phase 4C2 继续按 `ROADMAP.md` Deferred/Later；不得为了补齐路线图而伪造新搜索维度、规则建议或网络动作。
 3. 继续保持本轮已冻结的 Design System v1 与现有只读边界；未来任何真实 FLClash/Mihomo 配置或网络路径需求必须另立安全预检。
 3. Phase 3S 正确性收口（11 blocker）已完成并提交；生产库迁移/revalidation 与 R1.1 installed acceptance 结果保持有效，生产 active generation 无需 repair。如恢复长期常驻采集，由用户明确决定，不自行动恢复。
