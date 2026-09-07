@@ -51,7 +51,7 @@ API，Supervisor 与 Runtime/Collector 继续运行，下一次 UI 打开时复�
 当前 3E-2B2A 已覆盖登录启动、安装版 ownership、upgrade/uninstall lifecycle 与 UI-close
 后的持续运行；3E-2B2B 已补齐 Settings/autostart utility、installed status polish 与
 mock-only installed product acceptance。Windows Service、托盘、MSI/updater、Test
-Connection、FLClash config discovery、Mihomo 自动配置与真实环境验收仍 Deferred。
+Connection、FLClash config discovery 与 Mihomo 自动配置仍 Deferred。真实 installed-environment acceptance 已由 Phase 3E-R1.1 / Phase 4E-C 完成。
 
 ### Query-only Tauri visual acceptance boundary
 
@@ -89,7 +89,7 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 - Tauri 在安装版优先调用 Go lifecycle CLI ensure 已注册且 enabled 的 owner；没有已安装 owner 的 dev checkout 保留 direct Supervisor ensure。两条路径都让 UI close 只停止 Query API，Supervisor 与 Runtime/Collector 在 UI 关闭后继续运行；
 - `runtime.json` v2 只保存非敏感 Controller URL 与 `autostartEnabled`，Secret 通过 Windows Credential Manager 的 Generic Credential 保存；`MIHOMO_SECRET` 仍是显式开发环境 override，Secret 不进入 JSON、argv、handshake 或日志；
 - Supervisor 不读取 Mihomo、不打开或写入 SQLite 业务数据；Runtime 继续拥有 Collector、Accounting 与唯一 writer DB 生命周期；
-- upgrade 保留 DB、config、Controller URL、autostart preference 与 credential；uninstall 删除 task/process/program files 但保留用户数据与 credential；Windows Service、托盘、MSI/updater 与真实环境验收仍 Deferred。
+- upgrade 保留 DB、config、Controller URL、autostart preference 与 credential；uninstall 删除 task/process/program files 但保留用户数据与 credential；Windows Service、托盘、MSI/updater 仍 Deferred；真实 installed acceptance 已完成。
 
 ### Settings utility and configuration boundary (Phase 3E-2B2B)
 
