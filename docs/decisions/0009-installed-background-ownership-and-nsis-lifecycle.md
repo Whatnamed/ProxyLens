@@ -120,6 +120,14 @@ POSTINSTALL  reconcile task action → ensure owner when enabled
 PREUNINSTALL unregister task → graceful stop owner → remove program files
 ```
 
+`control stop` succeeds (exit 0) only when both the Supervisor and the Runtime
+for the exact authority DB are absent and quiesced. If an orphan or external
+Runtime remains active on the authority DB, `control stop` fails closed with a
+non-zero exit code (`supervisorRunning=false`, `runtimeRunning=true`) and does
+not terminate the external process. NSIS aborts the upgrade or uninstall
+before touching installed program files, preventing file corruption while
+runtime processes are holding file locks.
+
 Upgrade replaces desktop/Query/Runtime/Supervisor binaries while preserving
 the authority DB, raw history, runtime config, Controller URL, autostart
 preference, and Windows Credential Manager credential. Uninstall removes the
@@ -150,19 +158,19 @@ ADR.
   register/status/action/unregister, per-DB presence/stop event, config v2
   migration, and Supervisor lifecycle behavior.
 - The task-owner harness verified `IsElevated=false`, registered one random
-  `\ProxyLens-Test\<UUID>` task, and used one E2E-only TimeTrigger only to
-  activate the same indefinite `PT1M` repetition contract as production. It
+  `\ProxyLens-Test\<UUID>` task, and confirmed that both the LogonTrigger and
+  the periodic TimeTrigger were configured with indefinite `PT1M` repetition. It
   observed fixture PID A, terminated only PID A, and observed PID B only after
   the next Task Scheduler repetition; production task identity was not used or
   enumerated.
+- Both production and E2E task definitions contain both LogonTrigger and the
+  periodic TimeTrigger. E2E mode isolates the task name, executable path, and
+  database root, but does not alter the recovery mechanism itself.
 - The isolated NSIS harness passed fresh Package A install, Package B upgrade,
   UI-close owner persistence, disabled preference preservation, and uninstall
   with DB/config/credential retention. Package identity, task identity,
   credential target, DB/config roots, and Controller were all temporary or
   random.
-- The E2E TimeTrigger is only an activation substitute for the current session;
-  it shares the production LogonTrigger repetition helper and does not add a
-  separate recovery policy. Production registration contains no E2E TimeTrigger.
 - The Settings installed-product harness uses one temporary authority DB,
   one random loopback mock Controller, one random WinCred target, and one
   random test task. It verifies Secret replacement, autostart reconciliation,

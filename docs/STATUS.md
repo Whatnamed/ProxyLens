@@ -241,6 +241,10 @@
   - 全程未访问端口 9090 / 7988，未修改 FLClash/Mihomo/TUN/代理/路由配置；
   - 原 Phase 3E R1 验收结果永久保留为 `blocked`，待后续独立轮次（如 R1.1 或 R2）重新执行 installed acceptance。
 
+- **P1 Follow-up (Upgrade Quiescence Fail-Closed Closure)**：
+  - R1 blocked 现场暴露另一边界：Supervisor absent 但外部/孤立 Runtime 仍存活时，原 `control stop` 返回 0，导致 NSIS PREINSTALL 误判为已静默而继续文件覆盖。
+  - 修复：`control stop` 结果增加静默完整性校验，若 Runtime 仍处于 active 状态，返回非零 exit code（`status: supervisorRunning=false, runtimeRunning=true`）且绝不越权强杀 Runtime；NSIS PREINSTALL 将自然触发 `preinstall_stop_fail` 并 Abort upgrade，保障文件替换安全。
+  - 验证：Go 单元测试 `TestControlStopCommandNoOwnerNoRuntimeExitsZero`、`TestControlStopCommandOrphanRuntimeFailsClosed` 与独立 harness `test-quiescence-fail-closed.mjs`（Tests A, B, C, D）全部 PASS。
 ### Rendered visual QA
 
 已人工确认：

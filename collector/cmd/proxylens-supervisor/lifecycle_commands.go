@@ -122,7 +122,15 @@ func controlStopCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	return encodeLifecycleStatus(status)
+	if err := json.NewEncoder(os.Stdout).Encode(status); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to emit lifecycle status: %v\n", err)
+		return 1
+	}
+	if status.SupervisorRunning || status.RuntimeRunning {
+		fmt.Fprintln(os.Stderr, "authority database is not quiesced: background runtime remains active")
+		return 1
+	}
+	return 0
 }
 
 func runInstallCommand(args []string) int {

@@ -298,12 +298,12 @@ func configureTaskTriggerRepetition(trigger *ole.IDispatch) error {
 func addPeriodicRecoveryTrigger(definition *ole.IDispatch) error {
 	triggers, err := getPropertyDispatch(definition, "Triggers")
 	if err != nil {
-		return fmt.Errorf("failed to access Task Scheduler E2E trigger collection: %w", err)
+		return fmt.Errorf("failed to access Task Scheduler periodic recovery trigger collection: %w", err)
 	}
 	defer triggers.Release()
 	timeTrigger, err := callDispatch(triggers, "Create", taskTriggerTime)
 	if err != nil {
-		return fmt.Errorf("failed to create isolated E2E activation trigger: %w", err)
+		return fmt.Errorf("failed to create periodic recovery trigger: %w", err)
 	}
 	defer timeTrigger.Release()
 	for property, value := range map[string]interface{}{
@@ -311,7 +311,7 @@ func addPeriodicRecoveryTrigger(definition *ole.IDispatch) error {
 		"StartBoundary": time.Now().Add(2 * time.Second).Format("2006-01-02T15:04:05"),
 	} {
 		if err := putProperty(timeTrigger, property, value); err != nil {
-			return fmt.Errorf("failed to configure Task Scheduler E2E activation trigger %s: %w", property, err)
+			return fmt.Errorf("failed to configure Task Scheduler periodic recovery trigger %s: %w", property, err)
 		}
 	}
 	return configureTaskTriggerRepetition(timeTrigger)
