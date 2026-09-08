@@ -108,7 +108,7 @@ function readProcessTree() {
 }
 
 function readTerminalSnapshot() {
-  const output = runPowerShell("Get-Process -Name WindowsTerminal -ErrorAction SilentlyContinue | Select-Object Id,MainWindowHandle,MainWindowTitle | ConvertTo-Json -Compress");
+  const output = runPowerShell("$rows=@(Get-Process -Name WindowsTerminal -ErrorAction SilentlyContinue | Select-Object Id,MainWindowHandle,MainWindowTitle); if($rows.Count -eq 0){ '[]' } else { $rows | ConvertTo-Json -Compress }");
   return jsonArray(output);
 }
 

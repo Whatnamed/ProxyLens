@@ -46,8 +46,9 @@ Tauri/NSIS/lifecycle/configuration 与 READY handshake 的 CLI authority。GUI h
 进行周期性 ensure；`MultipleInstances=IgnoreNew` 在 Supervisor 正常运行时阻止重复实例，
 Supervisor crash/退出/终止时由下一次 TimeTrigger repetition 重新拉起，最坏恢复窗口约 1 分钟。
 Supervisor 按 authority DB path single-instance，负责观察、启动和重启 Runtime；Runtime
-mutex 仍是唯一 writer race authority。Supervisor 创建 console-subsystem Runtime child 时使用
-Windows `CREATE_NO_WINDOW` + `DETACHED_PROCESS`，但保留 READY/STOP 所需的显式 pipes。Tauri
+mutex 仍是唯一 writer race authority。Supervisor 创建 console-subsystem Runtime child 时只使用
+Windows `DETACHED_PROCESS`；Win32 明确规定 `CREATE_NO_WINDOW` 与它组合时会被忽略，因此不再
+组合这两个 flags。`HideWindow` 仅作为无害 fallback，READY/STOP 所需的显式 pipes 保持不变。Tauri
 在安装版优先复用/ensure 该 owner，在没有
 已注册 owner 的开发 checkout 使用 direct Supervisor fallback。正常关闭 UI 只停止 Query
 API，Supervisor 与 Runtime/Collector 继续运行，下一次 UI 打开时复用同一 authority DB。

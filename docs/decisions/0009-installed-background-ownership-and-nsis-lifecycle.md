@@ -63,9 +63,17 @@ and starts/observes/restarts
 `proxylens-runtime`; Runtime's named mutex remains the writer-race authority.
 The Supervisor does not open SQLite business data or communicate with Mihomo.
 
-On Windows the Supervisor starts its console-subsystem Runtime child with
-creation-time `CREATE_NO_WINDOW` and `DETACHED_PROCESS` flags while retaining
-the explicit pipes used by the READY and graceful-stop contracts. The
+On Windows the Supervisor starts its console-subsystem Runtime child with the
+creation-time `DETACHED_PROCESS` flag while retaining the explicit pipes used
+by the READY and graceful-stop contracts. Microsoft documents that
+`CREATE_NO_WINDOW` is ignored when combined with `DETACHED_PROCESS`, so the
+two flags are intentionally not combined. A focused Windows comparison also
+showed that `CREATE_NO_WINDOW` alone did not satisfy this host's no-console
+descendant contract, while `DETACHED_PROCESS` alone did. Go's `HideWindow`
+maps to the harmless `STARTF_USESHOWWINDOW/SW_HIDE` fallback; it is not the
+ownership or no-console authority.
+
+The
 background host is therefore invisible without a post-creation
 `ShowWindow(SW_HIDE)` workaround; the console CLI remains usable when invoked
 directly from a terminal or by Tauri/NSIS lifecycle commands.

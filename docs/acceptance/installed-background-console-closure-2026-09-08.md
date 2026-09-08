@@ -10,10 +10,14 @@ Supervisor application, so this change does not create a second ownership
 authority.
 
 The Runtime remains a console-subsystem executable, but the Supervisor creates
-it with Windows `CREATE_NO_WINDOW` and `DETACHED_PROCESS` flags while preserving
-the explicit pipes used by the READY and graceful STOP protocols. Runtime
-restart, Task Scheduler periodic recovery, UI-close owner survival, and the
-read-only Query API boundary are unchanged.
+it with the Windows `DETACHED_PROCESS` flag while preserving the explicit pipes
+used by the READY and graceful STOP protocols. Microsoft documents that
+`CREATE_NO_WINDOW` is ignored when combined with `DETACHED_PROCESS`, so the
+flags are not combined; a focused Windows comparison additionally showed that
+`CREATE_NO_WINDOW` alone did not satisfy this host's no-console descendant
+contract, while `DETACHED_PROCESS` alone did. Go `HideWindow` remains only a
+harmless fallback. Runtime restart, Task Scheduler periodic recovery, UI-close
+owner survival, and the read-only Query API boundary are unchanged.
 
 ## Root cause
 
@@ -36,7 +40,8 @@ Task action boundary, not merely a stale binary.
 - Registered only the GUI host as the production Task Scheduler action. The
   current-user, Interactive, Limited, `IgnoreNew`, LogonTrigger plus indefinite
   `PT1M` repetition contract remains unchanged.
-- Added creation-time Runtime process flags on Windows and included the host in
+- Added the creation-time Windows `DETACHED_PROCESS` Runtime process flag and
+  retained `HideWindow` only as a fallback; included the host in
   sidecar build, Tauri bundle, installed-layout, and lifecycle reconciliation.
 - Removed the obsolete post-creation console hide helper.
 
@@ -67,6 +72,8 @@ used.
 
 - `go test ./...` — PASS
 - `go vet ./...` — PASS
+- Windows Runtime process configuration regression — `DETACHED_PROCESS` only,
+  no `CREATE_NO_WINDOW`, `HideWindow=true` — PASS
 - `npm.cmd test` — 103 tests passed
 - `npm.cmd run build` — PASS
 - `npm.cmd run sidecar:build` — PASS; host included

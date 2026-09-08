@@ -18,8 +18,9 @@ Windows 可能在进程创建时分配 console 或把其接入 Windows Terminal�
 
 - 新增 GUI-subsystem `proxylens-supervisor-host.exe`，与 console CLI 共享 Supervisor
   application entry point；生产 Task 只使用 host，CLI 继续负责 lifecycle/configuration/handshake；
-- Runtime child 使用 Windows `CREATE_NO_WINDOW` + `DETACHED_PROCESS` 创建，同时保留 READY/STOP
-  pipes；build/bundle/installed-layout/NSIS task action 已同步；
+- Runtime child 只使用 Windows `DETACHED_PROCESS` 创建，并保留 `HideWindow` fallback 与
+  READY/STOP pipes；根据 Microsoft Win32 contract 不再与会被忽略的 `CREATE_NO_WINDOW` 组合；
+  build/bundle/installed-layout/NSIS task action 已同步；
 - dedicated isolated regression、Go/UI/build checks 与 normal current-user NSIS upgrade 通过；
   installed hash/config/credential/task/owner 状态与 desktop close survival 均已核实；
 - 真实 installed read-only Query API 仍可读取 schema 9 active-v2 DB；本轮不重复 11.7-GB live
