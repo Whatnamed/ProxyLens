@@ -348,7 +348,7 @@
 
 ## Next Step
 
-1. 保持已接受内部 RC 的 `0.7.0` package version；post-RC 修复产物须独立构建/验证，不改写旧产物的历史验收结论；不创建 tag/GitHub Release，不外部发布 installer。
-2. Phase 4B2B / Phase 4C2 继续按 `ROADMAP.md` Deferred/Later；不得为了补齐路线图而伪造新搜索维度、规则建议或网络动作。
-3. 继续保持本轮已冻结的 Design System v1 与现有只读边界；未来任何真实 FLClash/Mihomo 配置或网络路径需求必须另立安全预检。
-4. Phase 3S 正确性收口（11 blocker）已完成并提交；生产库迁移/revalidation 与 R1.1 installed acceptance 结果保持有效，生产 active generation 无需 repair。历史 Phase 3S 结束时的 collection stopped 状态已被后续 R1.1 / 4E-C / RC installed running 验证取代；以实际 owner 状态为准。
+1. Core V1、内部 RC 与 post-RC audit closure 均已完成；当前无 active blocker。保持已接受内部 RC 的 `0.7.0` package version，后续修复产物须独立构建/验证，不改写旧产物的历史验收结论。
+2. 连接详情/原始帧 pagination、坏帧 Coverage hardening、raw retention/disk-runway 产品决策与 CI/branch protection 均为 Later，不阻塞 Core V1。
+3. Phase 4B2B / Phase 4C2 继续按 `ROADMAP.md` Deferred/Later；不得为了补齐路线图而伪造新搜索维度、规则建议或网络动作。
+4. 继续保持本轮已冻结的 Design System v1 与现有只读边界；未来任何真实 FLClash/Mihomo 配置或网络路径需求必须另立安全预检。distribution 由用户决定，未获明确决定前不创建 tag/GitHub Release 或外部发布 installer。

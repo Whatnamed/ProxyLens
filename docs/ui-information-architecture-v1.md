@@ -25,9 +25,9 @@
    - 监控覆盖率（%）；
    - 覆盖时长 vs 缺口时长；
    - 缺口归因（Controller Stream vs Collector Session Boundary）。
-4. **核算新鲜度指示 (Accounting Freshness & State)**:
-   - Latest Accounting Run 状态；
-   - Fresh / Stale 状态与落后事件数 (`lagEvents`)。
+4. **核算权威与新鲜度 (Accounting Authority & Freshness)**:
+   - 当前已发布核算权威状态（优先 active v2 generation；无 active generation 时才回退 completed legacy run）；
+   - Fresh / Stale 状态、已发布边界与落后事件数 (`lagEvents`)。
 5. **Top 排名维度 (Top Dimension Breakdown)**:
    - **Top Processes**: 消耗代理流量最多的进程列表（进程名 `process`、上传、下载、连接数；*注: 分时聚合不承诺 `processPath`*）；
    - **Top Final Proxies**: 流量最大的出口节点列表（节点名称 `finalProxy`、分流、上传、下载、连接数）；
@@ -107,9 +107,10 @@
 - **Query API 状态**: Loopback 端口、进程运行状态、API 契约版本；
 - **数据库状态**: `READY` | `UNAVAILABLE` | `INCOMPATIBLE`，当前 Schema 迁移版本；
 - **Collector 采集器状态**: 最新 Session ID、启动时间、心跳时间戳（`last_heartbeat_at`）、活跃度（Healthy vs Stale vs Offline）；
-- **Accounting 核算状态**: 最新 Run ID、完成状态、事件落后数 (`lagEvents`)、`isFresh` 布尔值。
+- **Accounting 核算状态**: 当前核算权威的 generation/run ID（按 active v2 → completed legacy fallback 选择）、已发布边界、`lagEvents` 与 `isFresh`。
 
 ---
 
 ## 6. V1 边界说明
-- V1 仅提供只读审计观察，不设置任何偏好修改或配置写入页面（No Settings Page in V1）。
+- V1 核心 workspace 固定为 `Overview → Review → History → Coverage`。
+- Settings 已作为 Phase 3E-2B2B 实现的 sidebar secondary utility dialog，支持当前安装版设置；它不新增 Settings 顶层导航，也不改变核心 workspace。

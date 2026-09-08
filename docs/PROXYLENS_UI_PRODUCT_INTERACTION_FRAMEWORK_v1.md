@@ -59,6 +59,12 @@ Coverage
 
 Do not add a V1 Settings page when there are no meaningful writable settings.
 
+This remains a conditional principle, not a permanent prohibition. Phase 3E-2B2B
+now provides meaningful installed settings—Controller URL, secure Controller
+Secret, and Windows login autostart—so Settings is a legitimate secondary
+utility dialog. It must not become a fifth top-level workspace or change the
+core `Overview → Review → History → Coverage` navigation.
+
 Connection Detail is contextual and should normally appear as an Inspector / drill-down rather than top-level navigation.
 
 System Status is secondary and persistent/contextual rather than a primary page.
@@ -538,7 +544,9 @@ System status presents Meta API authority facts only—no speculative advice or 
 - Query API;
 - Database state and schema compatibility;
 - Collector session, last heartbeat, and heartbeat interval;
-- Accounting Engine run ID, algorithm version, and freshness lag events count.
+- Current accounting authority / generation ID (active v2 or completed legacy
+  fallback), published boundary, algorithm version, and freshness lag events
+  count.
 
 Important distinction:
 
@@ -581,7 +589,7 @@ The official UI must intentionally handle:
 - Loading;
 - Empty database/history;
 - No filtered results;
-- No completed accounting run;
+- No published accounting authority;
 - API unavailable;
 - Database unavailable/incompatible;
 - Collector healthy;
