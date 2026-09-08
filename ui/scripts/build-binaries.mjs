@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +40,11 @@ const binaries = [
   { name: 'proxylens-query-api', packagePath: './cmd/proxylens-query-api' },
   { name: 'proxylens-runtime', packagePath: './cmd/proxylens-runtime' },
   { name: 'proxylens-supervisor', packagePath: './cmd/proxylens-supervisor' },
+  {
+    name: 'proxylens-supervisor-host',
+    packagePath: './cmd/proxylens-supervisor-host',
+    windowsGui: true,
+  },
 ];
 
 for (const binary of binaries) {
@@ -47,7 +52,12 @@ for (const binary of binaries) {
   const targetPath = path.join(binariesDir, binaryName);
   console.log(`[Binary Build] Building ${binary.name} into ${targetPath}...`);
   try {
-    execSync(`go build -o "${targetPath}" ${binary.packagePath}`, {
+    const buildArgs = ['build'];
+    if (binary.windowsGui && process.platform === 'win32') {
+      buildArgs.push('-ldflags=-H=windowsgui');
+    }
+    buildArgs.push('-o', targetPath, binary.packagePath);
+    execFileSync('go', buildArgs, {
       cwd: path.join(rootDir, 'collector'),
       stdio: 'inherit',
     });

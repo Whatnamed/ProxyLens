@@ -77,6 +77,7 @@ func TestInstalledLayoutRequiresAcceptedSiblingSetAndUninstaller(t *testing.T) {
 	}
 	for _, name := range []string{
 		"proxylens-supervisor" + ext,
+		"proxylens-supervisor-host" + ext,
 		"proxylens-runtime" + ext,
 		"proxylens-query-api" + ext,
 		"proxylens-desktop" + ext,

@@ -40,6 +40,7 @@ let expectedSecretGeneration = 0;
 let packagePath;
 let installedDesktop;
 let installedSupervisor;
+let installedSupervisorHost;
 let uninstaller;
 
 const baseEnvironment = {
@@ -284,6 +285,7 @@ function discoverInstalledLayout() {
   };
   installedDesktop = exact('proxylens-desktop.exe');
   installedSupervisor = exact('proxylens-supervisor.exe');
+  installedSupervisorHost = exact('proxylens-supervisor-host.exe');
   const uninstallers = findFiles(installDir, (_file, entryName) => entryName.toLowerCase() === 'uninstall.exe');
   if (uninstallers.length !== 1) throw new Error(`Expected one installed uninstaller, found ${uninstallers.length}`);
   uninstaller = uninstallers[0];
@@ -448,6 +450,7 @@ async function main() {
   packagePath = buildPackage();
   installPackage();
   requireFile(installedSupervisor, 'installed Supervisor');
+  requireFile(installedSupervisorHost, 'installed Supervisor background host');
   if (path.resolve(installedSupervisor) !== path.resolve(expectedInstalledSupervisor)) {
     throw new Error('installed Supervisor path did not match the isolated Task Scheduler wrapper');
   }

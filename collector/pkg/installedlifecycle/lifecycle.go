@@ -58,8 +58,9 @@ func ResolveTaskName() (string, error) {
 	return name, nil
 }
 
-// ResolveTaskExecutable selects the installed Supervisor by default. The
-// harmless executable override exists only for isolated E2E task-owner tests.
+// ResolveTaskExecutable validates the executable selected for the exact task.
+// Production callers supply the GUI-subsystem background host; the harmless
+// executable override exists only for isolated E2E task-owner tests.
 func ResolveTaskExecutable(defaultPath string) (string, error) {
 	override := strings.TrimSpace(os.Getenv(E2ETaskExecutableEnv))
 	if !isE2E() {
@@ -81,6 +82,16 @@ func ResolveTaskExecutable(defaultPath string) (string, error) {
 		return "", fmt.Errorf("%w: task action executable is not a regular file", ErrTaskLifecycle)
 	}
 	return absolute, nil
+}
+
+// BackgroundSupervisorExecutableName is the installed GUI-subsystem host used
+// only as the Task Scheduler action. The console Supervisor CLI remains the
+// lifecycle/configuration entry point for Tauri, NSIS, and developers.
+func BackgroundSupervisorExecutableName() string {
+	if runtime.GOOS == "windows" {
+		return "proxylens-supervisor-host.exe"
+	}
+	return "proxylens-supervisor-host"
 }
 
 // ResolveTaskArguments is deliberately test-only. Production Task Scheduler
@@ -125,6 +136,7 @@ func IsInstalledLayout(supervisorExecutable string) bool {
 	}
 	for _, name := range []string{
 		"proxylens-supervisor" + ext,
+		"proxylens-supervisor-host" + ext,
 		"proxylens-runtime" + ext,
 		"proxylens-query-api" + ext,
 		"proxylens-desktop" + ext,

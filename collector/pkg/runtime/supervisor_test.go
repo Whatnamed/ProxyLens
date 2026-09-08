@@ -54,6 +54,25 @@ func TestResolveRuntimeExecutableUsesExplicitPrecedenceAndSiblingSuffix(t *testi
 	}
 }
 
+func TestResolveRuntimeExecutableFromBackgroundHostUsesRuntimeSibling(t *testing.T) {
+	dir := t.TempDir()
+	host := filepath.Join(dir, "proxylens-supervisor-host.exe")
+	runtime := filepath.Join(dir, "proxylens-runtime.exe")
+	for _, path := range []string{host, runtime} {
+		if err := os.WriteFile(path, []byte("test executable placeholder"), 0o600); err != nil {
+			t.Fatalf("failed to create %s: %v", path, err)
+		}
+	}
+
+	got, err := ResolveRuntimeExecutable("", "", host)
+	if err != nil {
+		t.Fatalf("background host Runtime resolution failed: %v", err)
+	}
+	if got != runtime {
+		t.Fatalf("background host Runtime = %q, want %q", got, runtime)
+	}
+}
+
 func TestEnvironmentWithControllerOverrideReplacesOnlyControllerVariable(t *testing.T) {
 	result := environmentWithControllerOverride([]string{
 		"PATH=fixture",

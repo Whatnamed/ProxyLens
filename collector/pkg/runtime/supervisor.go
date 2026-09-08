@@ -301,6 +301,7 @@ func (s *Supervisor) startRuntime(ctx context.Context) (*managedRuntime, Runtime
 		)
 	}
 	cmd := exec.Command(s.runtimeExe, args...)
+	configureRuntimeProcess(cmd)
 	cmd.Env = environmentWithControllerOverride(os.Environ(), s.controllerURL)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -474,7 +475,13 @@ func ResolveRuntimeExecutable(cliValue, envValue, supervisorExecutable string) (
 	if rest != "" && rest[0] != '-' && rest[0] != '.' {
 		return "", fmt.Errorf("Supervisor executable basename has an unsupported suffix")
 	}
-	runtimePath := filepath.Join(filepath.Dir(supervisorExecutable), "proxylens-runtime"+base[len(prefix):])
+	if strings.HasPrefix(strings.ToLower(rest), "-host") {
+		// The GUI-subsystem Task Scheduler host is a sibling of the normal
+		// console CLI. Strip only the host marker so both entry points resolve
+		// the same installed Runtime (and target-triple sidecars, if present).
+		rest = rest[len("-host"):]
+	}
+	runtimePath := filepath.Join(filepath.Dir(supervisorExecutable), "proxylens-runtime"+rest)
 	return requireRegularExecutable(runtimePath)
 }
 

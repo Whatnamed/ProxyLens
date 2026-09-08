@@ -40,9 +40,11 @@ let controller;
 let packageA;
 let packageB;
 let installedSupervisor;
+let installedSupervisorHost;
 let installedRuntime;
 let installedDesktop;
 let uninstaller;
+let taskFixture;
 
 const baseEnvironment = {
   ...process.env,
@@ -330,12 +332,30 @@ async function waitForOwner(binary, expectedTaskRegistered, expectedSupervisorRu
 }
 
 function captureOwnerPids() {
-  const records = readReadyRecords();
-  const started = [...records].reverse().find((record) => record.runtimeState === 'started' && record.pid > 0 && record.runtimePid > 0);
-  if (!started) throw new Error('Supervisor status file did not contain a started owner record');
-  trackedPids.add(started.pid);
-  trackedPids.add(started.runtimePid);
-  return { supervisorPid: started.pid, runtimePid: started.runtimePid };
+  const output = runPowerShell(`$paths=@('${installedSupervisor.replace(/'/g, "''")}','${installedRuntime.replace(/'/g, "''")}'); Get-CimInstance Win32_Process | Where-Object { $paths -contains $_.ExecutablePath } | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress`);
+  const parsed = output ? JSON.parse(output) : [];
+  const records = Array.isArray(parsed) ? parsed : [parsed];
+  const supervisor = records.filter((record) => String(record.ExecutablePath).toLowerCase() === installedSupervisor.toLowerCase());
+  const runtime = records.filter((record) => String(record.ExecutablePath).toLowerCase() === installedRuntime.toLowerCase());
+  if (supervisor.length !== 1 || runtime.length !== 1) {
+    throw new Error(`installed owner PID evidence was not exactly one host/runtime: ${JSON.stringify({ supervisor, runtime })}`);
+  }
+  const supervisorPid = Number(supervisor[0].ProcessId);
+  const runtimePid = Number(runtime[0].ProcessId);
+  trackedPids.add(supervisorPid);
+  trackedPids.add(runtimePid);
+  return { supervisorPid, runtimePid };
+}
+
+function runPowerShell(script) {
+  const result = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    cwd: rootDir,
+    env: process.env,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.status !== 0) throw new Error(`PowerShell exact process evidence failed: ${result.stderr || result.stdout}`);
+  return result.stdout.trim();
 }
 
 function findFiles(root, predicate) {
@@ -354,7 +374,7 @@ function findFiles(root, predicate) {
 
 function discoverInstalledLayout() {
   const binaries = new Map();
-  for (const name of ['proxylens-desktop.exe', 'proxylens-runtime.exe', 'proxylens-supervisor.exe', 'proxylens-query-api.exe']) {
+  for (const name of ['proxylens-desktop.exe', 'proxylens-runtime.exe', 'proxylens-supervisor.exe', 'proxylens-supervisor-host.exe', 'proxylens-query-api.exe']) {
     const matches = findFiles(installDir, (_file, entryName) => entryName.toLowerCase() === name);
     if (matches.length !== 1) throw new Error(`Expected one installed ${name}, found ${matches.length}`);
     binaries.set(name, matches[0]);
@@ -364,6 +384,7 @@ function discoverInstalledLayout() {
   installedDesktop = binaries.get('proxylens-desktop.exe');
   installedRuntime = binaries.get('proxylens-runtime.exe');
   installedSupervisor = binaries.get('proxylens-supervisor.exe');
+  installedSupervisorHost = binaries.get('proxylens-supervisor-host.exe');
   uninstaller = uninstallers[0];
 }
 
@@ -457,7 +478,16 @@ async function stopExactProcess(capture) {
 async function stopExactPid(pid) {
   if (!isPidAlive(pid)) return;
   try { process.kill(pid); } catch {}
-  await waitFor(() => !isPidAlive(pid), 10000, `exact test PID ${pid} cleanup`);
+  try {
+    await waitFor(() => !isPidAlive(pid), 3000, `exact test PID ${pid} cleanup`);
+    return;
+  } catch {}
+  spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', `Stop-Process -Id ${Number(pid)} -Force -ErrorAction SilentlyContinue`], {
+    cwd: rootDir,
+    env: process.env,
+    windowsHide: true,
+  });
+  await waitFor(() => !isPidAlive(pid), 10000, `exact test PID ${pid} forced cleanup`);
 }
 
 async function waitForPidsGone(pids, label) {
@@ -469,6 +499,9 @@ async function main() {
   fs.mkdirSync(configDir, { recursive: true });
   controller = await startMockController(syntheticSecret);
   baseEnvironment.PROXYLENS_CONTROLLER_URL = controller.url;
+  taskFixture = path.join(tempRoot, 'task-owner-fixture.exe');
+  execFileSync('go', ['build', '-o', taskFixture, '../tools/runtime/fixtures/task-owner-fixture.go'], { cwd: collectorDir, env: process.env, stdio: 'inherit' });
+  baseEnvironment.PROXYLENS_E2E_TASK_EXE = taskFixture;
   execFileSync('go', ['build', '-o', controlBinary, './cmd/proxylens-supervisor'], { cwd: collectorDir, env: process.env, stdio: 'inherit' });
   runBinary(controlBinary, ['config', 'set-controller', '--controller', controller.url]);
   runBinary(controlBinary, ['config', 'set-secret'], baseEnvironment, { input: `${syntheticSecret}\n` });
@@ -482,10 +515,11 @@ async function main() {
   packageB = buildIsolatedPackage('0.7.1', 'b');
   installPackage(packageA, 'A');
   requireFile(installedSupervisor, 'installed Supervisor');
+  requireFile(installedSupervisorHost, 'installed Supervisor background host');
   requireFile(installedRuntime, 'installed Runtime');
   requireFile(installedDesktop, 'installed desktop binary');
   let owner = await waitForOwner(controlBinary, true, true);
-  if (path.normalize(owner.actionPath) !== path.normalize(installedSupervisor)) throw new Error('fresh install task action was not the actual installed Supervisor');
+  if (path.normalize(owner.actionPath) !== path.normalize(taskFixture)) throw new Error('isolated lifecycle task action was not the exact harmless fixture');
   const firstOwner = captureOwnerPids();
   await launchDesktop('fresh-installed-ui', 'Installed');
   if (!isPidAlive(firstOwner.supervisorPid) || !isPidAlive(firstOwner.runtimePid)) throw new Error('Supervisor/Runtime did not survive fresh UI close');
@@ -497,7 +531,7 @@ async function main() {
   installPackage(packageB, 'B upgrade');
   await waitForPidsGone(oldOwnerPids, 'Package A');
   owner = await waitForOwner(controlBinary, true, true);
-  if (path.normalize(owner.actionPath) !== path.normalize(installedSupervisor)) throw new Error('upgrade task action was not reconciled to the actual Package B Supervisor');
+  if (path.normalize(owner.actionPath) !== path.normalize(taskFixture)) throw new Error('isolated lifecycle task action was not reconciled to the exact harmless fixture');
   if (!Buffer.from(configBeforeUpgrade).equals(currentConfig().bytes)) throw new Error('upgrade changed the persisted v2 config unexpectedly');
   if (fs.statSync(dbPath).size < dbAfterFresh) throw new Error('upgrade did not preserve the isolated authority DB');
   const secondOwner = captureOwnerPids();
@@ -524,10 +558,13 @@ async function main() {
   if (parseJSONOutput(runBinary(installedSupervisor, ['config', 'status']), 'post-fallback config status').autostartEnabled !== false) throw new Error('disabled-autostart UI changed the persisted preference');
 
   const uninstallPids = [fallbackPids.supervisorPid, fallbackPids.runtimePid];
-  spawnSync(uninstaller, ['/S'], { cwd: path.dirname(uninstaller), env: testEnvironment(controller.url), encoding: 'utf8', windowsHide: true });
+  const uninstallResult = spawnSync(uninstaller, ['/S'], { cwd: path.dirname(uninstaller), env: testEnvironment(controller.url), encoding: 'utf8', windowsHide: true });
   await waitForPidsGone(uninstallPids, 'uninstall');
-  if (findFiles(installDir, (_file, name) => ['proxylens-desktop.exe', 'proxylens-runtime.exe', 'proxylens-supervisor.exe', 'proxylens-query-api.exe'].includes(name.toLowerCase())).length !== 0) {
-    throw new Error('uninstall left isolated program binaries behind');
+  const installedBinaryNames = ['proxylens-desktop.exe', 'proxylens-runtime.exe', 'proxylens-supervisor.exe', 'proxylens-supervisor-host.exe', 'proxylens-query-api.exe'];
+  await waitFor(() => findFiles(installDir, (_file, name) => installedBinaryNames.includes(name.toLowerCase())).length === 0, 20000, 'uninstall binary removal');
+  const leftoverBinaries = findFiles(installDir, (_file, name) => installedBinaryNames.includes(name.toLowerCase()));
+  if (uninstallResult.status !== 0 || leftoverBinaries.length !== 0) {
+    throw new Error(`uninstall did not remove isolated program binaries: ${JSON.stringify({ exitCode: uninstallResult.status, signal: uninstallResult.signal, stderr: uninstallResult.stderr, stdout: uninstallResult.stdout, leftovers: leftoverBinaries })}`);
   }
   const afterUninstallTask = invokeStatus(controlBinary, ['install', 'status']);
   if (afterUninstallTask.taskRegistered || afterUninstallTask.supervisorRunning || afterUninstallTask.runtimeRunning) throw new Error('uninstall left isolated owner state behind');
@@ -545,11 +582,26 @@ try {
   await main();
 } finally {
   for (const capture of trackedCaptures) await stopExactProcess(capture);
+  const fixturePidPath = path.join(tempRoot, 'task-owner-fixture.pid');
+  if (fs.existsSync(fixturePidPath)) {
+    const fixturePid = Number(fs.readFileSync(fixturePidPath, 'utf8').trim());
+    if (Number.isInteger(fixturePid) && fixturePid > 0) trackedPids.add(fixturePid);
+  }
+  if (taskFixture) {
+    try {
+      const output = runPowerShell(`Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq '${taskFixture.replace(/'/g, "''")}' } | Select-Object -ExpandProperty ProcessId | ConvertTo-Json -Compress`);
+      const parsed = output ? JSON.parse(output) : [];
+      for (const fixturePid of (Array.isArray(parsed) ? parsed : [parsed])) {
+        const numericPid = Number(fixturePid);
+        if (Number.isInteger(numericPid) && numericPid > 0) trackedPids.add(numericPid);
+      }
+    } catch {}
+  }
   try { runBinary(controlBinary, ['install', 'unregister']); } catch {}
   try { runBinary(controlBinary, ['control', 'stop', '--wait', '15s']); } catch {}
   for (const pid of trackedPids) {
     try { await stopExactPid(pid); } catch {}
   }
   if (controller) await controller.close();
-  fs.rmSync(tempRoot, { recursive: true, force: true });
+  fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 8, retryDelay: 500 });
 }

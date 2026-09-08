@@ -30,7 +30,8 @@
     "externalBin": [
       "binaries/proxylens-query-api",
       "binaries/proxylens-runtime",
-      "binaries/proxylens-supervisor"
+      "binaries/proxylens-supervisor",
+      "binaries/proxylens-supervisor-host"
     ],
     "resources": {
       "../src/assets/fonts/LICENSES.md": "licenses/LICENSES.md",

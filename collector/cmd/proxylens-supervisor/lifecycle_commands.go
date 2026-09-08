@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -420,7 +421,10 @@ func currentSupervisorTaskExecutable() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return installedlifecycle.ResolveTaskExecutable(executable)
+	// The console CLI remains the lifecycle/configuration authority. Only the
+	// sibling GUI-subsystem host is registered as the Task Scheduler action.
+	backgroundHost := filepath.Join(filepath.Dir(executable), installedlifecycle.BackgroundSupervisorExecutableName())
+	return installedlifecycle.ResolveTaskExecutable(backgroundHost)
 }
 
 func currentInstalledLayout() (bool, error) {
