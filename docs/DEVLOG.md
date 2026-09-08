@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-09-08 — Installed background console closure
+
+**Scope:** 修复 Core V1 installed product 的后台 console/Windows Terminal 可见性问题；不改变
+Supervisor ownership、Runtime writer、Collector、Task Scheduler recovery 或 Mihomo 边界。
+
+**Root cause:** 生产 Task action 直接启动 console-subsystem `proxylens-supervisor.exe`。
+Windows 可能在进程创建时分配 console 或把其接入 Windows Terminal；旧的
+`ShowWindow(SW_HIDE)` 事后隐藏不是可靠的 creation-time contract。
+
+**Completed:**
+
+- 新增 GUI-subsystem `proxylens-supervisor-host.exe`，与 console CLI 共享 Supervisor
+  application entry point；生产 Task 只使用 host，CLI 继续负责 lifecycle/configuration/handshake；
+- Runtime child 使用 Windows `CREATE_NO_WINDOW` + `DETACHED_PROCESS` 创建，同时保留 READY/STOP
+  pipes；build/bundle/installed-layout/NSIS task action 已同步；
+- dedicated isolated regression、Go/UI/build checks 与 normal current-user NSIS upgrade 通过；
+  installed hash/config/credential/task/owner 状态与 desktop close survival 均已核实；
+- 真实 installed read-only Query API 仍可读取 schema 9 active-v2 DB；本轮不重复 11.7-GB live
+  `quick_check`，限制已明确记录。
+
+完整证据见 [installed background console closure](acceptance/installed-background-console-closure-2026-09-08.md)。
+
 ## 2026-09-08 — Core V1 Post-RC Audit Closure
 
 逐项验证 post-RC 审计后，修复 Connection Detail legacy-only authority 与 History

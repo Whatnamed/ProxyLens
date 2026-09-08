@@ -32,9 +32,15 @@ fixed at:
 \ProxyLens\Background Supervisor
 ```
 
-It runs the installed `proxylens-supervisor.exe` under the current user's
+It runs the installed `proxylens-supervisor-host.exe` under the current user's
 interactive token, with limited privilege, no stored password, and no SYSTEM
-or highest-privilege elevation. The task combines a current-user LogonTrigger
+or highest-privilege elevation. The `-host` executable is a Windows
+GUI-subsystem sibling of the console `proxylens-supervisor.exe`; both call the
+same Supervisor application entry point. The console executable remains the
+lifecycle/configuration/handshake CLI, while the GUI-subsystem sibling is the
+only production Task Scheduler action and therefore does not allocate a
+visible console or Windows Terminal tab at process creation. The task combines
+a current-user LogonTrigger
 (for immediate startup at user logon) with an indefinite PT1M TimeTrigger
 (`StartBoundary=Now`, `Interval=PT1M`, `StopAtDurationEnd=false`, no `Duration`),
 `StartWhenAvailable`, `MultipleInstances=IgnoreNew`, no battery shutdown policy,
@@ -51,10 +57,18 @@ the exact folder/task path and never enumerate or delete arbitrary tasks.
 
 ### 2.2 Ownership layers
 
-The scheduled task owns process residence; `proxylens-supervisor` owns the
-per-authority-DB Supervisor mutex and starts/observes/restarts
+The scheduled task launches the GUI-subsystem host and owns process residence;
+the shared Supervisor application owns the per-authority-DB Supervisor mutex
+and starts/observes/restarts
 `proxylens-runtime`; Runtime's named mutex remains the writer-race authority.
 The Supervisor does not open SQLite business data or communicate with Mihomo.
+
+On Windows the Supervisor starts its console-subsystem Runtime child with
+creation-time `CREATE_NO_WINDOW` and `DETACHED_PROCESS` flags while retaining
+the explicit pipes used by the READY and graceful-stop contracts. The
+background host is therefore invisible without a post-creation
+`ShowWindow(SW_HIDE)` workaround; the console CLI remains usable when invoked
+directly from a terminal or by Tauri/NSIS lifecycle commands.
 
 The exact local stop event is derived from the normalized authority DB path:
 
@@ -176,6 +190,20 @@ ADR.
   random test task. It verifies Secret replacement, autostart reconciliation,
   UI-close owner survival, and same-DB preservation without real Mihomo
   lifecycle.
+- The dedicated background-console regression verified the exact Task action's
+  GUI PE subsystem, the CLI/runtime CUI subsystems, no new console or Windows
+  Terminal descendants, Runtime child restart, Supervisor PT1M Task Scheduler
+  recovery after an exact host-PID termination, the direct GUI-host Runtime
+  path, and the preserved CLI READY/STOP and `--version` contracts. All test
+  tasks and processes were isolated and exactly cleaned up.
+- A normal current-user NSIS upgrade reconciled the production task from the
+  console action to `proxylens-supervisor-host.exe`; installed hashes matched
+  the just-built sidecars, config/credential presence was preserved, and a
+  real installed desktop open/close left the Task Scheduler host and Runtime
+  running. The read-only Query API remained available against the existing
+  schema-9 DB. This closure did not rerun the 11.7-GB live `quick_check`; the
+  current closure report records that limitation rather than borrowing an
+  older result.
 
 ## 5. Safety boundary
 

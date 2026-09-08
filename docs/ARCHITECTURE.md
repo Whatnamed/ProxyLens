@@ -14,7 +14,7 @@ ProxyLens 是一个**旁路只读观察系统（Bypass Observer）**。
 Windows login (installed mode)
    │ current-user Task Scheduler LogonTrigger, indefinite PT1M repetition
    ▼
-proxylens-supervisor ───────────────┐
+proxylens-supervisor-host ──────────┐
    │ per-authority-DB ownership      │
    │ ensure / observe / restart      │
    ▼                                  │
@@ -39,11 +39,16 @@ Tauri v2（Desktop Shell）
 
 `proxylens-runtime` 仍是前台 executable；Windows 安装版的真正 background residence
 由 current-user、interactive、limited-privilege Task Scheduler 任务托管，任务动作是
-独立的 `proxylens-supervisor`。LogonTrigger 在登录时启动 Supervisor，无限 `PT1M` TimeTrigger
+Windows GUI-subsystem 的 `proxylens-supervisor-host.exe`。它与 console
+`proxylens-supervisor.exe` 共享同一个 Supervisor application entry point；后者仍是
+Tauri/NSIS/lifecycle/configuration 与 READY handshake 的 CLI authority。GUI host 在进程创建时
+不分配可见 console 或 Windows Terminal tab。LogonTrigger 在登录时启动 Supervisor，无限 `PT1M` TimeTrigger
 进行周期性 ensure；`MultipleInstances=IgnoreNew` 在 Supervisor 正常运行时阻止重复实例，
 Supervisor crash/退出/终止时由下一次 TimeTrigger repetition 重新拉起，最坏恢复窗口约 1 分钟。
 Supervisor 按 authority DB path single-instance，负责观察、启动和重启 Runtime；Runtime
-mutex 仍是唯一 writer race authority。Tauri 在安装版优先复用/ensure 该 owner，在没有
+mutex 仍是唯一 writer race authority。Supervisor 创建 console-subsystem Runtime child 时使用
+Windows `CREATE_NO_WINDOW` + `DETACHED_PROCESS`，但保留 READY/STOP 所需的显式 pipes。Tauri
+在安装版优先复用/ensure 该 owner，在没有
 已注册 owner 的开发 checkout 使用 direct Supervisor fallback。正常关闭 UI 只停止 Query
 API，Supervisor 与 Runtime/Collector 继续运行，下一次 UI 打开时复用同一 authority DB。
 这不等同于 Runtime 自行 daemonize。
@@ -85,7 +90,7 @@ Collector 崩溃最多造成审计数据缺口，不得影响用户的实际网�
 - `collector run` 保留为薄 CLI wrapper，继续提供原有 flags、signal/stdin STOP、validation sink 与 summary；
 - Phase 3E-2A 增加按 authority DB path 归一化后的 Windows named-mutex ownership、`READY` / `ALREADY_RUNNING` 启动握手，以及 Tauri 对 bundled Runtime 的 ensure-start；同一 DB 只允许一个 Runtime writer，不同 DB 可以并行；
 - Phase 3E-2B1 新增独立 `proxylens-supervisor`：Supervisor mutex 与 Runtime writer mutex 分离，但均按同一 authority DB identity；它能观察已有 Runtime、避免重复 writer，并在自己拥有的 Runtime 进程退出后按有界 backoff 重启；
-- Phase 3E-2B2A 增加 current-user Task Scheduler 外层 owner、LogonTrigger 登录启动与 TimeTrigger 的无限 `PT1M` repetition 周期性恢复、exact lifecycle CLI、per-DB local stop event 与 NSIS `currentUser` hooks；安装版登录启动和 Supervisor 周期性恢复不改变 Runtime writer authority；
+- Phase 3E-2B2A 增加 current-user Task Scheduler 外层 owner、GUI-subsystem `proxylens-supervisor-host.exe`、LogonTrigger 登录启动与 TimeTrigger 的无限 `PT1M` repetition 周期性恢复、exact lifecycle CLI、per-DB local stop event 与 NSIS `currentUser` hooks；console `proxylens-supervisor.exe` 继续作为 lifecycle/configuration authority，安装版登录启动和 Supervisor 周期性恢复不改变 Runtime writer authority；
 - Tauri 在安装版优先调用 Go lifecycle CLI ensure 已注册且 enabled 的 owner；没有已安装 owner 的 dev checkout 保留 direct Supervisor ensure。两条路径都让 UI close 只停止 Query API，Supervisor 与 Runtime/Collector 在 UI 关闭后继续运行；
 - `runtime.json` v2 只保存非敏感 Controller URL 与 `autostartEnabled`，Secret 通过 Windows Credential Manager 的 Generic Credential 保存；`MIHOMO_SECRET` 仍是显式开发环境 override，Secret 不进入 JSON、argv、handshake 或日志；
 - Supervisor 不读取 Mihomo、不打开或写入 SQLite 业务数据；Runtime 继续拥有 Collector、Accounting 与唯一 writer DB 生命周期；

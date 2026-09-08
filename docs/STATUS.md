@@ -24,6 +24,14 @@
 - 有意保留：详情/原始帧全量返回（用户确认后续单独分页）、坏帧 Coverage hardening、raw retention/disk-runway 产品决策、CI/branch protection。真实库最大连接 12,044 条 v2 事件，约 5.38 MB positional JSON 样本；不是 HTTP DTO 大小或渲染耗时承诺。后续分页必须保持独立完整 summary，不能静默截断证据。
 - 验证限制：额外 live read-only 全库 `quick_check` 达到 90s 上限后中断，未获得本轮完整性结论；不沿用旧 RC 的 `ok` 冒充本轮结果。定向 SQL/API/Inspector 验证通过。
 
+### Installed Background Console Closure (2026-09-08)
+
+- 已确认旧 installed Task action 使用 console-subsystem `proxylens-supervisor.exe`；Windows console/terminal 可能在进程创建边界产生，事后 `ShowWindow(SW_HIDE)` 不能构成可靠的无窗口契约。
+- 生产 Task action 现为同包的 GUI-subsystem `proxylens-supervisor-host.exe`；它与 console `proxylens-supervisor.exe` 共享 Supervisor application entry point。CLI 仍负责 lifecycle/configuration/READY handshake，host 只负责无可见 console 的 Task Scheduler residence。
+- Supervisor 启动 console-subsystem Runtime child 时使用 creation-time `CREATE_NO_WINDOW` + `DETACHED_PROCESS`，保留显式 READY/STOP pipes；因此 UI、Task Scheduler 与 Runtime 的 ownership 语义没有改写。
+- 独立 Windows regression 已验证 GUI/CUI PE subsystem、无新 console/Windows Terminal、Runtime crash replacement、Supervisor exact-PID termination 后下一次 PT1M repetition 恢复、CLI handshake 与 exact cleanup。普通 current-user NSIS upgrade 后，installed hashes 与新 sidecars 一致，config/credential presence 保持，desktop close 后 Supervisor/Runtime 仍存活。
+- 本 closure 没有重新执行 11.7-GB live `quick_check`；read-only Query API 已验证 schema 9 / active-v2 可读，当前样本 freshness 仍有既有 lag，未被冒充为本轮 fresh 结论。完整证据见 [installed background console closure](acceptance/installed-background-console-closure-2026-09-08.md)。
+
 ### Phase 4A Audit Intelligence Foundation (Complete)
 
 - 已新增只读 `/api/v1/intelligence/findings`，使用 active v2 / completed legacy accounting authority，固定 PROXY、`[from,to)`、bounded `limitPerKind` 与标准鉴权/错误契约；
@@ -342,7 +350,7 @@
 - 交互模型收口已完成：Overview / Coverage 使用动态推进的 Live Analysis Range，History 使用确定性冻结快照，已解决快照提前生成与展示范围语义漂移问题。
 - UI Design System v1 已按本轮真实 Tauri evidence Freeze；后续改动必须保留 semantic tokens、geometry、locale、theme 与 actual rendered-font 证据。
 - `proxylens-runtime` 本身仍是前台 executable，不自行 daemonize、注册服务或自启动；安装版登录常驻与 Supervisor crash recovery 已由 Phase 3E-2B2A 的 current-user Task Scheduler LogonTrigger + periodic TimeTrigger（无限 `PT1M` repetition）提供，Runtime crash recovery 仍由 Supervisor bounded backoff 负责。Settings/status polish 与 Phase 3E-R1.1 installed acceptance 已完成。
-- V1 Core RC 的后台 console window 项已通过 exact HWND/PID/process-tree 证据关闭；没有 ProxyLens-owned visible console。公共签名、tag、GitHub Release 与外部 installer 发布仍属于后续 distribution 工作。
+- 当前 installed Task 使用 GUI-subsystem `proxylens-supervisor-host.exe`，Runtime child 使用 creation-time no-console flags；后台 console closure 现在由进程创建边界与真实 current-user upgrade evidence 支撑，而不是 post-creation hide。公共签名、tag、GitHub Release 与外部 installer 发布仍属于后续 distribution 工作。
 
 ---
 
